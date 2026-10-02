@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gsb_client::conn::Conn;
+use gsb_client::session::{self, Credentials};
 use gsb_core::metrics::MetricReport;
 use gsb_protocol::op;
 use gsb_server::{Config, ListenerEntry, ListenerTransport};
@@ -18,7 +19,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use super::{auth, connect_from, failed_auth, refused};
+use super::{connect_from, refused, rows};
 
 /// A one-client NAT on loopback (B3's relay): the client talks to the
 /// front socket, the server sees the current back socket; `rebind_to`
@@ -111,6 +112,29 @@ async fn until_migrated(c: &mut Conn, rx: &mut UnboundedReceiver<MetricReport>) 
     }
 }
 
+/// A plain TCP session from `source` that the server keeps — its AUTH
+/// succeeds — once it does: until then each try is refused at birth
+/// (the registry has not yet moved the migrated session's count off
+/// `source`). The guard only bounds a hang.
+async fn served_from(source: [u8; 4], tcp: SocketAddr) -> Conn {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let mut c = connect_from(source, tcp).await;
+        let creds = Credentials::named("a");
+        if session::auth(&mut c, &creds, Duration::from_secs(5), |_| {})
+            .await
+            .is_ok()
+        {
+            return c;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{source:?} never got its place back"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn a_migrated_session_s_count_moves_to_its_new_source() {
     let door = |transport| ListenerEntry {
@@ -145,6 +169,10 @@ async fn a_migrated_session_s_count_moves_to_its_new_source() {
     let mut c = gsb_client::connect::udp(front)
         .await
         .expect("rUDP through the NAT");
+    // The client is connected once the demux sends its accept; the accept
+    // loop registers the session after that. Its row, in a report, is
+    // the condition — not the order of two doors' opens.
+    rows(&mut rx, 1).await;
     refused(connect_from(A, tcp).await).await;
 
     // The NAT moves it to 127.0.0.2; its next datagram starts the path
@@ -152,14 +180,13 @@ async fn a_migrated_session_s_count_moves_to_its_new_source() {
     nat.rebind_to(B).await;
     c.send(op::base::HEARTBEAT, &[]).await.expect("sent");
     until_migrated(&mut c, &mut rx).await;
-    // One round trip behind the move: the actor handled the notice (and
-    // told the registry) before this AUTH, which stays failed — the
-    // session is still unauthenticated.
-    failed_auth(&mut c).await;
 
-    // Its place moved: 127.0.0.1 is served, 127.0.0.2 is at its cap.
-    let mut a = connect_from(A, tcp).await;
-    auth(&mut a, "a").await;
+    // Its place moves (actor → registry, after the transport's move):
+    // 127.0.0.1 is served once the registry has the new source — the
+    // condition, polled — and from then on 127.0.0.2 is at its cap. Had
+    // the count stayed at the first address, 127.0.0.1 would never be
+    // served. `a` is authenticated, so it holds no place itself.
+    let a = served_from(A, tcp).await;
     refused(connect_from(B, tcp).await).await;
     drop((a, c, nat));
     handle.stop().await;
