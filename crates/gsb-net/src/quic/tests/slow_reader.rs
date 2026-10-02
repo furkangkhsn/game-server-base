@@ -114,10 +114,11 @@ async fn a_slow_but_steady_quic_reader_survives_a_frame_longer_than_the_window()
         took >= WINDOW * 3,
         "the frame drained in {took:?}; it must take several {WINDOW:?} windows"
     );
-    // The client's own first frame is in the inbox; a close must not be.
+    // The client's own first frame is in the inbox (and the path feed's
+    // news, B103); a close must not be.
     while let Ok(msg) = in_rx.try_recv() {
         assert!(
-            matches!(msg, ConnIn::Frame(_)),
+            matches!(msg, ConnIn::Frame(_) | ConnIn::Path(_)),
             "no close may be reported for a client that kept reading: {msg:?}"
         );
     }

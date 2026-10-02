@@ -186,16 +186,25 @@ async fn handshake(
     let conn = incoming.await.map_err(io::Error::other)?;
     let (send, recv) = conn.accept_bi().await.map_err(io::Error::other)?;
     debug!(%peer, "QUIC connection accepted; bi-stream open");
-    Ok(make_endpoint(send, recv, peer, max_frame_bytes, metrics))
+    Ok(make_endpoint(
+        conn,
+        send,
+        recv,
+        peer,
+        max_frame_bytes,
+        metrics,
+    ))
 }
 
 /// Same wiring as TCP/TLS `make_endpoint`: hand the stream halves to
 /// the shared generic framing + pumps. quinn's `RecvStream`/
 /// `SendStream` implement `AsyncRead`/`AsyncWrite`, so NOTHING below
-/// this point knows QUIC is involved. The `Connection` handle itself
-/// is intentionally dropped here: the streams pin the connection's
-/// shared state, so it lives as long as its pumps do.
+/// this point knows QUIC is involved — except the send half's path
+/// feed (B103, `super::path`), which keeps the `Connection` handle to
+/// read its statistics: it lives inside the send half, so it pins the
+/// connection exactly as long as the stream already did.
 fn make_endpoint(
+    quic: quinn::Connection,
     send: quinn::SendStream,
     recv: quinn::RecvStream,
     peer: SocketAddr,
@@ -210,7 +219,8 @@ fn make_endpoint(
               out_rx: Inbox<FrameBatch>,
               timeouts: crate::pump::PumpTimeouts| {
             let reader: QuicReader = FrameReader::new(recv, max_frame_bytes);
-            let writer: QuicWriter = FrameWriter::new(send::QuicSend::new(send));
+            let feed = super::path::PathFeed::new(quic, in_tx.clone());
+            let writer: QuicWriter = FrameWriter::new(send::QuicSend::new(send).with_path(feed));
             let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
             (Some(read), write)
         },

@@ -17,6 +17,10 @@
 //! moves while waiting, so the window cuts a wait on a peer that never
 //! acknowledges), and without that window quinn's own idle timeout ends
 //! the connection, which resolves the wait with an error.
+//!
+//! It also carries the connection's path feed (B103, `super::path`):
+//! the send half is where bytes move, so a write that took bytes is the
+//! moment a due sample of quinn's statistics is read.
 
 use std::future::Future;
 use std::io;
@@ -36,6 +40,8 @@ pub(crate) struct QuicSend {
     /// acknowledged every byte, stopped the stream, or the connection
     /// died — any of which ends the shutdown.
     acked: Option<Acked>,
+    /// The server side's path feed (`None` on a client's stream).
+    path: Option<super::path::PathFeed>,
 }
 
 impl QuicSend {
@@ -43,7 +49,14 @@ impl QuicSend {
         Self {
             stream,
             acked: None,
+            path: None,
         }
+    }
+
+    /// Feed the connection's path to its actor as bytes are written.
+    pub(crate) fn with_path(mut self, feed: super::path::PathFeed) -> Self {
+        self.path = Some(feed);
+        self
     }
 }
 
@@ -53,7 +66,12 @@ impl AsyncWrite for QuicSend {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        AsyncWrite::poll_write(Pin::new(&mut self.get_mut().stream), cx, buf)
+        let this = self.get_mut();
+        let wrote = ready!(AsyncWrite::poll_write(Pin::new(&mut this.stream), cx, buf));
+        if let (Ok(1..), Some(feed)) = (&wrote, this.path.as_mut()) {
+            feed.wrote();
+        }
+        Poll::Ready(wrote)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

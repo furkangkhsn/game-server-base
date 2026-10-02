@@ -52,6 +52,7 @@
 
 mod config;
 mod listener;
+mod path;
 mod send;
 
 #[cfg(test)]

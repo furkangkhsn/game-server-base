@@ -19,6 +19,7 @@ use gsb_protocol::FrameBody;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::debug;
 
 async fn connect(
@@ -239,5 +240,6 @@ async fn close_ends_the_parked_accept() {
 mod buffers;
 mod certs;
 mod off_accept;
+mod path;
 mod per_source;
 mod slow_reader;
