@@ -112,6 +112,7 @@ pub(crate) struct ClientRec {
     pub(crate) frag_reassembled: u64,
     pub(crate) frag_dropped: u64,
     pub(crate) hs_retries: u64,
+    pub(crate) udp_ends: UdpEnds,
     pub(crate) acks: u64,
     pub(crate) ack_processed_max: u64,
     pub(crate) ack_lag_max_ms: u128,
@@ -161,6 +162,14 @@ pub(crate) fn parse_client_line(line: &str) -> Option<ClientRec> {
         frag_reassembled: get("frag_reassembled")?.parse().ok()?,
         frag_dropped: get("frag_dropped")?.parse().ok()?,
         hs_retries: get("hs_retries")?.parse().ok()?,
+        udp_ends: {
+            // Every reason (B128), always on the line.
+            let mut v = [0u64; UDP_END_REASONS];
+            for (slot, (k, _)) in v.iter_mut().zip(UdpEnds::default().fields()) {
+                *slot = get(k)?.parse().ok()?;
+            }
+            UdpEnds::from_values(v)
+        },
         acks: get("acks")?.parse().ok()?,
         ack_processed_max: get("ack_processed_max")?.parse().ok()?,
         ack_lag_max_ms: get("ack_lag_max_ms")?.parse().ok()?,
@@ -541,6 +550,7 @@ pub(crate) async fn orchestrate(args: Args) {
             frag_reassembled: c.frag_reassembled,
             frag_dropped: c.frag_dropped,
             hs_retries: c.hs_retries,
+            udp_ends: c.udp_ends,
             acks: c.acks,
             ack_processed_max: c.ack_processed_max,
             ack_lag_max_ms: c.ack_lag_max_ms,

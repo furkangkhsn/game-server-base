@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use gsb_client::session::{self, Credentials};
 use gsb_client::{ClientError, Conn, Recv, ServerError};
 use gsb_demo::game::{MoveTo, WorldSnapshot};
+use gsb_net::udp::UdpEnd;
 use gsb_protocol::op::base as op;
 use prost::Message;
 
@@ -169,17 +170,26 @@ impl Player {
         }
     }
 
-    /// Heartbeat (draining what arrives) until the rUDP session is over
-    /// — B5b: a restarted server's stateless reset; returns how long it
-    /// took from the first heartbeat.
-    pub async fn until_ended(&mut self) -> Duration {
+    /// Heartbeat (draining what arrives) until the connection reads
+    /// `Closed` — on rUDP the session's end, as on a stream (B128; B5b:
+    /// a restarted server's stateless reset); returns how long it took
+    /// from the first heartbeat, and why the rUDP session ended.
+    pub async fn until_closed(&mut self) -> (Duration, Option<UdpEnd>) {
         let t0 = Instant::now();
-        while self.conn.udp_client().expect("rUDP").is_established() {
-            assert!(t0.elapsed() < GUARD, "the rUDP session never ended");
+        loop {
+            assert!(t0.elapsed() < GUARD, "the connection never closed");
             self.warm().await;
-            let _ = self.conn.recv(Duration::from_millis(20)).await;
+            match self.conn.recv(Duration::from_millis(20)).await {
+                Ok(Recv::Closed) => break,
+                Ok(Recv::Frame(_) | Recv::Quiet) => {}
+                Err(e) => panic!("until closed: {e}"),
+            }
         }
-        t0.elapsed()
+        let c = self.conn.udp_client().expect("rUDP");
+        assert!(!c.is_established(), "Closed is the session's end");
+        let again = self.conn.recv(Duration::from_secs(1)).await;
+        assert!(matches!(again, Ok(Recv::Closed)), "{again:?}");
+        (t0.elapsed(), self.conn.udp_client().and_then(|c| c.ended()))
     }
 
     /// The rUDP client's statistics.

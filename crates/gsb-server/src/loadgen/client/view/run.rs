@@ -104,7 +104,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 rep.moves += 1;
                 rep.bytes_out += frame_bytes(&wire, Dir::Out, input_op, payload.len());
                 if wire.send(input_op, &payload).await.is_err() {
-                    break; // peer gone (rUDP: the writer gave up)
+                    break; // peer gone (rUDP: the session is over)
                 }
             }
         }
@@ -144,10 +144,11 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 None => break, // the JOIN's answer never came
             }
         };
-        // A quiet window (and an rUDP socket error, which is all rUDP
-        // can report) loops; a stream's EOF or a frame its reader
-        // refuses ends the session — the leave below then finds the
-        // wire dead.
+        // A quiet window (and an rUDP socket error) loops; the session's
+        // end — a stream's EOF or a frame its reader refuses, an rUDP
+        // session the client declared over (B128) — ends the loop: the
+        // leave below then finds the wire dead, and the end is counted
+        // once, by reason, as the wire is let go (`udp_ends`).
         let at = Instant::now();
         let got = recv_wire(&mut wire, timeout).await;
         if !playing {
@@ -301,6 +302,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
         rep.frag_dropped = c.stats.frag_dropped_incomplete;
         rep.hs_retries = c.stats.challenge_retries + c.stats.proof_retries;
     }
+    rep.udp_ends.note(&wire);
     rep
 }
 

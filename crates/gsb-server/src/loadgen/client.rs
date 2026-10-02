@@ -9,12 +9,14 @@ use gsb_client::{Conn, Recv};
 
 mod accounting;
 mod connect;
+mod ends;
 mod errors;
 mod rpc;
 mod stall;
 mod wait;
 pub(crate) use accounting::{Dir, frame_bytes, wire_in_bytes, ws_message_bytes};
 pub(crate) use connect::{TlsOpts, connect_wire};
+pub(crate) use ends::{UDP_END_REASONS, UdpEnds};
 pub(crate) use errors::{ClientErrors, ERROR_REASONS};
 pub(crate) use rpc::{RpcClient, RpcPlan, RpcTally};
 pub(crate) use stall::{STALL_RCVBUF, Stall};
@@ -70,6 +72,9 @@ pub(crate) struct ClientReport {
     /// proofs sent again because the server had not answered yet — the
     /// handshake's own loss signal.
     pub(crate) hs_retries: u64,
+    /// rUDP sessions this client declared over, by reason (B128; all
+    /// zero on TCP): each such session's reads ended in `Recv::Closed`.
+    pub(crate) udp_ends: UdpEnds,
     /// First/last snapshot sequence with its arrival instant: the server's
     /// measured tick rate is (last_seq − first_seq) / Δt, since the
     /// snapshot sequence is the global tick index.
@@ -154,9 +159,11 @@ pub(crate) struct ClientParams {
     pub(crate) rpc: Option<RpcPlan>,
 }
 
-/// What one bounded receive on the wire found. TCP distinguishes death
-/// (EOF, or a frame the reader refuses) from quiet; rUDP has no EOF, so
-/// "quiet" is all it can report — the deadline ends those runs.
+/// What one bounded receive on the wire found: a frame, a quiet window,
+/// or the session's end — a stream's EOF or a frame its reader refuses,
+/// and on rUDP the client's own verdict (B128: its reliable band died, a
+/// stateless reset, a record-layer limit — `Recv::Closed` once the
+/// frames received before it are read; [`UdpEnds`] counts why).
 pub(crate) enum Got {
     Frame(u16, Bytes),
     Quiet,
@@ -168,7 +175,8 @@ pub(crate) async fn recv_wire(wire: &mut Conn, timeout: Duration) -> Got {
         Ok(Recv::Frame(f)) => Got::Frame(f.op, f.payload),
         Ok(Recv::Quiet) => Got::Quiet,
         Ok(Recv::Closed) => Got::Dead,
-        // rUDP: a socket error reads as a quiet window (no EOF exists).
+        // rUDP: a socket error reads as a quiet window (the session's
+        // end is `Closed` above, never an error).
         Err(_) if wire.is_udp() => Got::Quiet,
         Err(_) => Got::Dead,
     }

@@ -73,3 +73,5 @@ async fn a_stream_eof_ends_the_client() {
 const HANG_GUARD: Duration = Duration::from_secs(30);
 
 mod join_first;
+
+mod ended;

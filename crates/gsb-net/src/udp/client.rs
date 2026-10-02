@@ -225,8 +225,12 @@ impl UdpClient {
         }
         let deadline = Instant::now() + wait;
         loop {
-            // Drained and over: the end, at once (nothing more is read).
+            // Drained and over: the end, at once (nothing more is read) —
+            // through the runtime's cooperative budget, so a caller that
+            // reads on after the end yields like one at a stream's EOF
+            // instead of spinning its worker.
             if self.end.is_some() {
+                tokio::task::coop::consume_budget().await;
                 return Ok(None);
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {

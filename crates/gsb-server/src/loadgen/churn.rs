@@ -133,12 +133,14 @@ pub(crate) async fn run_churn_client(
         let auth = session::auth_req(&creds);
         rep.bytes_out += frame_bytes(&wire, Dir::Out, auth.op, auth.payload.len());
         if wire.send(auth.op, &auth.payload).await.is_err() {
+            rep.udp_ends.note(&wire);
             continue;
         }
 
         // -- wait for JOIN_ROOM_RESULT (bounded, with bounded retry) ───
         let Some(entity) = churn_join(id, &mut wire, p.room, &mut rep).await else {
             // Never joined this cycle: nothing to park; just end it.
+            rep.udp_ends.note(&wire);
             drop(wire);
             tokio::time::sleep(cycle_end.saturating_duration_since(Instant::now())).await;
             continue;
@@ -186,9 +188,13 @@ pub(crate) async fn run_churn_client(
                     rep.snapshots += 1;
                 }
                 Got::Quiet => {}
+                // The session ended under the client (a stream's EOF; on
+                // rUDP B128's `Closed`): the cycle's drop comes early.
                 Got::Dead => break,
             }
         }
+        // Each session's end, once, by reason (rUDP; B128).
+        rep.udp_ends.note(&wire);
 
         // -- THE POINT: drop WITHOUT any LEAVE_ROOM_REQ. The reader pump
         //    sees EOF, the connection actor reports ConnClosed, the

@@ -643,7 +643,7 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use client::{UdpClient, UdpClientConfig, UdpClientStats};
+pub use client::{UdpClient, UdpClientConfig, UdpClientStats, UdpEnd};
 pub use congestion::{PathPhase, PathState, UdpCongestion};
 pub use sealed::{
     DEFAULT_HANDSHAKES_PER_SEC, DEFAULT_REKEY_AFTER, DEFAULT_REKEY_AFTER_RECORDS,

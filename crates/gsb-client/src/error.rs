@@ -66,7 +66,8 @@ pub enum ClientError {
     /// The transport failed (or refused a frame: `InvalidData`).
     #[error("transport: {0}")]
     Io(#[from] io::Error),
-    /// The stream ended (EOF) before the reply.
+    /// The connection ended before the reply ([`crate::Recv::Closed`]:
+    /// a stream's EOF, or the end of an rUDP session).
     #[error("the connection ended before the reply")]
     Closed,
     /// No reply within the window.

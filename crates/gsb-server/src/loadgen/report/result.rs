@@ -166,6 +166,11 @@ pub(crate) fn print_report(
     let frag_reassembled: u64 = reports.iter().map(|r| r.frag_reassembled).sum();
     let frag_dropped: u64 = reports.iter().map(|r| r.frag_dropped).sum();
     let hs_retries: u64 = reports.iter().map(|r| r.hs_retries).sum();
+    // The rUDP sessions the clients declared over, by reason (B128).
+    let mut udp_ends = UdpEnds::default();
+    for r in reports {
+        udp_ends.add(&r.udp_ends);
+    }
     let acks: u64 = reports.iter().map(|r| r.acks).sum();
     let ack_processed_max: u64 = reports
         .iter()
@@ -244,7 +249,10 @@ pub(crate) fn print_report(
     if args.transport == crate::Transport::Udp {
         println!(
             "udp client-side: retrans_out={retrans_out} dup_in={dup_in} oob_dropped={oob_dropped} gave_up={gave_up} \
-             frag_reassembled={frag_reassembled} frag_dropped={frag_dropped} hs_retries={hs_retries}",
+             frag_reassembled={frag_reassembled} frag_dropped={frag_dropped} hs_retries={hs_retries} \
+             sessions_ended={}{}",
+            udp_ends.total(),
+            udp_ends.keys(),
         );
     }
     let slowest = reports

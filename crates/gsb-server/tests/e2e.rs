@@ -116,7 +116,9 @@ impl Client {
     /// Liveness probe: `true` once the server answers one of THIS
     /// probe's heartbeats; `false` on a close, or when `window` passes
     /// unanswered. This is the rUDP notion of "the server closed" (UDP
-    /// has no EOF): a session the server removed never answers.
+    /// has no EOF): a session the server removed never answers — or,
+    /// on a sealed door, answers the heartbeat with a stateless reset,
+    /// which the client reads as its end (`Closed`, B128).
     ///
     /// Not one heartbeat (BACKLOG F34, the F24 shape): the connection
     /// actor answers at most one a second (wall clock), so a single
@@ -138,7 +140,13 @@ impl Client {
             }
             if now >= resend && next < first + PROBE_RANGE {
                 let hb = session::heartbeat(next);
-                self.write_frame(hb.op, &hb.payload).await?;
+                match self.write_frame(hb.op, &hb.payload).await {
+                    Ok(()) => {}
+                    // rUDP (B128): the client already ended the session
+                    // (its reads report `Closed`); a probe is a close too.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotConnected => return Ok(false),
+                    Err(e) => return Err(e),
+                }
                 next += 1;
                 resend = now + PROBE_EVERY;
             }

@@ -2,7 +2,8 @@
 //! client is not told), a second server under the same static and reset
 //! keys binds the same address, and the client's next datagram brings
 //! back a stateless reset with its session's token: the client's session
-//! ends at once — not after the reliable band's 5 s bound — and it comes
+//! ends at once — its reads report `Closed` (B128), not after the
+//! reliable band's 5 s bound — and it comes
 //! back the e1 way (a new socket, a new handshake, AUTH under the same
 //! name).
 
@@ -42,8 +43,9 @@ pub async fn restart_resets_then_rejoins() {
 
     cfg.bind = addr.to_string();
     let mut second = restart(cfg).await;
-    let took = p.until_ended().await;
+    let (took, why) = p.until_closed().await;
     assert!(took < Duration::from_secs(1), "ended in {took:?}");
+    assert_eq!(why, Some(gsb_net::udp::UdpEnd::Reset), "the reset ended it");
     let s = p.udp_stats();
     assert!(s.stateless_resets_received >= 1, "{s:?}");
     assert_eq!(s.stateless_resets_invalid, 0, "the same reset key");
