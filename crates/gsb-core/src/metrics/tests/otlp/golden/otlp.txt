@@ -258,6 +258,36 @@ gsb_transport_udp_game_paced_episodes sum t=2 mono=true unit="" n=1 | Times an r
   [] 1000..2000 int 69
 gsb_transport_udp_game_paced_rate_cuts sum t=2 mono=true unit="" n=1 | Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each ring of probes unanswered while paced, cumulative.
   [] 1000..2000 int 70
+gsb_transport_udp_cids_assigned sum t=2 mono=true unit="" n=1 | rUDP sessions granted a connection id (the clients that asked, on a door with udp_migration on), cumulative.
+  [] 1000..2000 int 71
+gsb_transport_udp_entropy_draws_failed sum t=2 mono=true unit="" n=1 | rUDP connection ids or path-challenge nonces the OS entropy source could not supply (the session went without a CID, or the candidate path unvalidated), cumulative.
+  [] 1000..2000 int 72
+gsb_transport_udp_cid_unknown sum t=2 mono=true unit="" n=1 | CID-tagged rUDP datagrams naming no session (gone, or forged), dropped, cumulative.
+  [] 1000..2000 int 73
+gsb_transport_udp_path_validations_started sum t=2 mono=true unit="" n=1 | rUDP path validations begun (a tagged datagram from an address not its session's); each ends migrated, timed out, superseded or open at the session's end, cumulative.
+  [] 1000..2000 int 74
+gsb_transport_udp_path_challenges_sent sum t=2 mono=true unit="" n=1 | rUDP PATH_CHALLENGE datagrams the socket took (first sends and re-sends), cumulative.
+  [] 1000..2000 int 75
+gsb_transport_udp_path_challenges_send_failed sum t=2 mono=true unit="" n=1 | rUDP PATH_CHALLENGE datagrams the socket refused (retried on the candidate's next datagram), cumulative.
+  [] 1000..2000 int 76
+gsb_transport_udp_path_amplification_capped sum t=2 mono=true unit="" n=1 | rUDP path challenges withheld because they would exceed 3x the bytes received from the unvalidated address, cumulative.
+  [] 1000..2000 int 77
+gsb_transport_udp_path_address_in_use sum t=2 mono=true unit="" n=1 | rUDP candidate paths refused because the address is another session's, cumulative.
+  [] 1000..2000 int 78
+gsb_transport_udp_path_responses_unmatched sum t=2 mono=true unit="" n=1 | rUDP PATH_RESPONSE datagrams that answered no pending validation (none pending, another address or nonce), dropped, cumulative.
+  [] 1000..2000 int 79
+gsb_transport_udp_path_changes_not_forwarded sum t=2 mono=true unit="" n=1 | Matching rUDP path responses whose path-change notice the session's writer channel refused (the validation stays pending), cumulative.
+  [] 1000..2000 int 80
+gsb_transport_udp_path_validations_timed_out sum t=2 mono=true unit="" n=1 | rUDP path validations that ended without a matching response within 3 s; the session stayed on its old path, cumulative.
+  [] 1000..2000 int 81
+gsb_transport_udp_path_validations_superseded sum t=2 mono=true unit="" n=1 | rUDP path validations replaced by a newer candidate address before they completed, cumulative.
+  [] 1000..2000 int 82
+gsb_transport_udp_path_validations_open_at_end sum t=2 mono=true unit="" n=1 | rUDP path validations still pending, in time, when their session ended, cumulative.
+  [] 1000..2000 int 83
+gsb_transport_udp_migrations sum t=2 mono=true unit="" n=1 | rUDP sessions moved to a validated new client address (no handshake, no resume), cumulative.
+  [] 1000..2000 int 84
+gsb_transport_udp_migrations_port_only sum t=2 mono=true unit="" n=1 | rUDP migrations that changed the client's port only (a NAT rebinding; the path estimate is kept), cumulative.
+  [] 1000..2000 int 85
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

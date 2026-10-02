@@ -135,6 +135,18 @@ impl Control {
         }
     }
 
+    /// The session moved to a new path (module `crate::udp::path`): the
+    /// controller starts over, open and unpaced (RFC 9000 §9.4 resets the
+    /// congestion controller); its counters stay.
+    pub(super) fn new_path(&mut self, now: Instant) {
+        self.phase = PathPhase::Open;
+        self.rate = 0.0;
+        self.prev_rtt = None;
+        (self.offered, self.since, self.demand) = (0, now, 0.0);
+        self.queue_delay = Duration::ZERO;
+        self.loss = 0.0;
+    }
+
     /// The room handed the game band `bytes` more (sent or queued).
     pub(super) fn offered(&mut self, bytes: usize) {
         self.offered += bytes as u64;

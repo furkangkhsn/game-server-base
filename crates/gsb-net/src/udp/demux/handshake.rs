@@ -1,7 +1,6 @@
 //! The server half of the stateless cookie handshake: no state is
 //! allocated before the peer proves it can receive at its own address.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Instant;
 
@@ -13,7 +12,7 @@ use crate::transport::Endpoint;
 use crate::udp::*;
 
 impl super::Demux {
-    pub(super) fn handle_hello(&mut self, peer: SocketAddr) {
+    pub(super) fn handle_hello(&mut self, n: usize, peer: SocketAddr) {
         let nonce = u64::from_le_bytes(self.buf[1..9].try_into().unwrap());
         let cookie = u64::from_le_bytes(self.buf[9..17].try_into().unwrap());
         // The cookie's time term, read from the clock HERE (not stored,
@@ -21,18 +20,20 @@ impl super::Demux {
         // slot, and a proof is accepted for the current slot or the
         // previous one. That is what makes a captured proof expire.
         let slot = self.clock.slot();
-        // An established peer never re-handshakes (its session is keyed
-        // by this address; NAT rebind means a NEW address). Its valid
-        // proof again is a RE-SEND — its first accept, or the proof's
-        // first copy, was lost — so it is answered with the session's
-        // accept again and nothing else: no second session, no second
-        // `ConnectionId`. Anything else from it (a challenge request, a
-        // proof that does not verify) is ignored, as before.
-        if let Some(s) = self.sessions.get(&peer) {
+        // An established peer never re-handshakes (its session is at
+        // this address; a NAT rebind is a new address — migrated by CID
+        // when it has one, module `crate::udp::path`). Its valid proof
+        // again is a RE-SEND — its first accept, or the proof's first
+        // copy, was lost — so it is answered with the session's accept
+        // again (its CID included) and nothing else: no second session,
+        // no second `ConnectionId`, no second CID. Anything else from it
+        // (a challenge request, a proof that does not verify) is
+        // ignored, as before.
+        if let Some(s) = self.sessions.at(&peer) {
             if cookie != 0 && self.cookie.verify(nonce, peer, cookie, slot) {
-                let next = s.in_expected;
+                let (next, cid) = (s.in_expected, s.cid);
                 self.proofs_reanswered += 1;
-                self.send_ack(peer, next);
+                self.send_accept(peer, next, cid);
             }
             return;
         }
@@ -58,22 +59,18 @@ impl super::Demux {
             // session struct below).
             let endpoint_in_tx = in_tx.clone();
             let now = Instant::now();
-            self.sessions.insert(
-                peer,
-                UdpSession {
-                    in_tx,
-                    out_tx: out_tx.clone(),
-                    last_seen: now,
-                    in_expected: 1,
-                    in_oob: HashMap::new(),
-                    oob_dropped: 0,
-                    dup_in: 0,
-                    inbox_full: 0,
-                    inbox_full_warned: false,
-                },
-            );
+            // The capability byte after the proof (module
+            // `crate::udp::path`): a CID only when this server grants
+            // them and the client asked.
+            let caps = if n > 18 { self.buf[18] } else { 0 };
+            let cid = (self.migration && caps & CAP_CID != 0)
+                .then(|| self.grant_cid())
+                .flatten();
+            let key = self
+                .sessions
+                .insert(UdpSession::new(peer, cid, in_tx, out_tx.clone(), now));
             if let Some(idle) = self.idle {
-                self.deadlines.insert((now + idle, peer));
+                self.deadlines.insert((now + idle, key));
             }
             self.established += 1;
             debug!(%peer, "rUDP session established (handshake complete)");
@@ -87,7 +84,7 @@ impl super::Demux {
                 self.sock.clone(),
                 peer,
                 self.max_datagram,
-                self.reaper.clone(),
+                self.reaper.session(key),
                 self.metrics.clone(),
                 self.congestion,
             ))
@@ -103,8 +100,9 @@ impl super::Demux {
                     // seq 1". It is what the client waits for before it
                     // counts itself connected (module docs, "Handshake
                     // loss"); 5 bytes for an 18-byte proof that only the
-                    // owner of this return path could produce.
-                    self.send_ack(peer, 1);
+                    // owner of this return path could produce (13 with
+                    // the CID, for a 19-byte proof).
+                    self.send_accept(peer, 1, cid);
                 }
                 Err(crossbeam_channel::TrySendError::Full(queued)) => {
                     // The accept loop is far behind (pathological burst):
@@ -114,7 +112,7 @@ impl super::Demux {
                     // that finds room establishes the session afresh.
                     self.endpoints_dropped += 1;
                     drop(queued.into_endpoint());
-                    self.remove_session(peer);
+                    self.remove_session(key);
                     warn!(%peer, "rUDP: endpoint channel full; session dropped");
                 }
                 Err(crossbeam_channel::TrySendError::Disconnected(queued)) => {
@@ -123,13 +121,39 @@ impl super::Demux {
                     // sent — counted (B74).
                     self.accept_gone += 1;
                     drop(queued.into_endpoint());
-                    self.remove_session(peer);
+                    self.remove_session(key);
                 }
             }
         } else {
             // Forged, or issued more than one rotation ago (a replay of a
             // captured proof): drop, count, answer nothing.
             self.bad_cookie += 1;
+        }
+    }
+
+    /// The accept (or a re-answered proof): `ACK{next}`, with the CID
+    /// after it when the session has one. Best-effort like every ACK.
+    fn send_accept(&mut self, peer: SocketAddr, next: u32, cid: Option<u64>) {
+        if let Err(e) = self.sock.try_send_to(&encode_accept(next, cid), peer) {
+            self.acks_send_failed += 1;
+            debug!(%peer, %e, "rUDP: accept send failed (best-effort)");
+        }
+    }
+
+    /// A fresh CID for a new session: random (unpredictable, never
+    /// `ConnectionId`'s sequence) and unique among the sessions. `None` —
+    /// counted, the session simply not migratable — when the entropy
+    /// source fails or (once in 2^64) the draw collides.
+    fn grant_cid(&mut self) -> Option<u64> {
+        match crate::udp::path::draw_u64() {
+            Some(cid) if !self.sessions.cid_taken(cid) => {
+                self.mig.cids_assigned += 1;
+                Some(cid)
+            }
+            _ => {
+                self.mig.entropy_failed += 1;
+                None
+            }
         }
     }
 }

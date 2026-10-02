@@ -78,6 +78,13 @@ pub mod op {
         /// consumed there, below the actor layer. Payload:
         /// `[u32 LE probe id][u32 LE game datagrams received]`.
         pub const UDP_REPORT: u16 = 13;
+        /// rUDP transport-level marker (NOT a message-table message, and
+        /// never on the wire): the shared demux's notice to a session's
+        /// writer that the session migrated to a validated new client
+        /// address (connection migration, BACKLOG B3), riding the
+        /// outbound channel the way `UDP_ACK` does. Payload: the new
+        /// address (`[u8 4|6][ip octets][u16 LE port]`).
+        pub const UDP_PATH: u16 = 14;
     }
 
     /// First opcode reserved for game crates.

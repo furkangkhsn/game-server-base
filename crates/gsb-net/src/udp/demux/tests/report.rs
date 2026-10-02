@@ -19,7 +19,7 @@ async fn with_writer(
     let peer: SocketAddr = "127.0.0.1:9".parse().unwrap();
     let (mut d, in_rx) = demux_with_session(sock, peer);
     let (out_tx, out_rx) = gsb_core::channel::channel(out_cap);
-    d.sessions.get_mut(&peer).unwrap().out_tx = out_tx;
+    d.sessions.at_mut(&peer).unwrap().out_tx = out_tx;
     (d, peer, in_rx, out_rx)
 }
 

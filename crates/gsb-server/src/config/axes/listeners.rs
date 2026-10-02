@@ -402,6 +402,18 @@ pub struct Config {
     /// never paced. Every rUDP door, whichever grammar declared it; not
     /// a `[[listeners]]` key. See `gsb_net::udp` ("congestion").
     pub udp_congestion: UdpCongestionKind,
+    /// rUDP **connection migration** (BACKLOG B3): `true` grants a
+    /// connection id to every client that asks (the default `UdpClient`
+    /// does), so a session survives the client's address change — a NAT
+    /// rebinding, a Wi-Fi ↔ cellular handover — after path validation:
+    /// no new handshake, no resume. `false` (the default): no id is
+    /// granted, an address change is a new session and a resume, and the
+    /// door is byte for byte what it was. Opt-in because before the rUDP
+    /// record layer (B5a) the id is a bearer token: an on-path sniffer
+    /// that reads it can steer the session's server → client stream to
+    /// itself (`docs/RUDP-SECURITY.md` §3, §7). Every rUDP door; not a
+    /// `[[listeners]]` key. See `gsb_net::udp` (module `path`).
+    pub udp_migration: bool,
     /// Path to the server certificate chain, PEM (leaf first). Empty (the
     /// default) = plaintext TCP, byte-identical behavior to before the TLS
     /// turn. Set together with [`Self::tls_key`] it serves TCP over rustls
@@ -698,6 +710,7 @@ impl Default for Config {
             udp_max_datagram_bytes: gsb_net::udp::DEFAULT_MAX_DATAGRAM_BYTES,
             udp_cookie_key: None,
             udp_congestion: UdpCongestionKind::Off,
+            udp_migration: false,
             tls_cert: String::new(),
             tls_key: String::new(),
             listeners: None,

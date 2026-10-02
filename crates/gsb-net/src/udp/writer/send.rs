@@ -45,6 +45,11 @@ impl super::UdpWriter {
             self.apply_report(&frame);
             return None;
         }
+        if frame.op == op::base::UDP_PATH {
+            // The demux's notice that the session migrated (`path`).
+            self.apply_path(&frame);
+            return None;
+        }
         if !is_control(frame.op) {
             // The game band: RAW, or FRAG when over the budget.
             self.send_game(&frame).await;
@@ -111,10 +116,13 @@ impl super::UdpWriter {
 
 /// Whether an outbound frame is one of the SESSION's (a game or control
 /// frame the room or the connection sent), not the demux's piggybacked
-/// inbound ACK or game-band report — transport messages for this writer,
-/// which the loss counters leave out (B66, B73).
+/// inbound ACK, game-band report or path change — transport messages for
+/// this writer, which the loss counters leave out (B66, B73).
 pub(super) fn is_session_frame(frame: &FrameBody) -> bool {
-    frame.op != op::base::UDP_ACK && frame.op != op::base::UDP_REPORT
+    !matches!(
+        frame.op,
+        op::base::UDP_ACK | op::base::UDP_REPORT | op::base::UDP_PATH
+    )
 }
 
 /// The session's frames in a batch (see [`is_session_frame`]).

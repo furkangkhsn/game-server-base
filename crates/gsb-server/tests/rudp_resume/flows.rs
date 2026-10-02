@@ -119,6 +119,54 @@ pub async fn vanish_then_resume(door: Door, shape: Shape) {
     rig.stop().await;
 }
 
+/// Scenario 5 (B3, `udp_migration` on): the client's address changes
+/// mid-game — its socket is replaced, a network change — and the
+/// SESSION moves with it after path validation: no new handshake, no
+/// resume, no close. The registry sees one connection throughout, the
+/// room one join and nothing parked, and the same entity keeps moving by
+/// the new socket's input (RECONNECT §5: the migration expectation next
+/// to the fallback's).
+pub async fn migrate(door: Door) {
+    let mut rig = Rig::start(rig::config(door, Shape::Single, LONG_GRACE)).await;
+    let mut p = in_game(&rig, door, "nomad").await;
+    let entity = p.entity;
+    let before = p.udp_local().expect("rUDP");
+    let after = p.rebind().await;
+    assert_ne!(before.port(), after.port(), "a new local socket");
+    p.moves().await;
+    let s = warm_during(&mut p, async {
+        rig.until("the migration to be counted", |s| s.migrations == 1)
+            .await;
+        rig.settle(2).await
+    })
+    .await;
+    assert_eq!(
+        s.room,
+        RoomCounts {
+            joins: 1,
+            ..Default::default()
+        },
+        "{door:?}: one join, no resume, nothing parked"
+    );
+    assert_eq!(
+        s.reg,
+        RegCounts {
+            opens: 1,
+            closes: 0,
+            conns: 1,
+            joins: 1,
+            leaves: 0,
+        },
+        "{door:?}: one connection throughout: {s:?}"
+    );
+    s.assert_closes(&[]);
+    assert_eq!(s.migrations, 1);
+    assert_eq!(p.entity, entity);
+    p.moves().await;
+    assert_eq!(rig.members().await, 1);
+    rig.stop().await;
+}
+
 /// Scenario 2 (F32): the new session arrives while the old one is still
 /// LIVE on the server (rUDP: before its idle sweep; the old client
 /// keeps its socket). Latest wins: the old session is closed with

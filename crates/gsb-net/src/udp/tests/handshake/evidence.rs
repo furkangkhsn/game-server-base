@@ -15,9 +15,12 @@ async fn confirmed_by(first: Vec<u8>) -> (UdpClient, tokio::task::JoinHandle<Udp
         let mut buf = vec![0u8; 2048];
         let (_, from) = server.recv_from(&mut buf).await.unwrap();
         let nonce = u64::from_le_bytes(buf[1..9].try_into().unwrap());
-        let proof = encode_hello(nonce, 0xC0FFEE);
-        server.send_to(&proof, from).await.unwrap();
+        let challenge = encode_hello(nonce, 0xC0FFEE);
+        server.send_to(&challenge, from).await.unwrap();
         let (n, _) = server.recv_from(&mut buf).await.unwrap();
+        // The default client asks for a connection id (B3): the proof is
+        // the challenge's 18 bytes and the capability byte.
+        let proof = encode_proof(nonce, 0xC0FFEE, CAP_CID);
         assert_eq!(&buf[..n], &proof[..], "the proof carries the cookie");
         server.send_to(&first, from).await.unwrap();
         server

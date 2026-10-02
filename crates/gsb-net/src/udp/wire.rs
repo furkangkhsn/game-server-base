@@ -42,6 +42,60 @@ pub(super) fn encode_hello(nonce: u64, cookie: u64) -> Vec<u8> {
     d.to_vec()
 }
 
+/// Encode the accept (or a re-answered proof): `ACK{next}`, and the
+/// session's CID after it when the server granted one (module `path`;
+/// an older client reads bytes 1..5 and ignores the rest).
+pub(super) fn encode_accept(next: u32, cid: Option<u64>) -> Vec<u8> {
+    let mut d = encode_ack(next);
+    if let Some(cid) = cid {
+        d.extend_from_slice(&cid.to_le_bytes());
+    }
+    d
+}
+
+/// Encode a proof: the HELLO, and the client's capability byte after it
+/// when it has one to ask for (module `path`; an older server reads
+/// bytes 1..17 and ignores the rest).
+pub(super) fn encode_proof(nonce: u64, cookie: u64, caps: u8) -> Vec<u8> {
+    let mut d = encode_hello(nonce, cookie);
+    if caps != 0 {
+        d.push(caps);
+    }
+    d
+}
+
+/// Encode a PATH_CHALLENGE (server → client; module `path`).
+pub(super) fn encode_path_challenge(nonce: u64) -> Vec<u8> {
+    let mut d = Vec::with_capacity(9);
+    d.push(KIND_PATH_CHALLENGE);
+    d.extend_from_slice(&nonce.to_le_bytes());
+    d
+}
+
+/// Tag a client → server datagram `d` with the session's CID: `[kind |
+/// 0x80][u64 LE cid][the rest of d]` (module `path`).
+pub(super) fn tag(cid: u64, d: &[u8]) -> Vec<u8> {
+    let mut t = Vec::with_capacity(d.len() + 8);
+    t.push(d[0] | KIND_CID_TAG);
+    t.extend_from_slice(&cid.to_le_bytes());
+    t.extend_from_slice(&d[1..]);
+    t
+}
+
+/// Encode a PATH_RESPONSE (client → server, always tagged).
+pub(super) fn encode_path_response(cid: u64, nonce: u64) -> Vec<u8> {
+    let mut d = Vec::with_capacity(17);
+    d.push(KIND_PATH_RESPONSE | KIND_CID_TAG);
+    d.extend_from_slice(&cid.to_le_bytes());
+    d.extend_from_slice(&nonce.to_le_bytes());
+    d
+}
+
+/// A little-endian `u64` at `at` in `d`, if `d` is long enough.
+pub(super) fn u64_at(d: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(d.get(at..at + 8)?.try_into().ok()?))
+}
+
 /// Encode a PROBE datagram (server → client; module `feedback`): the
 /// probe's id and the server's newest RTT sample in microseconds (0 =
 /// none since the previous probe).

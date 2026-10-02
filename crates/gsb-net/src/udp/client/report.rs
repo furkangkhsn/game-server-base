@@ -16,11 +16,22 @@ pub struct UdpClientConfig {
     /// before reports existed, byte for byte: no announcement, so the
     /// server never probes.
     pub game_reports: bool,
+    /// Ask the server for a connection id (BACKLOG B3; module
+    /// `crate::udp::path`), so the session survives this client's
+    /// address change — a NAT rebinding, or [`UdpClient::rebind`]. On by
+    /// default: one byte appended to the proof, which a server that
+    /// predates it — or whose migration is off — ignores (and then grants
+    /// nothing: the client never tags). `false` is the client before B3,
+    /// byte for byte.
+    pub migration: bool,
 }
 
 impl Default for UdpClientConfig {
     fn default() -> Self {
-        Self { game_reports: true }
+        Self {
+            game_reports: true,
+            migration: true,
+        }
     }
 }
 
@@ -68,7 +79,7 @@ impl UdpClient {
         }
         self.reports.announces += 1;
         self.reports.announced_at = Some(now);
-        let d = encode_report(0, self.reports.received);
+        let d = self.wire(encode_report(0, self.reports.received));
         match self.sock.try_send_to(&d, self.peer) {
             Ok(_) => self.stats.announces_sent += 1,
             Err(_) => self.stats.reports_send_failed += 1,
@@ -89,7 +100,7 @@ impl UdpClient {
             return;
         }
         self.reports.probed = true;
-        let d = encode_report(id, self.reports.received);
+        let d = self.wire(encode_report(id, self.reports.received));
         match self.sock.try_send_to(&d, self.peer) {
             Ok(_) => self.stats.reports_sent += 1,
             Err(_) => self.stats.reports_send_failed += 1,

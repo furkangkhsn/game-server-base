@@ -17,7 +17,6 @@
 //! superseded it — a new session under the same address included, its
 //! `last_seen` being after the restart).
 
-use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use gsb_core::conn::ConnIn;
@@ -25,6 +24,8 @@ use tracing::{debug, warn};
 
 use crate::pump::IDLE_STALL_GRACE;
 use crate::pump::idle::{count_restarts, stalled};
+
+use super::SessionKey;
 
 /// What a popped deadline entry is to its session.
 enum Entry {
@@ -50,12 +51,12 @@ impl super::Demux {
             return;
         };
         let mut restarted = 0;
-        while let Some(&(deadline, peer)) = self.deadlines.first() {
+        while let Some(&(deadline, key)) = self.deadlines.first() {
             if deadline > now {
                 break;
             }
-            self.deadlines.remove(&(deadline, peer));
-            let entry = match self.sessions.get(&peer) {
+            self.deadlines.remove(&(deadline, key));
+            let entry = match self.sessions.get(key) {
                 Some(s) if s.last_seen + idle == deadline => Entry::First,
                 Some(s) if s.last_seen + idle < deadline => Entry::Restarted,
                 _ => Entry::Stale,
@@ -63,10 +64,10 @@ impl super::Demux {
             match entry {
                 Entry::Stale => {}
                 Entry::First if stalled(now.saturating_duration_since(deadline)) => {
-                    self.deadlines.insert((now + idle, peer));
+                    self.deadlines.insert((now + idle, key));
                     restarted += 1;
                 }
-                Entry::First | Entry::Restarted => self.close_idle(peer, idle),
+                Entry::First | Entry::Restarted => self.close_idle(key, idle),
             }
         }
         if restarted > 0 {
@@ -79,12 +80,13 @@ impl super::Demux {
         }
     }
 
-    /// Close `peer`'s session for its silence: notify the actor
+    /// Close `key`'s session for its silence: notify the actor
     /// (best-effort) and remove it.
-    fn close_idle(&mut self, peer: SocketAddr, idle: Duration) {
-        let Some(session) = self.sessions.remove(&peer) else {
+    fn close_idle(&mut self, key: SessionKey, idle: Duration) {
+        let Some(session) = self.remove_session(key) else {
             return;
         };
+        let peer = session.addr;
         self.swept_idle += 1;
         let reason = format!("idle timeout: no client traffic for {idle:?}");
         match session.in_tx.try_send(ConnIn::ServerClosed {

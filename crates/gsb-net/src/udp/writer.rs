@@ -79,6 +79,10 @@ pub(super) struct UdpWriter {
     /// The congestion response: its controller and pacing queue (module
     /// `crate::udp::congestion`; inert unless the door's is on).
     pace: pace::Pace,
+    /// Migrations applied (module `crate::udp::path`), and of those the
+    /// ones to a new IP, which reset the path estimate (RFC 9000 §9.4).
+    path_changes: u64,
+    path_resets: u64,
 }
 
 impl UdpWriter {
@@ -152,6 +156,7 @@ impl UdpWriter {
             || self.abandoned > 0
             || self.drained > 0
             || self.pace.queue.counts.queued > 0
+            || self.path_changes > 0
         {
             info!(
                 conn = %self.conn,
@@ -171,6 +176,8 @@ impl UdpWriter {
                 paced_queued = self.pace.queue.counts.queued,
                 paced_dropped = self.pace.queue.counts.dropped,
                 paced_unsent = self.pace.queue.counts.unsent,
+                path_changes = self.path_changes,
+                path_resets = self.path_resets,
                 "rUDP writer session counters"
             );
         }
@@ -211,6 +218,10 @@ mod feedback;
 /// The congestion response: the controller, the pacing queue and the
 /// pass that releases it. A CHILD module too.
 mod pace;
+
+/// Connection migration, writer side: the path change the demux
+/// announces (module `crate::udp::path`). A CHILD module too.
+mod path;
 
 #[cfg(test)]
 mod tests;

@@ -55,9 +55,8 @@ impl UdpClient {
                             }
                             self.in_expected = self.in_expected.wrapping_add(1);
                         }
-                        let _ = self
-                            .sock
-                            .try_send_to(&encode_ack(self.in_expected), self.peer);
+                        let ack = self.wire(encode_ack(self.in_expected));
+                        let _ = self.sock.try_send_to(&ack, self.peer);
                     }
                     std::cmp::Ordering::Less => {
                         // The server retransmitted a frame already ACKed:
@@ -65,9 +64,8 @@ impl UdpClient {
                         // re-ACK; never re-deliver (control runs exactly
                         // once, in order).
                         self.stats.dup_in += 1;
-                        let _ = self
-                            .sock
-                            .try_send_to(&encode_ack(self.in_expected), self.peer);
+                        let ack = self.wire(encode_ack(self.in_expected));
+                        let _ = self.sock.try_send_to(&ack, self.peer);
                     }
                     std::cmp::Ordering::Greater => {
                         if self.in_oob.len() < OOB_CAP {
@@ -93,6 +91,11 @@ impl UdpClient {
             KIND_PROBE => {
                 // The game band's feedback (module `feedback`).
                 self.on_probe(d);
+                false
+            }
+            KIND_PATH_CHALLENGE => {
+                // Connection migration (module `migrate`).
+                self.on_path_challenge(d);
                 false
             }
             // The server only sends HELLO during the handshake (already

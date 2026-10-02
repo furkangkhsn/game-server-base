@@ -61,7 +61,12 @@ impl UdpClient {
             } else {
                 first_sent = Some(now);
             }
-            let hello = encode_hello(nonce, cookie.unwrap_or(0));
+            // The proof carries the capability byte (module `migrate`); the
+            // challenge request never does.
+            let hello = match cookie {
+                None => encode_hello(nonce, 0),
+                Some(c) => encode_proof(nonce, c, self.path.caps()),
+            };
             self.sock.send_to(&hello, self.peer).await?;
             // Unless an answer moves us to the next step, the same step is
             // sent again when this one's timer expires.
@@ -98,6 +103,9 @@ impl UdpClient {
                         // must not make the AUTH/JOIN behind it late.
                         self.rel = RelSend::new(Instant::now(), rto.seed());
                         let d = self.buf[..n].to_vec();
+                        // The accept may carry the session's CID (module
+                        // `migrate`), before anything is sent tagged.
+                        self.take_cid(&d);
                         self.process_datagram(&d);
                         self.established = true;
                         // This client reports (unless configured off):

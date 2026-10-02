@@ -178,6 +178,19 @@ udp_max_datagram_bytes = 1472
 # paced. Thinning the content itself is the game's decision. Server-wide.
 #udp_congestion = "pace"
 
+# rUDP only: connection migration. false (the default): an rUDP session
+# is its client's address — a client whose address changes (a NAT
+# rebinding, a Wi-Fi <-> cellular handover) comes back as a new session
+# and resumes. true: the server grants each client that asks (the
+# default client does) a random connection id, and a session whose
+# client speaks from a new address MOVES there after path validation (a
+# challenge the new address must answer): no new handshake, no resume.
+# Opt-in until the rUDP record layer is encrypted: today the id travels
+# in the clear, so whoever can sniff the client's traffic could answer
+# the challenge and steer the session's server -> client stream to
+# itself. Server-wide.
+#udp_migration = true
+
 # Global tick rate (ticks per second). One ticker task feeds all rooms over
 # a broadcast channel. A room may run slower, at any rate that divides this
 # one (e.g. global 60 → a room at 15 steps every 4th tick).

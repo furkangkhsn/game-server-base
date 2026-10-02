@@ -194,6 +194,7 @@ mod buffers;
 mod feedback;
 mod frag;
 mod handshake;
+mod migrate;
 mod pace;
 mod reap;
 mod unaccepted;

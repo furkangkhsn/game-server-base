@@ -4,8 +4,8 @@
 //! it wakes from one.
 
 use super::super::*;
-
-use std::collections::HashMap;
+use gsb_core::conn::ConnIn;
+use std::net::SocketAddr;
 
 use gsb_core::channel::Inbox;
 use gsb_core::conn::ServerClose;
@@ -35,26 +35,18 @@ fn install(d: &mut Demux, port: u16, seen: Instant) -> (SocketAddr, Inbox<ConnIn
     let peer = SocketAddr::from(([127, 0, 0, 1], port));
     let (in_tx, in_rx) = gsb_core::channel::channel(4);
     let (out_tx, _out_rx) = gsb_core::channel::channel(4);
-    let session = UdpSession {
-        in_tx,
-        out_tx,
-        last_seen: seen,
-        in_expected: 1,
-        in_oob: HashMap::new(),
-        oob_dropped: 0,
-        dup_in: 0,
-        inbox_full: 0,
-        inbox_full_warned: false,
-    };
-    d.sessions.insert(peer, session);
-    d.deadlines.insert((seen + W, peer));
+    let key = d
+        .sessions
+        .insert(UdpSession::new(peer, None, in_tx, out_tx, seen));
+    d.deadlines.insert((seen + W, key));
     (peer, in_rx)
 }
 
 /// A datagram from `peer` at `at` (what `inbound` does to the clock).
 fn heard(d: &mut Demux, peer: SocketAddr, at: Instant) {
-    d.sessions.get_mut(&peer).expect("live").last_seen = at;
-    d.deadlines.insert((at + W, peer));
+    let key = d.sessions.key_at(&peer).expect("live");
+    d.sessions.get_mut(key).expect("live").last_seen = at;
+    d.deadlines.insert((at + W, key));
 }
 
 /// Whether the session was closed idle (its actor told, its row gone).
@@ -187,7 +179,7 @@ async fn a_restart_entry_does_not_outlive_its_session() {
     let (peer, _inbox) = install(&mut d, 40_020, t0);
     let wake = t0 + W + Duration::from_secs(1);
     d.sweep_at(wake);
-    d.remove_session(peer);
+    d.remove_session(d.sessions.key_at(&peer).expect("live"));
     let (_, fresh) = install(&mut d, 40_020, wake + Duration::from_millis(10));
     d.sweep_at(wake + W);
     assert!(

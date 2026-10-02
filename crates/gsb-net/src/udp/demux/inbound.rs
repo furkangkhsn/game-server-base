@@ -1,37 +1,29 @@
 //! The demux's inbound data path: forwarding decoded frames to a
-//! session, the reliable band's ordering/ACK bookkeeping, and the
-//! datagram-kind dispatch that guards every parse.
+//! session, and the reliable band's ordering/ACK bookkeeping. The
+//! datagram-kind dispatch that guards every parse is `dispatch`.
 
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use bytes::Bytes;
 use gsb_core::conn::ConnIn;
 use gsb_protocol::FrameBody;
-use gsb_protocol::op;
 use tracing::{debug, warn};
 
+use super::SessionKey;
 use crate::udp::*;
 
 impl super::Demux {
     /// Forward one decoded frame into the session's mailbox; return
     /// `true` if the session must be removed (its actor is gone). The
     /// caller must then call `remove_session`.
-    fn forward(&mut self, peer: SocketAddr, fb: FrameBody) -> bool {
-        let Some(s) = self.sessions.get_mut(&peer) else {
-            // A RAW datagram from an address with no session (B66).
-            self.no_session += 1;
+    pub(super) fn forward(&mut self, key: SessionKey, fb: FrameBody) -> bool {
+        // The peer is alive: reset its idle window (push the new entry;
+        // the old one becomes stale and is swept lazily).
+        self.heard(key, Instant::now());
+        let Some(s) = self.sessions.get_mut(key) else {
             return false;
         };
-        // The peer is alive: reset its idle window (push the new entry;
-        // the old one becomes stale and is swept lazily). Copy out of the
-        // borrow first — the deadline insert touches a different field.
-        let now = Instant::now();
-        let idle = self.idle;
-        s.last_seen = now;
-        if let Some(idle) = idle {
-            self.deadlines.insert((now + idle, peer));
-        }
+        let peer = s.addr;
         let kind = gsb_core::conn::FrameKind::of(fb.op);
         match s.in_tx.try_send(ConnIn::Frame(fb)) {
             Ok(()) => false,
@@ -91,22 +83,14 @@ impl super::Demux {
     /// borrow, what to forward (in sequence order) and whether to ACK;
     /// PHASE 2 performs the forwarding/ACK via `self` methods (which
     /// must not run while the session borrow is live).
-    fn handle_rel(&mut self, peer: SocketAddr, seq: u32, body: Vec<u8>) {
+    pub(super) fn handle_rel(&mut self, key: SessionKey, seq: u32, body: Vec<u8>) {
+        // The peer is alive: reset its idle window.
+        self.heard(key, Instant::now());
         // PHASE 1.
-        let (to_forward, ack_to) = {
-            let Some(s) = self.sessions.get_mut(&peer) else {
-                // No session: drop (pre-handshake or already gone), counted
-                // (B66).
-                self.no_session += 1;
+        let (to_forward, ack_to, peer) = {
+            let Some(s) = self.sessions.get_mut(key) else {
                 return;
             };
-            // The peer is alive: reset its idle window.
-            let now = Instant::now();
-            let idle = self.idle;
-            s.last_seen = now;
-            if let Some(idle) = idle {
-                self.deadlines.insert((now + idle, peer));
-            }
             let mut to_forward: Vec<FrameBody> = Vec::new();
             let mut ack_to: Option<u32> = None;
             match seq.cmp(&s.in_expected) {
@@ -144,18 +128,18 @@ impl super::Demux {
                     }
                 }
             }
-            (to_forward, ack_to)
+            (to_forward, ack_to, s.addr)
         };
         // PHASE 2 (the borrow above is over).
         let mut frames = to_forward.into_iter();
         while let Some(fb) = frames.next() {
-            if self.forward(peer, fb) {
+            if self.forward(key, fb) {
                 // The frames behind it in sequence order are lost with the
                 // session (B66); none of them was acknowledged.
                 for rest in frames {
                     self.count_closed(gsb_core::conn::FrameKind::of(rest.op));
                 }
-                self.remove_session(peer);
+                self.remove_session(key);
                 return;
             }
         }
@@ -169,91 +153,6 @@ impl super::Demux {
         if let Err(e) = self.sock.try_send_to(&ack, peer) {
             self.acks_send_failed += 1;
             debug!(%peer, %e, "rUDP: ack send failed (best-effort)");
-        }
-    }
-
-    pub(super) fn handle(&mut self, n: usize, peer: SocketAddr) {
-        if n < 1 || n > self.max_datagram {
-            self.oversized_in += 1;
-            return;
-        }
-        match self.buf[0] {
-            KIND_HELLO => {
-                if n < 18 {
-                    self.bad_datagrams += 1;
-                    return;
-                }
-                self.handle_hello(peer);
-            }
-            KIND_ACK => {
-                if n < 5 {
-                    self.bad_datagrams += 1;
-                    return;
-                }
-                let ack = u32::from_le_bytes(self.buf[1..5].try_into().unwrap());
-                // Piggyback the ACK into the session's OUTBOUND channel:
-                // the writer (the only reader of it) applies it to its
-                // retransmit state. This is the one transport-internal
-                // round trip: it needs no command channel (the demux
-                // cannot await one — its only awaited source is the
-                // socket) and costs one bounded-channel send.
-                if !self.sessions.contains_key(&peer) {
-                    // An ACK from an address with no session (B66).
-                    self.no_session += 1;
-                }
-                if let Some(s) = self.sessions.get(&peer) {
-                    let fb =
-                        FrameBody::new(op::base::UDP_ACK, Bytes::from(ack.to_le_bytes().to_vec()));
-                    match s.out_tx.try_send(vec![fb]) {
-                        Ok(()) => self.acks_piggybacked += 1,
-                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                            // The writer is stuck; the peer's retransmit
-                            // re-asks, and the REL liveness bound ends a
-                            // band that stops progressing (bounded).
-                            self.ack_piggyback_failed += 1;
-                        }
-                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                            self.removed_actor_gone += 1;
-                            self.remove_session(peer);
-                        }
-                    }
-                }
-            }
-            KIND_REL => {
-                if n < 7 {
-                    self.bad_datagrams += 1;
-                    return;
-                }
-                let seq = u32::from_le_bytes(self.buf[1..5].try_into().unwrap());
-                let body = self.buf[5..n].to_vec();
-                self.handle_rel(peer, seq, body);
-            }
-            KIND_RAW => {
-                if let Some(fb) = body_of(&self.buf[1..n], 0) {
-                    // RAW (lossy game band): no seq, no order, no ACK.
-                    if self.forward(peer, fb) {
-                        self.remove_session(peer);
-                    }
-                } else {
-                    self.bad_datagrams += 1;
-                }
-            }
-            KIND_REPORT => {
-                if n < 9 {
-                    self.bad_datagrams += 1;
-                    return;
-                }
-                self.handle_report(peer);
-            }
-            KIND_FRAG => {
-                // Refused: the server never reassembles (inputs are small,
-                // and reassembly state here would be memory any session
-                // could make the server hold — `docs/SECURITY.md` §4.1).
-                // Nothing is forwarded; the session is not otherwise
-                // touched (not even its idle window).
-                self.frag_refused += 1;
-            }
-            _ => self.bad_datagrams += 1,
         }
     }
 }

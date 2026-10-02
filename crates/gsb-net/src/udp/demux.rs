@@ -3,48 +3,32 @@
 //! handlers live in child modules ([`inbound`], [`handshake`], [`reap`])
 //! so they still reach this struct's private fields.
 
-use std::collections::{BTreeSet, HashMap};
-use std::net::SocketAddr;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use gsb_core::channel::{FrameBatch, Mailbox};
-use gsb_core::conn::ConnIn;
 use tokio::net::UdpSocket;
 use tracing::{info, warn};
 
 use crate::udp::*;
 
+mod dispatch;
 mod flush;
 mod handshake;
 mod inbound;
+mod migrate;
 mod reap;
 mod report;
+mod session;
 mod sweep;
+mod table;
 pub(super) use reap::Reaper;
+pub(super) use session::UdpSession;
+pub(super) use table::SessionKey;
+use table::Sessions;
 #[cfg(test)]
 mod tests;
-
-/// One established session's transport state (all of it local to the
-/// demux task — the demux is the actor; its map is its counter).
-#[derive(Debug)]
-pub(super) struct UdpSession {
-    in_tx: Mailbox<ConnIn>,
-    /// Kept for ACK piggyback (the demux hands inbound ACKs to the
-    /// session's writer through the outbound channel).
-    out_tx: Mailbox<FrameBatch>,
-    last_seen: Instant,
-    /// Inbound reliable state (client→server): the next expected seq,
-    /// plus the small out-of-order window awaiting the gap.
-    in_expected: u32,
-    in_oob: HashMap<u32, Vec<u8>>,
-    oob_dropped: u64,
-    dup_in: u64,
-    /// Inbound frames dropped on a full (bounded) session mailbox.
-    inbox_full: u64,
-    inbox_full_warned: bool,
-}
 
 #[derive(Debug)]
 pub(super) struct Demux {
@@ -60,16 +44,20 @@ pub(super) struct Demux {
     outbox_cap: usize,
     max_datagram: usize,
     idle: Option<Duration>,
-    sessions: HashMap<SocketAddr, UdpSession>,
-    /// Idle deadlines (feature 4): (deadline, peer) with lazy
+    /// The sessions, by key, address and CID (`table`, BACKLOG B3).
+    sessions: Sessions,
+    /// Whether the server grants connection ids (module
+    /// `crate::udp::path`; the server's `udp_migration`, default off).
+    migration: bool,
+    /// Idle deadlines (feature 4): (deadline, session) with lazy
     /// invalidation — an entry is *current* only while it equals
     /// `session.last_seen + idle`; datagrams supersede it (a new entry
     /// is pushed); the sweep discards stale tops.
-    deadlines: BTreeSet<(Instant, SocketAddr)>,
+    deadlines: BTreeSet<(Instant, SessionKey)>,
     /// The reap pass (BACKLOG B6, [`reap`]): the handle cloned into each
     /// session's writer, and the queue of finished sessions it feeds.
     reaper: Reaper,
-    reap_rx: Receiver<SocketAddr>,
+    reap_rx: Receiver<SessionKey>,
     buf: Vec<u8>,
     // lifetime counters (logged once at demux exit; the losses among them
     // also reach the collector while it runs — B58, `flush`):
@@ -112,6 +100,8 @@ pub(super) struct Demux {
     /// ACKs and challenges the socket refused (B66).
     acks_send_failed: u64,
     challenges_send_failed: u64,
+    /// Connection migration's counters (module `migrate`).
+    mig: migrate::Counts,
     /// The loss counters' path to the collector (B58), and the sender
     /// each session's writer gets for its own.
     flusher: crate::metrics::Flusher,
@@ -141,7 +131,8 @@ impl Demux {
             outbox_cap,
             max_datagram,
             idle,
-            sessions: HashMap::new(),
+            sessions: Sessions::default(),
+            migration: false,
             deadlines: BTreeSet::new(),
             reaper,
             reap_rx,
@@ -171,21 +162,36 @@ impl Demux {
             no_session: 0,
             acks_send_failed: 0,
             challenges_send_failed: 0,
+            mig: migrate::Counts::default(),
             flusher: crate::metrics::Flusher::new(None),
             metrics: None,
             congestion: UdpCongestion::Off,
         }
     }
 
-    fn remove_session(&mut self, peer: SocketAddr) {
-        // Drop the CURRENT deadline entry (exact match); stale ones are
-        // lazily discarded by the sweep.
-        if let Some(idle) = self.idle
-            && let Some(s) = self.sessions.get(&peer)
-        {
-            self.deadlines.remove(&(s.last_seen + idle, peer));
+    /// Remove a session: its CURRENT deadline entry (exact match; stale
+    /// ones are lazily discarded by the sweep), both index entries, and
+    /// its pending path validation's end in the ledger.
+    fn remove_session(&mut self, key: SessionKey) -> Option<UdpSession> {
+        let s = self.sessions.remove(key)?;
+        if let Some(idle) = self.idle {
+            self.deadlines.remove(&(s.last_seen + idle, key));
         }
-        self.sessions.remove(&peer);
+        if let Some(p) = s.path {
+            self.mig.validation_over(&p, Instant::now());
+        }
+        Some(s)
+    }
+
+    /// The session's idle window restarts: it was heard at `now`.
+    fn heard(&mut self, key: SessionKey, now: Instant) {
+        let idle = self.idle;
+        if let Some(s) = self.sessions.get_mut(key) {
+            s.last_seen = now;
+            if let Some(idle) = idle {
+                self.deadlines.insert((now + idle, key));
+            }
+        }
     }
 }
 
@@ -210,6 +216,7 @@ pub(super) async fn demux(
     d.flusher = crate::metrics::Flusher::new(cfg.metrics.clone());
     d.metrics = cfg.metrics;
     d.congestion = cfg.congestion;
+    d.migration = cfg.migration;
     loop {
         // Arm the read: if any session has an idle deadline pending, the
         // read is bounded by the EARLIEST one (the deadline fires only
@@ -264,6 +271,8 @@ pub(super) async fn demux(
         oversized_in = d.oversized_in,
         bad_datagrams = d.bad_datagrams,
         frag_refused = d.frag_refused,
+        migrations = d.mig.migrations,
+        cid_unknown = d.mig.cid_unknown,
         "rUDP demux stopped"
     );
 }

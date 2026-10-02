@@ -233,6 +233,18 @@ impl Feedback {
         evicted
     }
 
+    /// The session moved to a new path (module `crate::udp::path`): the
+    /// path's estimate starts over — its windowed minimum RTT, its
+    /// smoothed loss, the echo still to send (RFC 9000 §9.4). The probes
+    /// in flight and the interval baseline stay: a report still names its
+    /// probe, and every datagram sent is still counted once (sent on the
+    /// old path or the new, it was sent).
+    pub(super) fn new_path(&mut self, now: Instant) {
+        self.window = WindowMin::new(now);
+        self.estimate = None;
+        self.echo_us = 0;
+    }
+
     /// The socket refused the probe: counted, tried again an interval on.
     pub(super) fn probe_failed(&mut self, now: Instant) {
         self.counts.probes_send_failed += 1;

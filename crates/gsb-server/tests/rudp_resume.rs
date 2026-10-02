@@ -19,8 +19,10 @@
 //!   transparent fresh join.
 //!
 //! Each flow runs on TCP beside rUDP, one function per scenario with
-//! per-door expectations, so B3 can add its own ("migrated: no new
-//! handshake, no resume needed") next to these. Real sockets and the
+//! per-door expectations; B3 added its own next to these: with
+//! `udp_migration` on, a client whose address changes keeps its session
+//! (no new handshake, no resume, no close), and the fallback above still
+//! holds on such a door. Real sockets and the
 //! rUDP client's `Instant`-clocked retransmit rule out the paused
 //! clock; every wait is a condition with a hang guard (CONTRIBUTING
 //! "Gerçek saatli testler"), every count is read from the server's own
@@ -72,4 +74,18 @@ async fn past_the_grace_the_rudp_client_reclaims_its_entity_from_the_bot() {
 #[tokio::test]
 async fn without_a_grace_the_rudp_client_joins_fresh() {
     grace::no_grace_is_a_fresh_join(Door::Udp).await;
+}
+
+// B3: connection migration on. The migrated session needs no handshake
+// and no resume; the fallback (a vanished client resumes from a new
+// socket) still holds beside it.
+
+#[tokio::test]
+async fn a_migrating_rudp_session_survives_its_address_change() {
+    flows::migrate(Door::Migrating).await;
+}
+
+#[tokio::test]
+async fn with_migration_on_a_vanished_rudp_client_still_resumes() {
+    flows::vanish_then_resume(Door::Migrating, Shape::Single).await;
 }

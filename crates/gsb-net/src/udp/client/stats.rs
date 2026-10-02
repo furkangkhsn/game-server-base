@@ -50,4 +50,15 @@ pub struct UdpClientStats {
     /// Probe echoes (the server's RTT sample) longer than the reliable
     /// band's liveness bound, not taken as a sample.
     pub probe_echoes_refused: u64,
+    /// Connection migration (module docs of `crate::udp`, module
+    /// `path`): local sockets replaced by [`UdpClient::rebind`](crate::udp::UdpClient::rebind).
+    pub rebinds: u64,
+    /// The server's path challenges answered, and the answers the socket
+    /// refused (lost: the server re-challenges on this client's next
+    /// datagram).
+    pub path_challenges_answered: u64,
+    pub path_responses_send_failed: u64,
+    /// Path challenges ignored: this session has no connection id (a
+    /// server challenges only one that has).
+    pub path_challenges_ignored: u64,
 }

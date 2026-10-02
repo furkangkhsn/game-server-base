@@ -242,6 +242,7 @@ pub(super) async fn bind_listener(
                 metrics,
                 buffers: udp_buffers(cfg),
                 congestion: cfg.udp_congestion.into(),
+                migration: cfg.udp_migration,
             },
         }),
         ListenerSpec::Quic {

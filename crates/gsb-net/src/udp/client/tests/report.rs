@@ -99,6 +99,7 @@ async fn announcements_are_bounded_and_end_at_the_first_probe() {
 async fn with_reports_off_a_probe_is_ignored() {
     let (mut c, sink) = detached_with(UdpClientConfig {
         game_reports: false,
+        ..Default::default()
     })
     .await;
     c.announce(Instant::now());

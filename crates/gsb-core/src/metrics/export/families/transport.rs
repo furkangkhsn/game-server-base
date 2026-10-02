@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 70] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 85] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -379,6 +379,81 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 70] 
         "gsb_transport_udp_game_paced_rate_cuts_total",
         "Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each ring of probes unanswered while paced, cumulative.",
         |t| t.udp_game_paced_rate_cuts,
+    ),
+    tr(
+        "gsb_transport_udp_cids_assigned_total",
+        "rUDP sessions granted a connection id (the clients that asked, on a door with udp_migration on), cumulative.",
+        |t| t.udp_cids_assigned,
+    ),
+    tr(
+        "gsb_transport_udp_entropy_draws_failed_total",
+        "rUDP connection ids or path-challenge nonces the OS entropy source could not supply (the session went without a CID, or the candidate path unvalidated), cumulative.",
+        |t| t.udp_entropy_draws_failed,
+    ),
+    tr(
+        "gsb_transport_udp_cid_unknown_total",
+        "CID-tagged rUDP datagrams naming no session (gone, or forged), dropped, cumulative.",
+        |t| t.udp_cid_unknown,
+    ),
+    tr(
+        "gsb_transport_udp_path_validations_started_total",
+        "rUDP path validations begun (a tagged datagram from an address not its session's); each ends migrated, timed out, superseded or open at the session's end, cumulative.",
+        |t| t.udp_path_validations_started,
+    ),
+    tr(
+        "gsb_transport_udp_path_challenges_sent_total",
+        "rUDP PATH_CHALLENGE datagrams the socket took (first sends and re-sends), cumulative.",
+        |t| t.udp_path_challenges_sent,
+    ),
+    tr(
+        "gsb_transport_udp_path_challenges_send_failed_total",
+        "rUDP PATH_CHALLENGE datagrams the socket refused (retried on the candidate's next datagram), cumulative.",
+        |t| t.udp_path_challenges_send_failed,
+    ),
+    tr(
+        "gsb_transport_udp_path_amplification_capped_total",
+        "rUDP path challenges withheld because they would exceed 3x the bytes received from the unvalidated address, cumulative.",
+        |t| t.udp_path_amplification_capped,
+    ),
+    tr(
+        "gsb_transport_udp_path_address_in_use_total",
+        "rUDP candidate paths refused because the address is another session's, cumulative.",
+        |t| t.udp_path_address_in_use,
+    ),
+    tr(
+        "gsb_transport_udp_path_responses_unmatched_total",
+        "rUDP PATH_RESPONSE datagrams that answered no pending validation (none pending, another address or nonce), dropped, cumulative.",
+        |t| t.udp_path_responses_unmatched,
+    ),
+    tr(
+        "gsb_transport_udp_path_changes_not_forwarded_total",
+        "Matching rUDP path responses whose path-change notice the session's writer channel refused (the validation stays pending), cumulative.",
+        |t| t.udp_path_changes_not_forwarded,
+    ),
+    tr(
+        "gsb_transport_udp_path_validations_timed_out_total",
+        "rUDP path validations that ended without a matching response within 3 s; the session stayed on its old path, cumulative.",
+        |t| t.udp_path_validations_timed_out,
+    ),
+    tr(
+        "gsb_transport_udp_path_validations_superseded_total",
+        "rUDP path validations replaced by a newer candidate address before they completed, cumulative.",
+        |t| t.udp_path_validations_superseded,
+    ),
+    tr(
+        "gsb_transport_udp_path_validations_open_at_end_total",
+        "rUDP path validations still pending, in time, when their session ended, cumulative.",
+        |t| t.udp_path_validations_open_at_end,
+    ),
+    tr(
+        "gsb_transport_udp_migrations_total",
+        "rUDP sessions moved to a validated new client address (no handshake, no resume), cumulative.",
+        |t| t.udp_migrations,
+    ),
+    tr(
+        "gsb_transport_udp_migrations_port_only_total",
+        "rUDP migrations that changed the client's port only (a NAT rebinding; the path estimate is kept), cumulative.",
+        |t| t.udp_migrations_port_only,
     ),
 ];
 

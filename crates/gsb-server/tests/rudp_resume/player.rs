@@ -32,7 +32,7 @@ impl Player {
     pub async fn connect(door: Door, addr: std::net::SocketAddr) -> Self {
         let conn = match door {
             Door::Tcp => gsb_client::connect::tcp(addr).await.expect("tcp connect"),
-            Door::Udp => gsb_client::connect::udp(addr)
+            Door::Udp | Door::Migrating => gsb_client::connect::udp(addr)
                 .await
                 .expect("rUDP handshake"),
         };
@@ -49,6 +49,14 @@ impl Player {
     /// the 4-tuple a NAT rebinding changes.
     pub fn udp_local(&self) -> Option<std::net::SocketAddr> {
         self.conn.udp_client().and_then(|c| c.local_addr())
+    }
+
+    /// Move the rUDP session to a new local socket (a network change,
+    /// B3): the same session, no handshake. Returns the new address.
+    pub async fn rebind(&mut self) -> std::net::SocketAddr {
+        let c = self.conn.udp_client_mut().expect("an rUDP connection");
+        assert!(c.migratable(), "the door granted a connection id");
+        c.rebind().await.expect("rebind")
     }
 
     /// AUTH as `name` (the resume key) and JOIN room 1.

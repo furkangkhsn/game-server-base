@@ -101,6 +101,15 @@ impl Conn {
         }
     }
 
+    /// The rUDP client, mutably (its [`UdpClient::rebind`]: connection
+    /// migration), when it is one.
+    pub fn udp_client_mut(&mut self) -> Option<&mut UdpClient> {
+        match self {
+            Self::Udp(c) => Some(c),
+            Self::Stream { .. } => None,
+        }
+    }
+
     /// Send one frame (stream: written and flushed; rUDP: the control
     /// band for base opcodes, the lossy band for the game band — the
     /// client half's own split).

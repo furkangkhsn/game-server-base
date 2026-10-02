@@ -359,6 +359,59 @@ transport_counters! {
     /// episode's start, every further signal while paced, and a whole
     /// ring of probes unanswered while paced.
     udp_game_paced_rate_cuts,
+    /// rUDP demux (connection migration, B3; `udp_migration = true`):
+    /// sessions granted a connection id (CID) — the clients that asked,
+    /// on a door that grants them. Not a loss.
+    udp_cids_assigned,
+    /// rUDP demux (migration): CIDs or path-challenge nonces the OS
+    /// entropy source could not supply (or, once in 2^64, a CID that
+    /// collided): the session went without a CID, or the candidate path
+    /// unvalidated — never with a weaker value.
+    udp_entropy_draws_failed,
+    /// rUDP demux (migration): CID-tagged datagrams naming no session (a
+    /// session already gone, or a forged CID), dropped.
+    udp_cid_unknown,
+    /// rUDP demux (migration): path validations begun — a tagged datagram
+    /// from an address that is not its session's. Each ends migrated,
+    /// timed out, superseded or open at the session's end.
+    udp_path_validations_started,
+    /// rUDP demux (migration): PATH_CHALLENGE datagrams the socket took
+    /// (a validation's first and its re-sends).
+    udp_path_challenges_sent,
+    /// rUDP demux (migration): PATH_CHALLENGE datagrams the socket
+    /// refused (retried on the candidate's next datagram, an interval on).
+    udp_path_challenges_send_failed,
+    /// rUDP demux (migration): challenges withheld because they would
+    /// have sent more than 3× the bytes received from the unvalidated
+    /// address.
+    udp_path_amplification_capped,
+    /// rUDP demux (migration): candidate paths refused because the
+    /// address is another session's (one address, one session).
+    udp_path_address_in_use,
+    /// rUDP demux (migration): PATH_RESPONSE datagrams that answered no
+    /// pending validation (no validation, another address, another
+    /// nonce), dropped.
+    udp_path_responses_unmatched,
+    /// rUDP demux (migration): matching responses whose path-change
+    /// notice the session's writer channel refused (full or closed); the
+    /// validation stays pending and the next challenge round retries.
+    udp_path_changes_not_forwarded,
+    /// rUDP demux (migration): validations that ended without a matching
+    /// response within 3 s (a spoofed or vanished candidate); the session
+    /// stayed on its old path.
+    udp_path_validations_timed_out,
+    /// rUDP demux (migration): validations replaced by a newer candidate
+    /// address before they completed.
+    udp_path_validations_superseded,
+    /// rUDP demux (migration): validations still pending (and in time)
+    /// when their session ended.
+    udp_path_validations_open_at_end,
+    /// rUDP demux (migration): sessions moved to a validated new client
+    /// address — no handshake, no resume.
+    udp_migrations,
+    /// rUDP demux (migration): of those, the moves that changed the port
+    /// only (a NAT rebinding; the writer keeps the path estimate).
+    udp_migrations_port_only,
 }
 
 impl TransportCounters {

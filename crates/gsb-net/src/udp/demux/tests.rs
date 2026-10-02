@@ -5,7 +5,9 @@
 use super::*;
 use crate::udp::wire::*;
 use bytes::Bytes;
+use gsb_core::conn::ConnIn;
 use gsb_protocol::FrameBody;
+use std::net::SocketAddr;
 
 /// Direct-demux harness: a demux on a bound socket, no sessions, with
 /// its endpoint receiver handed back (a DROPPED receiver would make every
@@ -36,20 +38,8 @@ fn demux_with_session(
     let (out_tx, _out_rx) = gsb_core::channel::channel(16);
     let (mut d, _end_rx) = demux_bare(sock);
     d.established = 1;
-    d.sessions.insert(
-        peer,
-        UdpSession {
-            in_tx,
-            out_tx,
-            last_seen: Instant::now(),
-            in_expected: 1,
-            in_oob: HashMap::new(),
-            oob_dropped: 0,
-            dup_in: 0,
-            inbox_full: 0,
-            inbox_full_warned: false,
-        },
-    );
+    d.sessions
+        .insert(UdpSession::new(peer, None, in_tx, out_tx, Instant::now()));
     (d, in_rx)
 }
 
@@ -189,6 +179,8 @@ async fn inbound_fragments_are_refused() {
 mod closed;
 mod full;
 mod gone;
+mod grant;
 mod handshake;
+mod migrate;
 mod reap;
 mod report;

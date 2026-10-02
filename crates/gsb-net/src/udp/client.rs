@@ -45,6 +45,9 @@ pub struct UdpClient {
     reasm: Reassembly,
     /// The game band's feedback: the count and the announcements.
     reports: report::Reports,
+    /// Connection migration: the CID asked for and granted (module
+    /// `migrate`).
+    path: migrate::Migration,
 }
 
 impl UdpClient {
@@ -102,6 +105,7 @@ impl UdpClient {
             raw: None,
             reasm: Reassembly::default(),
             reports: report::Reports::new(config),
+            path: migrate::Migration::new(config.migration),
         };
         client.handshake(nonce, within).await?;
         Ok(client)
@@ -191,11 +195,11 @@ impl UdpClient {
             // quiet spell would inherit a clock stamped at the last ACK
             // and the band would "die" on the next pass.
             self.out_seq = self.out_seq.wrapping_add(1);
-            let dg = Bytes::from(encode_rel(self.out_seq, &frame));
+            let dg = Bytes::from(self.wire(encode_rel(self.out_seq, &frame)));
             self.rel.push(self.out_seq, dg.clone(), Instant::now());
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         } else {
-            let dg = encode_raw(&frame);
+            let dg = self.wire(encode_raw(&frame));
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         }
     }
@@ -267,6 +271,7 @@ impl UdpClient {
 
 mod handshake;
 mod io;
+mod migrate;
 mod report;
 mod stats;
 pub use report::UdpClientConfig;

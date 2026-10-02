@@ -42,6 +42,13 @@ pub struct UdpTransportConfig {
     /// server's `udp_congestion`). `Off` (the default): the writer as it
     /// was. See `crate::udp::congestion`.
     pub congestion: UdpCongestion,
+    /// Connection migration (BACKLOG B3; the server's `udp_migration`):
+    /// `true` grants a connection id to every client that asks, so its
+    /// session survives an address change after path validation. `false`
+    /// (the default): no CID is granted and the door is byte for byte
+    /// what it was. Pre-crypto a CID is a bearer token — see
+    /// `crate::udp` module `path` and `docs/RUDP-SECURITY.md` §7.
+    pub migration: bool,
 }
 
 impl Default for UdpTransportConfig {
@@ -55,6 +62,7 @@ impl Default for UdpTransportConfig {
             metrics: None,
             buffers: crate::listen::UdpBuffers::default(),
             congestion: UdpCongestion::Off,
+            migration: false,
         }
     }
 }

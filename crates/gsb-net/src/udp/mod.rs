@@ -232,11 +232,30 @@
 //!                                               server → client only
 //!   6 REPORT [u32 LE probe id][u32 LE received] game-band feedback,
 //!                                               client → server only
+//!   7 PATH_CHALLENGE [u64 LE nonce]             path validation,
+//!                                               server → client only
+//!   8 PATH_RESPONSE  [u64 LE nonce]             path validation,
+//!                                               client → server, always tagged
+//! 0x80|k  [u64 LE cid][kind k's body]           a CID-tagged client → server
+//!                                               datagram (connection migration)
 //! ```
+//!
+//! **The kind byte map** (final since B3; BACKLOG B109): `0x00..=0x3F`
+//! plaintext kinds (`0..=8` used); `0x40..=0x7F` the SEALED record of
+//! `crate::seal` (`0x40 | key phase`, `0x41`; not wired until B5a);
+//! `0x80..=0xBF` a plaintext kind `k` with the CID tag bit
+//! ([`KIND_CID_TAG`]) — client → server only, after the server granted a
+//! CID; `0xC0..=0xFF` unused (a SEALED record carries its CID in its own
+//! header at the same offset, bytes 1..9, so it never takes the tag).
+//! The ranges are disjoint by compile-time assertion. See "Connection
+//! migration" in module `path`.
 //!
 //! Kinds 5 and 6 are additive (rUDP hardening round 2): a client asks
 //! for them, so a peer of either side that predates them sees the wire
 //! it always saw — see "Game-band feedback" in the `feedback` module.
+//! So are 7, 8 and the tag (B3): a client asks for a CID with a
+//! capability byte appended to its proof, and only a server whose
+//! migration is on answers with one — see module `path`.
 //! A kind a peer does not know is dropped and counted (the server:
 //! `udp_datagrams_malformed`), the session untouched.
 //!
@@ -523,7 +542,8 @@
 //! UDP has no FIN. The previous turn's `idle_timeout` mechanism carries
 //! over as the demux's **deadline heap**: every session's last-seen
 //! instant + idle window is a lazy-invalidation entry in a
-//! `BTreeSet<(Instant, SocketAddr)>`; the demux loop arms
+//! `BTreeSet<(Instant, SessionKey)>` (keyed by the session, not its
+//! address, since B3); the demux loop arms
 //! `timeout(min_deadline, recv_from)` — the SAME single-future idiom the
 //! TCP reader pump uses (the deadline fires only while the read stays
 //! pending; a ready datagram always wins). When it fires, overdue
@@ -532,7 +552,7 @@
 //! is removed promptly (BACKLOG B6, `demux::reap`): its writer — which
 //! wakes at least every `RETRANSIT_TICK` anyway — sees the actor's mailbox closed and its own
 //! reliable band owing nothing (the actor's close notice is ACKed or
-//! given up on), queues the peer's address for the demux and wakes it
+//! given up on), queues the session's key for the demux and wakes it
 //! with a one-byte datagram to the demux's own address; the demux frees
 //! the session if it is really dead, within about one tick and without a
 //! datagram from the peer. The older net stays: a datagram for a gone
@@ -543,7 +563,8 @@
 //! ## The scale question (single demux at 100k)
 //!
 //! One task demuxes every datagram. Per datagram: one `recv_from`
-//! syscall (~0.1–0.3 µs), one hash lookup, one `BTreeSet` insert
+//! syscall (~0.1–0.3 µs), two hash lookups (since B3: the address or
+//! the CID to the session's key, the key to the session), one `BTreeSet` insert
 //! `O(log N)` ≈ 17 steps, one `try_send` — ≈ 0.5 µs of bookkeeping. At
 //! 100k sessions × 2 datagrams/s ≈ 0.1 core; even at 10/s per session
 //! (3M/s total, the `all`-visibility fan-out ceiling) the bookkeeping is
@@ -572,14 +593,15 @@
 //!   and the session's [`PathState`] does not reach the room yet — so a
 //!   game cannot thin its content to the path on its own (the follow-up
 //!   round carries it writer → connection actor → room).
-//! - **NAT rebinding ends the session.** Sessions are keyed by the
-//!   peer's 4-tuple, so a rebind is a new address: a new handshake, a new
-//!   `ConnectionId`, and the old session lingering until the idle sweep.
-//!   A mobile client that changes network loses its session where QUIC
-//!   would migrate it. Fixing this needs a connection id on the wire and
-//!   an identity to re-bind it to — a protocol change plus the auth
-//!   layer, not a patch. (Verified: `Demux::sessions` is keyed by
-//!   `SocketAddr` and `handle_hello` early-returns for a known one.)
+//! - **Connection migration is opt-in and unauthenticated.** Since B3
+//!   a session can carry a server-assigned connection id (CID) and move
+//!   to a new client address after path validation (module `path`), so
+//!   a NAT rebinding or a Wi-Fi ↔ cellular handover keeps the session.
+//!   Without crypto the CID is a bearer token — whoever sniffs it can
+//!   answer a challenge and steer the server → client stream — so it is
+//!   off by default (`udp_migration`); with it off, an address change
+//!   is still a new handshake and a resume. It defaults on once the
+//!   record layer is wired (B5a, `docs/RUDP-SECURITY.md` §7).
 //! - **No crypto layer**, declared out of scope for v1 rather than
 //!   pending: the cookie is an anti-spoofing measure, not a security
 //!   boundary (nothing is signed or encrypted). Fragmentation, once
@@ -595,6 +617,7 @@ mod demux;
 mod feedback;
 mod frag;
 mod kernel;
+mod path;
 mod rel;
 mod transport;
 mod wire;
@@ -616,8 +639,8 @@ use frag::{FRAG_MAX_COUNT, Reassembly, split};
 use rel::{Due, HANDSHAKE_MAX_RTO, MAX_RTO, RelSend, Rto};
 use transport::Queued;
 use wire::{
-    body_of, encode_ack, encode_hello, encode_probe, encode_raw, encode_rel, encode_report,
-    parse_two_u32,
+    body_of, encode_accept, encode_ack, encode_hello, encode_path_challenge, encode_path_response,
+    encode_probe, encode_proof, encode_raw, encode_rel, encode_report, parse_two_u32, tag, u64_at,
 };
 use writer::udp_pump_spawner;
 
@@ -639,6 +662,29 @@ pub const KIND_PROBE: u8 = 5;
 /// A game-band receiver report (client → server only; see "Game-band
 /// feedback").
 pub const KIND_REPORT: u8 = 6;
+/// A path-validation challenge (server → client only; module `path`).
+pub const KIND_PATH_CHALLENGE: u8 = 7;
+/// A path-validation response (client → server only, always CID-tagged:
+/// `KIND_CID_TAG | KIND_PATH_RESPONSE`; module `path`).
+pub const KIND_PATH_RESPONSE: u8 = 8;
+/// The CID tag bit of a client → server datagram: `[k | 0x80][u64 LE
+/// cid][kind k's body]` (module `path`).
+pub const KIND_CID_TAG: u8 = 0x80;
+/// The capability bits of the byte a client appends to its proof (byte
+/// 18, after the HELLO's 18). Bit 0: "grant me a CID" (module `path`).
+pub const CAP_CID: u8 = 0x01;
+
+// The kind byte map (module docs, "Datagram framing"): the plaintext
+// kinds, the SEALED range and the tagged range are disjoint, and a tagged
+// datagram's CID sits where a SEALED c→s record's does.
+const _: () = assert!(KIND_PATH_RESPONSE < crate::seal::wire::KIND_SEALED);
+const _: () = assert!(crate::seal::wire::KIND_SEALED & KIND_CID_TAG == 0);
+const _: () = assert!(
+    (crate::seal::wire::KIND_SEALED | crate::seal::wire::KIND_PHASE_BIT) & KIND_CID_TAG == 0
+);
+const _: () = assert!(KIND_PATH_RESPONSE | KIND_CID_TAG < 0xC0);
+const _: () =
+    assert!(crate::seal::wire::KIND_LEN + crate::seal::wire::CID_LEN == path::TAGGED_HEADER);
 
 /// The rotation period of the handshake cookie's TIME TERM (see
 /// [`CookieClock`], and the module docs, "Cookie rotation"). A proof is

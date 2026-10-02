@@ -93,6 +93,14 @@ impl RelSend {
         self.rto.sample(rtt);
     }
 
+    /// The session moved to a new path (module `crate::udp::path`): the
+    /// timer starts over, as a new session's (RFC 9000 §9.4). What is
+    /// outstanding stays outstanding — it is re-sent on the new path when
+    /// its (now initial) timer expires.
+    pub(super) fn new_path(&mut self) {
+        self.rto = Rto::default();
+    }
+
     /// The oldest outstanding frame (tests rewind its clock).
     #[cfg(test)]
     pub(super) fn front_mut(&mut self) -> Option<&mut Outstanding> {

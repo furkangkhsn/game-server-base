@@ -22,6 +22,9 @@ pub const GUARD: Duration = Duration::from_secs(30);
 pub enum Door {
     Tcp,
     Udp,
+    /// rUDP with `udp_migration` on (B3): a session survives its
+    /// client's address change.
+    Migrating,
 }
 
 impl Door {
@@ -32,7 +35,7 @@ impl Door {
     pub fn drop_close(self) -> Option<ServerClose> {
         match self {
             Door::Tcp => None,
-            Door::Udp => Some(ServerClose::IdleTimeout),
+            Door::Udp | Door::Migrating => Some(ServerClose::IdleTimeout),
         }
     }
 }
@@ -57,8 +60,9 @@ pub fn config(door: Door, shape: Shape, grace_secs: f64) -> gsb_server::Config {
         room_count: 1,
         transport: match door {
             Door::Tcp => gsb_server::TransportKind::Tcp,
-            Door::Udp => gsb_server::TransportKind::Udp,
+            Door::Udp | Door::Migrating => gsb_server::TransportKind::Udp,
         },
+        udp_migration: door == Door::Migrating,
         topology: Some(match shape {
             Shape::Single => gsb_server::Topology::Single,
             Shape::Sharded => gsb_server::Topology::Sharded,
@@ -98,6 +102,8 @@ pub struct Seen {
     pub room: RoomCounts,
     pub reg: RegCounts,
     pub closes: ServerCloses,
+    /// rUDP sessions moved to a new client address (B3).
+    pub migrations: u64,
     /// Reports folded so far (a settle reads a few more).
     pub reports: u64,
 }
@@ -181,6 +187,7 @@ impl Rig {
             };
         }
         self.seen.closes = r.net.server_closes;
+        self.seen.migrations = r.transport.udp_migrations;
         self.seen.reports += 1;
     }
 

@@ -213,6 +213,7 @@ async fn a_client_that_does_not_report_is_never_probed() {
     let (c, mut rx, listener) = run_session(
         UdpClientConfig {
             game_reports: false,
+            ..Default::default()
         },
         |c| c.stats.game_datagrams_received >= 30,
         Duration::from_secs(10),

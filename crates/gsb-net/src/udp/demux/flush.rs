@@ -29,6 +29,21 @@ impl super::Demux {
             udp_control_frames_dropped_closed: self.closed_controls,
             udp_datagrams_no_session: self.no_session,
             udp_game_reports_not_forwarded: self.reports_not_forwarded,
+            udp_cids_assigned: self.mig.cids_assigned,
+            udp_entropy_draws_failed: self.mig.entropy_failed,
+            udp_cid_unknown: self.mig.cid_unknown,
+            udp_path_validations_started: self.mig.validations_started,
+            udp_path_challenges_sent: self.mig.challenges_sent,
+            udp_path_challenges_send_failed: self.mig.challenges_send_failed,
+            udp_path_amplification_capped: self.mig.amplification_capped,
+            udp_path_address_in_use: self.mig.address_in_use,
+            udp_path_responses_unmatched: self.mig.responses_unmatched,
+            udp_path_changes_not_forwarded: self.mig.changes_not_forwarded,
+            udp_path_validations_timed_out: self.mig.validations_timed_out,
+            udp_path_validations_superseded: self.mig.validations_superseded,
+            udp_path_validations_open_at_end: self.mig.validations_open_at_end,
+            udp_migrations: self.mig.migrations,
+            udp_migrations_port_only: self.mig.migrations_port_only,
             ..Default::default()
         };
         self.flusher.flush(totals, last);

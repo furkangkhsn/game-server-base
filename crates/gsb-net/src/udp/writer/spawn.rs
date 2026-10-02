@@ -107,6 +107,8 @@ impl UdpWriter {
             flusher: crate::metrics::Flusher::new(link.metrics),
             feedback: Feedback::new(Instant::now()),
             pace: super::pace::Pace::new(link.congestion, link.max_datagram, Instant::now()),
+            path_changes: 0,
+            path_resets: 0,
         }
     }
 }
