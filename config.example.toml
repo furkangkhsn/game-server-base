@@ -222,6 +222,24 @@ udp_max_datagram_bytes = 1472
 # 1000-player join storm admitted in about a second); 0 = no budget.
 #udp_handshakes_per_sec = 1000
 
+# rUDP only: the sealed door's stateless reset key, 64 hex characters,
+# inline or in a file (setting both refuses startup; never logged). After
+# a restart the server answers a record of a session it lost with a reset
+# carrying that session's token, and the client ends the session at once
+# (instead of after the reliable band's 5 s bound) and reconnects.
+# Unset (recommended): each door derives it from udp_static_key, which
+# survives restarts already; set one only to rotate the two apart. Either
+# way it is bound to the door's address: restart on the same bind.
+#udp_reset_key = "<64 hex characters>"
+#udp_reset_key_file = "/etc/gsb/rudp-reset.key"
+
+# rUDP only: stateless resets a sealed door sends per second (a token
+# bucket of 50 ms, checked before any work; each reset is shorter than
+# the datagram that triggered it). Default 10000 (~3 % of the demux's
+# core; a restarted server resets 10 000 sessions in about a second);
+# 0 = no resets.
+#udp_stateless_resets_per_sec = 10000
+
 # rUDP only: connection migration — a session whose client speaks from a
 # new address (a NAT rebinding, a Wi-Fi <-> cellular handover) MOVES there
 # after path validation (a challenge the new address must answer): no new

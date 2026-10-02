@@ -644,9 +644,19 @@ kapıda da koşar (`Door::PlainUdp`, `Door::PlainMigrating`); 16 test,
 sayılar ve kapanış aileleri iki kipte aynı. Mühürlü kapıda resume
 yolunun kendisi değişmedi: kaybolan istemci YENİ bir el sıkışma (yeni
 efemeral anahtarlar, yeni CID) yapar ve aynı kimlik bilgisiyle resume
-eder; eski oturumun anahtarları onunla gider. Sunucu yeniden
-başladığında istemcinin 5 sn REL sınırını beklemeden öğrenmesi
-(stateless reset) B5b'nin işi.
+eder; eski oturumun anahtarları onunla gider.
+
+**Sunucu yeniden başlarsa (B5b, 2026-10-03).** Aynı statik (ve reset)
+anahtarla aynı adrese bağlanan sunucu, kaybettiği oturumun bir sonraki
+kaydına o oturumun reset jetonunu taşıyan stateless reset'le cevap verir
+(RUDP-SECURITY §8); istemci 5 sn REL sınırını beklemeden oturumu bitirir
+(`UdpClient::is_established()` → `false`,
+`stateless_resets_received`) ve bu bölümün yolunu izler: yeni soket, yeni
+el sıkışma, aynı adla AUTH. Yeni sunucu eski varlığı bilmediği için bu
+taze bir katılmadır (park yok). Kilit: `rudp_resume.rs`
+`a_restarted_server_resets_the_rudp_client_which_rejoins` (iki sunucu
+örneği, < 1 sn'de bitiş). İstemci kütüphanesinin `Conn::recv`'i rUDP'de
+hâlâ `Closed` döndürmez; bitişi `is_established()` söyler.
 
 **Göç ve resume (B3, 2026-10-02; B5a'dan beri mühürlü kapıda
 varsayılan açık).** Göçü açık kapıda

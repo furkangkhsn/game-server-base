@@ -3086,8 +3086,9 @@ PROBE, REPORT, `PATH_CHALLENGE [7][u64]`, `PATH_RESPONSE [8][u64]` —
 artık etiketsiz, iç tür). Yazıcının bütçesi iç datagramındır
 (1472 − 25); istemci c→s için 1472 − 33 kalır. Noise prologue bağlamı
 HELLO nonce'u + çerez (16 B): başka çerez alışverişinden yakalanan msg1
-tutmaz. Reset jetonu alanı ayrıldı ve dolu (kapı başına rastgele
-anahtardan; B5b config'e taşır — tel değişmez).
+tutmaz. Reset jetonu `token(cid)`: kapının reset anahtarından (B5b:
+config'deki ya da statik anahtardan türetilen, kapının adresine bağlı —
+aşağıda "Anahtar fazları ve stateless reset"; tel B5a'dakinin aynısı).
 
 *Sıra (kural):* çerez doğrulaması → msg1 biçimi (yalnız boy; düz metin
 proof burada `udp_proofs_refused_plaintext`, bozuk boy
@@ -3175,6 +3176,81 @@ msg2'yi oturum boyu tutmak (bellek), ya da msg1'i karşılaştırmak: aynı
 adres + aynı nonce'a bağlı doğrulanan çerez aynı el sıkışmadır; sahte
 msg1'e aynı msg2'yi vermek saldırgana bir şey kazandırmaz (istemcinin
 efemeral anahtarı olmadan çözülemez).
+
+**Anahtar fazları ve stateless reset (BACKLOG B5b — 2026-10-03; tasarım
+`docs/RUDP-SECURITY.md` §6, §8, §16; bakımcı kararları 7, 9).** rUDP
+kripto hattının son turu. Kod: `udp::sealed::{rekey, door}`,
+`udp::demux::reset`, `seal::reset` (`reset_datagram`, `reset_tail`,
+`ResetKey::{derived_from, for_door}`).
+
+*Rekey politikası:* her mühürlü gönderme yarısı (yazıcının s→c'si,
+istemcinin c→s'si; iki yön bağımsız) `SendHalf`'tır: faz **2 dakika ya da
+2^20 kayıt** sonra biter, hangisi önce gelirse (`RekeyPolicy::default`;
+`UdpTransportConfig::rekey`, `UdpClientConfig::rekey`; sunucu config
+anahtarı yok — motorun politikası). Gerekçe: rekey bir sınırın cevabı
+değil — ChaCha20-Poly1305'in 2^62'nin altında pratik gizlilik sınırı yok,
+sayaç fazlar boyunca sürer (2^62 tavanı oturumundur), 2^36 bütünlük
+sınırı tüm anahtarlar üzerinden sahteleri sayar. Rekey ele geçirilen bir
+anahtarın açtığını daraltır (REKEY tek yönlü: önceki fazlar kapalı
+kalır); süre WireGuard'ın REKEY_AFTER_TIME'ı. Oyun hızlarında (saniyede
+onlarca–yüzlerce kayıt) süre önce dolar; kayıt sayısı toplu gönderenin
+fazını sınırlar. Çekirdeğin iki kuralı kapı olarak kalır: fazda en az
+1024 kayıt (yavaş oturum sonra rekey eder, sayılmaz) ve eşin onayı.
+
+*Onay (ACK → sayaç eşlemesi):* her REL çerçevesinin **ilk**
+gönderiminin kayıt sayacı tutulur (yeniden gönderim yeni sayaç alır; ACK
+herhangi bir kopyaya cevap olabilir, güvenle kefil olunabilen yalnız
+ilki — en küçüğü); birikimli ACK çerçeveyi kapsayınca sayaç
+`Sealer::note_peer_ack`'e gider. Sınırlı: `RETRANSIT_CAP`, bandın
+kendi çerçeveleriyle bırakılır. Canlı oturumda heartbeat iki yönün REL
+bandını da besler. Hiç onaylamayan eş hiçbir şeyi durdurmaz: oturum
+mevcut anahtarla mühürlemeye devam eder, her erteleme 10 sn'de en çok
+bir kez sayılır (`udp_rekeys_unconfirmed`, istemcide
+`rekeys_unconfirmed`), ilk onayda hemen rekey (`udp_rekeys`,
+`rekeys`). Faz sınırında sırasız gelen kayıt açıcının önceki anahtar
+toleransıyla açılır (testli).
+
+*Stateless reset:* demux, hiçbir oturumun tutmadığı CID'li SEALED
+kayda (oturum bitti, ya da sunucu yeniden başladı) o CID'nin reset
+datagramıyla cevap verir; istemci oturumu hemen bitirir, 5 sn REL
+sınırını beklemez, resume yoluna (yeni el sıkışma + AUTH) geçer.
+
+| Datagram | Bayt düzeni | Boy |
+|---|---|---|
+| reset s→c | `[0x40 \| rastgele faz][rastgele sayaç < 2^62, u64][rastgele dolgu][jeton 16]` | `min(tetikleyen − 1, 41)`, en az 26 B |
+
+- **Anahtar:** `udp_reset_key` / `udp_reset_key_file` (64 hex,
+  opsiyonel); yoksa statik anahtardan türetilir
+  (`HMAC-BLAKE2s(statik, "gsb-rudp-reset-key/1")`) — statik anahtar
+  mühürlü kapıda zorunlu ve yeniden başlatmadan sağ çıkar (istemciler
+  onu sabitler), ikinci sırrı yönetmek gerekmez. İkisi de kapının bağlı
+  adresine bağlanır (`for_door`): bir kapı başka bir kapının canlı
+  oturumunun jetonunu asla vermez. Yeniden başlayan sunucu aynı adrese
+  bağlanmalı.
+- **Amplifikasyon yok:** reset tetikleyenden kesin kısa ve en çok 41 B;
+  yalnız tetikleyenin kaynağına. İki uç birbirini bilinmeyen sanırsa her
+  turda bir bayt kısalır, 33 B'nin (c→s kaydın en kısası) altında durur.
+- **Oran:** kapı başına jeton kovası (`udp_stateless_resets_per_sec`,
+  vars. 10 000/s, 50 ms'lik; `0` = reset yok), her işten (entropi,
+  HMAC) önce; aşan tetikleyici düşer, sayılır
+  (`udp_stateless_resets_rate_limited`). Gönderilen
+  `udp_stateless_resets_sent`, soket reddi
+  `udp_stateless_resets_send_failed`; tetikleyen datagram her durumda
+  `udp_cid_unknown`.
+- **İstemci:** açılamayan (bütünlük sınırı dışındaki retlerden biri),
+  SEALED türlü, reset boyundaki (26..=41 B) datagramın son 16 baytını
+  msg2'nin jetonuyla sabit zamanlı karşılaştırır. Tutarsa oturum biter
+  ve YALNIZ `stateless_resets_received` sayılır; tutmazsa kendi
+  `seal_*` adıyla sayılır, ayrıca `stateless_resets_invalid` ("bunlardan"
+  — anahtarı değişmiş bir sunucunun reseti ile küçük sahte kayıt bilerek
+  ayırt edilemez).
+- **Görünürlük:** reset küçük bir s→c kaydının biçiminde; sayaç düz
+  gittiğinden oturumun sayaçlarını izleyen gözlemci rastgele bir sayaç
+  görür (sayaç gizleme §10'da, sonra).
+
+*CID rotasyonu (karar 7):* bu turda yapılmadı — ucuz değil (çok CID'li
+oturum indeksi, CID başına jeton, emeklilik, göçle etkileşim); tasarımı
+RUDP-SECURITY §10'da, BACKLOG'da ayrı satır.
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
@@ -4724,7 +4800,7 @@ beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | ~~Accept loop abort~~ *(kapandı — B16: `close` bekleyen accept'i bitirir, döngü kendiliğinden döner; abort yalnız 1 sn'yi aşan döngüye geri sigorta)* | — | §9 |
 | rUDP: **tıkanıklık tepkisi opt-in, oyuna sinyal yok** *(B1 tur 3: `udp_congestion = "pace"` — raporlayan oturumun oyun bandı tahmini yol hızına göre hızlanır, en eski kareler düşer + sayılır; varsayılan `"off"`)* | Varsayılan kapalı: titreşimli gerçek yolda sahte gecikme sinyali ölçülmedi; `PathState` henüz odaya ulaşmıyor, oyun içeriğini yola göre inceltemez | sinyal çekirdek/kite (sonraki tur — §6 "Tıkanıklık tepkisi"), sonra varsayılanın çevrilmesi |
-| rUDP: ~~şifreleme/imza yok~~ — **B5a'da kapandı** | Mühürlü kapı (sunucu varsayılanı): Noise NK + ChaCha20-Poly1305 kayıt katmanı, sunucu statik anahtarı config'de (§6 "Kayıt katmanı", `docs/RUDP-SECURITY.md`). Düz metin yalnız açık `udp_security = "plaintext"` (dev/LAN); orada çerez anahtarı tahmin edilemezdir ama hiçbir şey imzalanmaz ya da şifrelenmez | B5b: rekey politikası, stateless reset, CID rotasyonu; dış inceleme (D13) |
+| rUDP: ~~şifreleme/imza yok~~ — **B5a'da kapandı** | Mühürlü kapı (sunucu varsayılanı): Noise NK + ChaCha20-Poly1305 kayıt katmanı, sunucu statik anahtarı config'de (§6 "Kayıt katmanı", `docs/RUDP-SECURITY.md`). Düz metin yalnız açık `udp_security = "plaintext"` (dev/LAN); orada çerez anahtarı tahmin edilemezdir ama hiçbir şey imzalanmaz ya da şifrelenmez | B5b'de (2026-10-03) rekey politikası ve stateless reset yapıldı (§6 "Anahtar fazları ve stateless reset"); kalan: CID rotasyonu (tasarım RUDP-SECURITY §10), dış inceleme (D13, kapsam RUDP-SECURITY §11) |
 | rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
 | ~~rUDP: SO_RCVBUF ayarı yok~~ *(kapandı — B4: `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`, rUDP ve QUIC kapıları, `socket2` ile; yazılmazsa dokunulmaz — §6 "UDP kapılarının soket arabellekleri")* | — | — |
 | rUDP: **bağlantı göçü opt-in** *(B3: `udp_migration = true` — CID + yol doğrulaması, NAT yeniden bağlanması ve ağ değişimi oturumu bitirmez; varsayılan kapalı: yeni el sıkışma + resume, eski oturum idle sweep'e kadar)* | Kriptodan önce CID taşıyıcı jetondur: koklayan, challenge'ı yanıtlayıp s→c akışını kendine çekebilir (RUDP-SECURITY §3, §7) | B5a (mühürlü kayıt) — sonra varsayılan açık |

@@ -353,6 +353,46 @@ udp_handshakes_per_sec = 1000    # vars.; 0 = bütçe yok
 - **Katman yok:** üçü de tek sunucu anahtarı; `[rooms.<id>]` ve
   `[[listeners]]` girdisi reddeder.
 
+**Sunucu düzeyi: rUDP stateless reset `udp_reset_key` /
+`udp_reset_key_file`, `udp_stateless_resets_per_sec` (BACKLOG B5b,
+RUDP-SECURITY karar 9).** Mühürlü her rUDP kapısı; düz metin kapı
+okumaz.
+
+```toml
+#udp_reset_key_file = "/etc/gsb/rudp-reset.key"   # opsiyonel; ya da udp_reset_key = "<64 hex>"
+udp_stateless_resets_per_sec = 10000              # vars.; 0 = reset yok
+```
+
+- **Ne yapar:** sunucu yeniden başlayınca kaybettiği oturumların
+  istemcilerini HEMEN bitirtir: bilinmeyen CID'li kayda o CID'nin reset
+  datagramı döner, istemci 5 sn REL sınırını beklemeden oturumu kapatır
+  ve yeniden bağlanır (resume yolu). Bitmiş bir oturumun geç gelen
+  kaydına da aynı cevap gider.
+- **Anahtar yazılmazsa** (önerilen): her kapı onu statik anahtardan
+  türetir — statik anahtar zaten kalıcı, ek sır yok. **Yazılırsa:** 64
+  hex (`openssl rand -hex 32`), satır içi ya da dosyada; ikisi birden ya
+  da bozuksa sunucu BAŞLAMAZ (`rUDP reset key: both … | malformed: …`),
+  anahtar hiçbir log'a girmez. Ayrı anahtar yalnız reset anahtarını
+  statik anahtardan bağımsız döndürmek için.
+- **Aynı `bind` şartı:** reset anahtarı kapının bağlı adresine
+  bağlanır (iki kapı birbirinin jetonunu vermez). Yeniden başlayan
+  sunucu AYNI `bind` değeriyle bağlanmalı: istemcinin ulaştığı IP:port
+  aynı kalsa bile bağlanılan adres değişirse (ör. `0.0.0.0:7000` yerine
+  `10.0.0.5:7000`) resetin jetonu tutmaz — istemci onu
+  `stateless_resets_invalid` sayar ve 5 sn REL sınırına düşer.
+- **`udp_stateless_resets_per_sec`:** kapı başına jeton kovası (50 ms'lik),
+  HMAC'ten ve entropiden önce. Reset başına ~3 µs: 10 000/s ≈ demux
+  çekirdeğinin %3'ü; yeniden başlayan sunucu 10 000 oturumu ~1 sn'de
+  sıfırlar. Aşan tetikleyici sayılır (`udp_stateless_resets_rate_limited`)
+  ve cevapsız kalır; istemcinin sonraki datagramı yeniden dener. Reset
+  tetikleyenden her zaman kısa (≤ 41 B): yansıtma kazancı yok. `0`:
+  kapı hiç reset göndermez.
+- **Anahtar fazları (rekey):** config anahtarı yok — motor politikası
+  (faz 2 dk ya da 2^20 kayıt, istemcinin onayıyla; DESIGN §6). Sayaçları
+  §3'te.
+- **Katman yok:** üçü de tek sunucu anahtarı; `[rooms.<id>]` ve
+  `[[listeners]]` girdisi reddeder.
+
 **Sunucu düzeyi: rUDP bağlantı göçü `udp_migration` (BACKLOG B3,
 B112).**
 
@@ -1324,6 +1364,32 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `proofs_refused_budget`, `seal_forged`. İstemci tarafı aynı adları
   `UdpClientStats`'ta tutar (`seal_*`, `unsealed_dropped`,
   `accepts_forged`, `accepts_unsealed`).
+- **Taşıma kapsamı: anahtar fazları ve stateless reset (B5b).** Satırın
+  ve tablonun sonuna 5 `counter`; `RESULT`'ta `transport_<ad>=`; loadgen
+  telinin taşıma bölümü 5 sayaç uzar (sihirli sayı ayrıca atanır).
+  - Yazıcı: `udp_rekeys` (s→c anahtar güncellemeleri — faz süresi ya da
+    kayıt sınırı dolup istemci mevcut fazı onayladıktan sonra),
+    `udp_rekeys_unconfirmed` (vadesi gelen ama istemci mevcut fazdan bir
+    datagramı henüz onaylamadığı için ertelenen güncelleme; oturum başına
+    10 sn'de en çok bir; oturum mevcut anahtarla sürer).
+  - Demux: `udp_stateless_resets_sent` (bilinmeyen CID'li kayda giden
+    reset), `udp_stateless_resets_rate_limited` (kova boştu, cevapsız),
+    `udp_stateless_resets_send_failed` (soket reddetti). Tetikleyen
+    datagram her durumda `udp_cid_unknown`.
+
+  **Okuma:** canlı bir sunucuda `udp_rekeys` oturum başına ~2 dakikada
+  bir artar; `udp_rekeys_unconfirmed` sürekli artıyorsa istemciler REL
+  bandında hiçbir şey göndermiyor/onaylamıyor (heartbeat yok) — güvenlik
+  açığı değil, faz uzar. Yeniden başlatmanın hemen ardından
+  `udp_stateless_resets_sent` eski oturum sayısı kadar sıçrar;
+  `udp_cid_unknown` sürekli büyük ama reset yoksa ya resetler kapalı
+  (`0`) ya da kova dolu (`_rate_limited`). Sürekli
+  `udp_stateless_resets_rate_limited`: biri rastgele CID'li kayıt
+  yağdırıyor. İstemci tarafı: `UdpClientStats::{rekeys,
+  rekeys_unconfirmed, stateless_resets_received,
+  stateless_resets_invalid}` — `_invalid` (reset boyunda ama jetonu
+  tutmayan; ayrıca kendi `seal_*` adıyla sayılır) sunucunun reset
+  anahtarının ya da adresinin değiştiğini gösterir.
 - **Registry kapsamı: göçte tutulan kaynak sayımı (B113 — u89).**
   Registry satırının (`gsb-metric scope=registry`) sonuna
   `unauth_source_moves_kept=`, Prometheus'ta

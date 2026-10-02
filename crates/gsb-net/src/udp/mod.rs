@@ -620,8 +620,11 @@
 //!   door (the explicit dev/LAN switch) signs and encrypts nothing: there
 //!   the cookie is an anti-spoofing measure, not a security boundary, and
 //!   a FRAG datagram is as forgeable as a RAW one (the client's reassembly
-//!   bounds keep a forged stream from costing it more than 64 KiB). Still
-//!   open (B5b): the rekey policy, the stateless reset, CID rotation.
+//!   bounds keep a forged stream from costing it more than 64 KiB). B5b
+//!   added the key-phase policy (a phase ends after 2 minutes or 2^20
+//!   records, once the peer confirmed it) and the stateless reset (a
+//!   restarted server ends a lost session at once); CID rotation is
+//!   designed, not built (`docs/RUDP-SECURITY.md` §10).
 
 mod client;
 mod congestion;

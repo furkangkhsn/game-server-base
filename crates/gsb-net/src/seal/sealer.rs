@@ -85,8 +85,9 @@ impl Sealer {
     }
 
     /// Switches to the next key generation; later datagrams carry the
-    /// flipped phase bit. WHEN to rekey is policy (B5b); this only refuses
-    /// a rekey the peer's opener could not follow.
+    /// flipped phase bit. WHEN to rekey is policy (B5b: `crate::udp`'s
+    /// `RekeyPolicy`); this only refuses a rekey the peer's opener could
+    /// not follow.
     pub fn rekey(&mut self) -> Result<(), SealError> {
         if self.next - self.phase_start < REKEY_MIN_DISTANCE {
             return Err(SealError::RekeyTooSoon);

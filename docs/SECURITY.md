@@ -21,7 +21,8 @@
 | rUDP el sıkışma kaybı: proof yeniden gönderimi + kabul (`ACK{1}`), sunucu proof'ta idempotent | H turu | ✅ Uygulandı (§4.2; DESIGN §6 "El sıkışma kaybı") |
 | Doğrulanmış kimlik = karakter anahtarı (ticket'sız yol yalnız geliştirme) | K4 turu | ✅ Uygulandı (§4b) |
 | El sıkışma accept döngüsünün dışında, kapı başına sınırlı (WS/TLS/QUIC; sessiz tek soket kapıyı kilitliyordu) | B31 | ✅ Uygulandı (§4.3; DESIGN §6 "El sıkışan kapılar") |
-| rUDP kayıt katmanı: Noise NK el sıkışması + ChaCha20-Poly1305 kayıtları, sunucu statik anahtarı config'de, mühürlü kip varsayılan | B5a | ✅ Uygulandı (§4.7; DESIGN §6 "Kayıt katmanı"; `docs/RUDP-SECURITY.md`). Kalan: B5b (rekey politikası, stateless reset, CID rotasyonu), dış inceleme (D13) |
+| rUDP kayıt katmanı: Noise NK el sıkışması + ChaCha20-Poly1305 kayıtları, sunucu statik anahtarı config'de, mühürlü kip varsayılan | B5a | ✅ Uygulandı (§4.7; DESIGN §6 "Kayıt katmanı"; `docs/RUDP-SECURITY.md`) |
+| rUDP anahtar fazı politikası (2 dk / 2^20 kayıt, ACK'le onaylı) ve stateless reset (config'deki ya da statik anahtardan türetilen reset anahtarı, kısa ve oranlı reset) | B5b | ✅ Uygulandı (§4.8; DESIGN §6 "Anahtar fazları ve stateless reset"). Kalan: CID rotasyonu (tasarım RUDP-SECURITY §10), dış inceleme (D13, kapsam RUDP-SECURITY §11) |
 | rUDP tıkanıklık tepkisi | B1 | ✅ Opt-in (`udp_congestion = "pace"`, DESIGN §6) |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 | Ops HTTP istek başlığına süre sınırı (sessiz / damlatan eş görevini tutmaz; 5 sn, sonra tek `408`) | B47 | ✅ Uygulandı (OPS §3 "İstek başlığının süre sınırı"); eşzamanlı ops bağlantı tavanı ve yanıt yazmanın süre sınırı yok (§6) |
@@ -599,7 +600,7 @@ bayt bayt eskisidir. Kriptodan (B5a) önce açmanın bedeli açıktır:
 
 **Kalan yüzey (bilinçli):** CID ağlar arası sabittir — pasif bir
 gözlemci iki ağdaki oturumu ilişkilendirebilir (gizlilik; çözüm CID
-rotasyonu, RUDP-SECURITY §10, B5b). Göçte registry'nin kaynak başına
+rotasyonu, tasarımı RUDP-SECURITY §10; B5b'de yapılmadı). Göçte registry'nin kaynak başına
 sayımı (§4.3.2) ve aktörün `peer`'i artık yeni adrese taşınır (B113,
 §4.3.3 #6–7).
 
@@ -628,10 +629,10 @@ yalnız `udp_security = "plaintext"` ile (dev/LAN; başlangıçta `warn`).
 artık geçerli): kare okuma/enjeksiyon/değiştirme/tekrar oynatma
 kapandı (görünen: c→s CID, sayaç, boy, zamanlama); sahte sunucu
 kapandı (istemci anahtarı sabitler, msg2'yi yalnız gerçek sunucu
-üretir); oturum kaçırma kapandı (challenge şifreli). **Açık kalan:**
-sunucu yeniden başlarsa istemci 5 sn REL sınırını bekler (stateless
-reset, B5b); CID ağlar arası sabit (pasif bağlanabilirlik — CID
-rotasyonu, B5b/§10); sayaç düz görünür (paket hızı/kayıp — sayaç
+üretir); oturum kaçırma kapandı (challenge şifreli). Sunucu yeniden başlarsa istemci artık
+stateless reset'le hemen biter (B5b, §4.8). **Açık kalan:** CID ağlar
+arası sabit (pasif bağlanabilirlik — CID rotasyonu, tasarım
+RUDP-SECURITY §10); sayaç düz görünür (paket hızı/kayıp — sayaç
 gizleme, sonra); DH bütçesinde kaynak başına adalet yok (B120); kayıt
 katmanı dış incelemeden geçmedi (D13). Sunucu statik anahtarının
 sızması kapsam dışı: geçmiş oturumlar efemeral DH ile korunur, ama
@@ -647,6 +648,37 @@ mühürlü göç), `udp::sealed::tests`; `gsb-server` `config::udp_key::tests`
 (anahtar eksik/ikisi/bozuk, hiçbir karakter yankılanmaz),
 `tests/startup_errors.rs`, `tests/rudp_resume.rs` (her akış mühürlü ve
 düz metin kapıda).
+
+### 4.8 rUDP anahtar fazları ve stateless reset (B5b)
+
+Tasarım `docs/RUDP-SECURITY.md` §6, §8, §16; tel DESIGN §6 "Anahtar
+fazları ve stateless reset".
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **Faz 2 dk ya da 2^20 kayıt sonra biter** (hangisi önce), iki yön bağımsız; çekirdeğin iki kuralı (fazda ≥ 1024 kayıt, eşin onayı) kapı | Rekey ele geçirilen bir anahtarın açtığını daraltır (REKEY tek yönlü: önceki fazlar kapalı); bir sınırın cevabı değil (ChaCha20-Poly1305'in pratik gizlilik sınırı yok; 2^62 sayaç ve 2^36 bütünlük sınırı oturumun, fazın değil). Süre WireGuard'ın |
+| 2 | **Onay = REL çerçevesinin İLK gönderiminin sayacını kapsayan ACK** | ACK herhangi bir kopyaya cevap olabilir; yalnız ilk (en küçük sayaçlı) gönderim faz hakkında kanıttır. Sınırlı (`RETRANSIT_CAP`). Mutasyonla kilitli: onaysız rekey, ACK'in henüz kapsamadığı çerçeve, faz denetimsiz sayaç |
+| 3 | **Onaylamayan eş oturumu durdurmaz** | Mevcut anahtarla devam; erteleme 10 sn'de en çok bir kez sayılır (`udp_rekeys_unconfirmed`); ilk onayda rekey |
+| 4 | **Reset anahtarı config'de opsiyonel; yoksa statik anahtardan türetilir, her durumda kapının adresine bağlanır** | Statik anahtar mühürlü kapıda zorunlu ve kalıcı (istemciler sabitler): reset ikinci sır yönetmeden yeniden başlatmadan sağ çıkar; ayrı anahtar yalnız ikisini ayrı döndürmek için. Kapıya bağlama: bir kapı başka bir kapının canlı oturumunun jetonunu vermez (koklayıcı CID'yi okuyup öbür kapıdan jetonu isteyemez) |
+| 5 | **Reset tetikleyenden kesin kısa (≤ 41 B), yalnız kaynağına, kapı başına oranlı** (`udp_stateless_resets_per_sec`, vars. 10 000/s, `0` = yok), oran her işten önce | Amplifikasyon < 1; iki uç arasındaki döngü bayt bayt kısalıp 33 B'nin altında durur; reset seli demux'ı en çok ~%3 meşgul eder. Mutasyonla kilitli: büyük reset, oransız reset |
+| 6 | **İstemci jetonu sabit zamanlı karşılaştırır, yalnız reset boyundaki (26..=41 B) açılamayan SEALED datagramda** | `ResetToken::matches` (`subtle`); geçerli reset tek adla sayılır (`stateless_resets_received`), yanlış jeton kaydın kendi adıyla + `stateless_resets_invalid`. Mutasyonla kilitli: yanlış jetonla kabul |
+
+**Kalan yüzey (bilinçli):** jetonu bilen (yalnız istemci ve sunucu;
+msg2'de şifreli) oturumu bitirebilir; bir kapının reset anahtarı sızarsa
+o kapının bütün oturumları bitirilebilir (hizmet reddi, gizlilik değil)
+— anahtar döndürülür (`udp_reset_key`). Reset sayacı düz gittiğinden
+oturum sayaçlarını izleyen gözlemci reseti ayırt edebilir (sayaç
+gizleme, RUDP-SECURITY §10). Yeniden başlayan sunucu aynı `bind`
+değeriyle bağlanmazsa resetin jetonu tutmaz (kapıya bağlama); istemci 5
+sn REL sınırına düşer.
+
+Kilit: `gsb-net` `seal::tests::reset` (türetmeler, her tetikleyen boyu
+için kısa reset, düzen, açıcının reddi), `udp::sealed::tests::{rekey,
+door}` (politika elle sürülen saatte; kapıya bağlama), `udp::demux::
+tests::sealed::reset` (jeton, boy sınırı, oran, kapalı), `udp::client::
+tests::{reset, seal}`, `udp::writer::tests::seal`, `udp::tests::reset`
+(gerçek soketle yeniden başlatma); `gsb-server` `config::udp_key::tests`,
+`tests/rudp_resume.rs` (yeniden başlayan sunucu, reset, yeniden katılma).
 
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 
@@ -706,7 +738,7 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
   cevabını bekleyen yönlendirmenin süre sınırı (B90,
   `http_route_timeout_secs`, aşılırsa `504`; OPS §3); kaynak adres başına
   tavan yok (localhost sözleşmesi)
-- rUDP kayıt katmanının kalanı (B5b): rekey politikası (ACK → `note_peer_ack`), stateless reset (config anahtarı), CID rotasyonu; DH bütçesinde kaynak başına adalet (B120); dış güvenlik incelemesi (D13). Düz metin kapı (`udp_security = "plaintext"`) hiçbir şeyi korumaz: orada göç opt-in ve CID taşıyıcı jeton (§4.6)
+- rUDP kayıt katmanının kalanı: CID rotasyonu (tasarım RUDP-SECURITY §10), sayaç gizleme; DH bütçesinde kaynak başına adalet (B120); dış güvenlik incelemesi (D13, kapsam RUDP-SECURITY §11). Düz metin kapı (`udp_security = "plaintext"`) hiçbir şeyi korumaz: orada göç opt-in ve CID taşıyıcı jeton (§4.6)
 - Kaynak adres başına sınırın kapsamadığı evre: rUDP demux'ının kayıttan
   önceki oturum tablosu (§4.3.1 #8, BACKLOG B89; kaydedilmiş rUDP
   oturumları §4.3.2'ye girer)

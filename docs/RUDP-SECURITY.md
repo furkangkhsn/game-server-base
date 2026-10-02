@@ -1,6 +1,9 @@
 # gsb: rUDP Güvenliği — Noise NK el sıkışması + kendi kayıt katmanımız
 
-> **Durum:** BAĞLI (B5a, 2026-10-02). Mühürlü kip sunucunun varsayılanı.
+> **Durum:** TAMAM — rUDP kripto hattının son turu (B5b) bitti
+> (2026-10-03). Bu doküman hattın son başvuru kaynağıdır; dış inceleme
+> (D13) kapsamı §11'de devredilmeye hazır. Mühürlü kip sunucunun
+> varsayılanı.
 > - **x1:** kripto çekirdeği `gsb_net::seal` (sans-IO, soket yok, tokio
 >   yok) ve bu doküman.
 > - **B3 (2026-10-02):** kriptosuz CID ve göç, kind bayt haritası (§5,
@@ -10,8 +13,14 @@
 >   bütçesi, göçün üç koşulu, sunucu statik anahtarı config'de, mühürlü
 >   kip varsayılan (`udp_security`), düz metin yalnız açık dev/LAN
 >   anahtarıyla. Ne yapıldığı: §15; B5b'nin devraldığı: §15 sonu.
-> - **Kalan:** B5b (§12): rekey politikası, stateless reset, CID
->   rotasyonu. Dış inceleme (karar 8, D13).
+> - **B5b (2026-10-03):** anahtar fazı politikası (2 dk / 2^20 kayıt,
+>   REL ACK'iyle onay — §6), stateless reset (config'de ya da statik
+>   anahtardan türetilen, kapıya bağlı reset anahtarı; tetikleyenden kısa,
+>   oranlı reset; istemcide sabit zamanlı jeton kontrolü — §8). CID
+>   rotasyonu bu turda yapılmadı: ucuz değil, tasarımı §10. Ne yapıldığı:
+>   §16.
+> - **Kalan:** CID rotasyonu ve sayaç gizleme (§10, sonra); dış inceleme
+>   (karar 8, D13 — kapsam §11).
 >
 > Kaynak araştırma: x1 araştırma raporu (2026-10-02). Bu doküman onun
 > §4–§7'sini ve maintainer'ın 10 kararını sözleşmeye çevirir.
@@ -63,9 +72,9 @@
 | 4 | netcode tarzı bilet anahtarı kipi | Şimdi yok |
 | 5 | Kriptosuz göç (B3) | **Opt-in.** Kripto gelince varsayılan açık |
 | 6 | Kripto gelince düz metin | **Mühürlü (sealed) üretim varsayılanı;** düz metin yalnız açık bir dev/LAN anahtarıyla |
-| 7 | CID rotasyonu, sayaç gizleme | Sonra (§10) |
+| 7 | CID rotasyonu, sayaç gizleme | Sonra (§10). B5b: CID rotasyonu tasarlandı, yapılmadı (ucuz değil) |
 | 8 | Dış güvenlik incelemesi | Planlı: kayıt katmanı bağlanınca (§11) |
-| 9 | Yeniden başlatmadan sağ çıkan stateless reset anahtarı config'de | Evet (§8) |
+| 9 | Yeniden başlatmadan sağ çıkan stateless reset anahtarı config'de | Evet (§8). B5b: `udp_reset_key` opsiyonel; yazılmazsa statik anahtardan türetilir (o da config'de ve kalıcı) |
 | 10 | Göçte yeni adrese erken gönderim mi? | Hayır: **yeni yol doğrulanana kadar eski yolda beklenir** (§7) |
 
 ## 3. Tehdit modeli
@@ -75,17 +84,19 @@
 - **Koklayıcı:** paketleri görür, enjekte eder.
 - **Yol üstü:** düşürür, geciktirir, değiştirir.
 
-| Saldırı | Bugün (düz metin) | B3 (kriptosuz CID, opt-in) | Kripto (B5a sonrası) |
+| Saldırı | Düz metin kapı | B3 (kriptosuz CID, opt-in) | Mühürlü kapı (B5a + B5b) |
 |---|---|---|---|
-| Kare okuma | Koklayıcı her şeyi okur | Aynı | Şifreli. Görünen: CID (c→s), sayaç, boy, zamanlama — **B5a'dan beri mühürlü kapıda geçerli** (bu sütunun tamamı; reset satırı hariç, o B5b) |
+| Kare okuma | Koklayıcı her şeyi okur | Aynı | Şifreli. Görünen: CID (c→s), sayaç, boy, zamanlama, anahtar fazı biti — **mühürlü kapıda geçerli** (bu sütunun tamamı) |
 | Kare enjeksiyonu / değiştirme | Koklayıcı enjekte eder; yol dışı, portu bilirse sahte RAW/FRAG basar | Aynı | AEAD reddeder → `seal_forged` |
 | Tekrar oynatma | Mümkün | Mümkün | Replay penceresi → `seal_replayed` / `seal_too_old` |
 | Oturum kaçırma | Adres sahteciliğiyle kısmen | **CID taşıyıcı jetondur:** CID'yi koklayan, düz metin PATH_CHALLENGE'ı kendi adresinden yanıtlayıp s→c akışını kendine çeker | Challenge şifreli, yanıtlanamaz; eski yolda beklenir |
-| Yansıtma / amplifikasyon | Çerez + oran ≤ 1 | + 3x bütçe + yol doğrulaması | Aynı. Accept (77 B) proof'tan (~67 B) büyük, ama yalnız çerezle kanıtlanmış adrese gider |
+| Yansıtma / amplifikasyon | Çerez + oran ≤ 1 | + 3x bütçe + yol doğrulaması | Aynı. Accept (77 B) proof'tan (~67 B) büyük, ama yalnız çerezle kanıtlanmış adrese gider. Stateless reset tetikleyenden kesin kısa (≤ 41 B) ve oranlı (B5b, §8) |
 | DH seli (CPU) | — | — | DH yalnız çerez doğrulandıktan ve kaynak başına bekleyen oturum sınırından (B89, yapıldı) **sonra**; küresel DH bütçesi B5a'da (§4) |
 | Sahte sunucu | Mümkün | Mümkün | İstemci sunucu açık anahtarını sabitler; NK msg2'yi yalnız gerçek sunucu üretebilir |
-| Sunucu yeniden başlarsa | İstemci 5 sn REL sınırını bekler | Aynı | Stateless reset jetonuyla hemen biter (B5b) |
-| Pasif bağlanabilirlik (gizlilik) | Adres | CID ağlar arası sabit | Aynı. Çözüm CID rotasyonu (§10, sonra) |
+| Sunucu yeniden başlarsa | İstemci 5 sn REL sınırını bekler | Aynı | Stateless reset jetonuyla hemen biter (B5b, yapıldı; aynı adrese bağlanan sunucu) |
+| Sahte reset (oturum bitirme) | — | — | Jeton yalnız istemci ve sunucuda (msg2'de şifreli); sabit zamanlı karşılaştırma; bir kapı başka bir kapının canlı oturumunun jetonunu vermez (§8) |
+| Ele geçen anahtarın geçmişi açması | — | — | Faz değişiminden önceki trafik kapalı kalır (REKEY tek yönlü; faz 2 dk / 2^20 kayıt, §6). Efemeral DH oturumlar arası ileri gizliliği zaten verir |
+| Pasif bağlanabilirlik (gizlilik) | Adres | CID ağlar arası sabit | Aynı. Çözüm CID rotasyonu + sayaç gizleme (§10.1 tasarım, sonra) |
 
 **Kapsam dışı:**
 - Uç noktaların ele geçirilmesi.
@@ -205,7 +216,7 @@ kind = 0x40 | anahtar fazı biti (0x01)
   | Aralık | Anlamı |
   |---|---|
   | `0x00..=0x3F` | Düz metin türler: `0` RAW, `1` REL, `2` ACK, `3` HELLO, `4` FRAG, `5` PROBE, `6` REPORT, `7` PATH_CHALLENGE, `8` PATH_RESPONSE; `9..=0x3F` boş |
-  | `0x40..=0x7F` | SEALED kayıt: `0x40 \| faz` (`0x40`, `0x41`); `0x42..=0x7F` boş |
+  | `0x40..=0x7F` | SEALED kayıt: `0x40 \| faz` (`0x40`, `0x41`); `0x42..=0x7F` boş. s→c stateless reset de bu biçimi taşır (§8, B5b) |
   | `0x80..=0xBF` | CID etiketli düz metin tür `0x80 \| k` (yalnız c→s, B3): `[0x80\|k][u64 cid][k'nın gövdesi]` |
   | `0xC0..=0xFF` | Boş (SEALED etiket bitini almaz: CID'yi kendi başlığında taşır) |
 
@@ -274,7 +285,7 @@ penceresi tüm fazları kapsar ve nonce hiçbir anahtar altında tekrar etmez.
    (= pencere, 1024) datagram mühürlenmiş olmalı.
 2. `RekeyUnconfirmed`: eş mevcut fazdan bir datagramı onaylamış olmalı
    (`note_peer_ack`; RFC 9001 §6.1'in kuralı).
-   - REL katmanı ACK'i gönderdiği sayaca eşler: B5a'nın işi.
+   - REL katmanı ACK'i gönderdiği sayaca eşler (B5b, aşağıda "Politika").
 
 **Alıcı (`Opener`):**
 - Mevcut anahtar, önceden hesaplanmış sonraki anahtar ve **bir** önceki
@@ -289,9 +300,57 @@ penceresi tüm fazları kapsar ve nonce hiçbir anahtar altında tekrar etmez.
   datagramı, alıcının elinde anahtarı olmayan bir nesilden asla gelmez.
   Seeded model testi bunu 3 tohum × 20k adımda doğrular.
 
-**Rekey ne zaman yapılır** (zaman/sayı politikası) B5b'nin kararıdır.
-ChaCha20-Poly1305'in pratik gizlilik sınırı yoktur. Rekey ileri gizlilik
-penceresini daraltmak içindir, zorunluluk değil.
+**Politika (B5b, yapıldı — `udp::sealed::rekey`):** her mühürlü gönderme
+yarısı (yazıcının s→c'si, istemcinin c→s'si) bir `SendHalf`'tır; iki yön
+bağımsız rekey eder.
+- **Tetik:** faz **`RekeyPolicy::after` = 2 dk** ya da
+  **`after_records` = 2^20 kayıt** sonra biter, hangisi önce gelirse
+  (`DEFAULT_REKEY_AFTER`, `DEFAULT_REKEY_AFTER_RECORDS`;
+  `UdpTransportConfig::rekey`, `UdpClientConfig::rekey`; sunucu config
+  anahtarı yok). Mühürlemeden hemen önce bakılır; trafiği olmayan oturum
+  rekey etmez (korunacak bir şey yok).
+- **Sayıların gerekçesi:**
+  - 2^62 sayaç tavanı fazla ilgisizdir: sayaç fazlar boyunca sürer,
+    tavan oturumundur (saniyede 1M kayıtla ~146 bin yıl).
+  - 2^36 bütünlük sınırı tüm anahtarlar üzerinden SAHTELERİ sayar (RFC
+    9001 §6.6): rekey onu sıfırlamaz, ona yaklaşmayı da değiştirmez.
+  - ChaCha20-Poly1305'in 2^62'nin altında pratik gizlilik sınırı yoktur
+    (RFC 9001 §6.6).
+  - Yani rekey zorunluluk değil, **ele geçen bir anahtarın açtığını
+    daraltmaktır**: REKEY tek yönlüdür, k_n'den k_{n−1} hesaplanamaz —
+    bir bellek dökümü yalnız mevcut ve SONRAKİ fazları açar, öncekileri
+    değil. 2 dk WireGuard'ın REKEY_AFTER_TIME'ıdır (orada tam DH; bizde
+    simetrik zincir — DH'li ileri gizlilik oturum başına efemeral
+    anahtardan gelir).
+  - Oyun hızları: 20–60 Hz snapshot + girdi + ACK ≈ saniyede onlarca–
+    birkaç yüz kayıt → 2 dk'da ~5–50 bin kayıt; süre önce dolar. 2^20
+    kayıt yalnız saniyede ~8,7 binden hızlı (toplu) gönderende önce
+    dolar; o fazı 2^20 kayıtla sınırlar. 60 Hz bir oturum 2^20'ye ~4,8
+    saatte varır.
+  - Asgari mesafe (1024 kayıt) yavaş oturumu sınırlar: saniyede 5 kayıtla
+    faz ≥ ~3,4 dk olur. Bu erteleme normaldir, sayılmaz.
+- **Onay (ACK → sayaç eşlemesi):** her REL çerçevesinin **ilk**
+  gönderiminin kayıt sayacı `(seq, sayaç)` olarak tutulur; yeniden
+  gönderim yeni sayaç alır ama eşlemeye girmez — ACK herhangi bir kopyaya
+  cevap olabilir, güvenle kefil olunabilen yalnız en küçük sayaçlı
+  ilkidir (ilk kopya mevcut fazdaysa bütün kopyalar da öyledir). Birikimli
+  ACK `a` geldiğinde `seq < a` olan her girdi `note_peer_ack(sayaç)`'a
+  gider ve bırakılır (`seq = a` henüz kapsanmadı). Sınır: `RETRANSIT_CAP`
+  (bandın kendi çerçeveleriyle birlikte büyür ve küçülür). Canlı oturumda
+  heartbeat (REL) iki yönde de bu kanıtı üretir.
+- **Hiç onaylamayan eş:** hiçbir şey durmaz — oturum mevcut anahtarla
+  mühürlemeye devam eder; vadesi gelen ama onaysız her deneme 10 sn'de
+  (`REKEY_RETRY`) en çok bir kez sayılır (`udp_rekeys_unconfirmed`,
+  istemcide `rekeys_unconfirmed`); ilk onaydan sonraki ilk kayıtta rekey
+  (`udp_rekeys`, `rekeys`).
+- **Testler** (`udp::sealed::tests::rekey`, elle sürülen saat): süre ve
+  kayıt tetiği, mesafe kuralı (fazlar tam 1024'er), hiç onaylamayan eş
+  (60 sn'de 6 sayım, oturum sürer, onayla hemen rekey), ACK'in neyi
+  kanıtladığı (ilk gönderim, birikimli noktanın altı), politika sınırında
+  sırasızlık (önceki anahtar toleransı). Kablolu: `udp::writer::tests::
+  seal`, `udp::client::tests::seal`. Mutasyonla kilitli: onaysız rekey,
+  `seq > a`, faz denetimsiz `note_peer_ack`, yazıcının/istemcinin ilk
+  gönderimi kaydetmemesi, mesafe kuralı, sayımın kısılmaması.
 
 ## 7. CID ve göç kuralları (B3 + B5a)
 
@@ -373,31 +432,99 @@ adresini yalnız şu üçü birden doğruysa değiştirir:
   metin kapıda kapalı kaldı (opsiyonel `bool`: yazılmamışsa kipe göre).
 - Bildirim yolu (B89/B113) aynı kaldı.
 
-## 8. Stateless reset
+## 8. Stateless reset (B5b, yapıldı)
 
-**Anahtar:**
-- Sunucu config'inde 32 B'lik reset anahtarı (karar 9). Yeniden
-  başlatmadan sağ çıkar. Yoksa ve kripto açıksa başlatma hatası (B5b).
-- Jeton: `HMAC-BLAKE2s(anahtar, "gsb-rudp-reset/1" ‖ cid_le)[..16]`
-  (`ResetKey::token`). Aynı anahtar ve CID her açılışta aynı jetonu verir.
-- Jeton accept'te (msg2) şifreli gider; yalnız istemci ve sunucu bilir.
+**Anahtar (karar 9):**
+- Sunucu config'inde 32 B'lik reset anahtarı: `udp_reset_key` (64 hex)
+  ya da `udp_reset_key_file` — **opsiyonel**. Yazılmazsa
+  `ResetKey::derived_from(statik anahtar)` =
+  `HMAC-BLAKE2s(statik özel anahtar, "gsb-rudp-reset-key/1")`.
+  - **Neden zorunlu değil (taslaktaki "yoksa başlatma hatası" yerine):**
+    statik anahtar mühürlü kapıda zaten zorunlu ve kalıcı (istemciler onu
+    sabitler; değişirse herkes yeni açık anahtar alır). Ondan etiketli bir
+    PRF ile türetilen anahtar her yeniden başlatmadan sağ çıkar, ikinci
+    bir sır yönetmeyi gerektirmez; yeni bir zorunlu config anahtarı ise
+    her dağıtımı kırardı. Türetilen anahtar statik anahtar hakkında bir şey
+    söylemez (HMAC çıktısı) ve DH onu hiç görmez. Ayrı anahtar yalnız
+    ikisini ayrı döndürmek için (sızan reset anahtarı = o kapının
+    oturumlarını bitirebilme; statik anahtarı değiştirmeden döndürülür).
+  - **Kapı başına rastgele anahtar (B5a'nın geçici hâli) reddedildi:**
+    yeniden başlatmada kaybolur — tam da resetin işe yaraması gereken
+    an.
+- **Kapıya bağlama:** her kapı anahtarı bağlı adresine bağlar:
+  `for_door(adres) = HMAC-BLAKE2s(anahtar, "gsb-rudp-reset-door/1" ‖
+  adres)`. Aynı kapı yeniden başlayınca aynı anahtarı türetir; iki kapı
+  birbirinin jetonunu ASLA vermez. Bağlamasaydık: bir kapıdaki canlı
+  oturumun CID'sini koklayan, CID'yi bilmeyen ÖBÜR kapıya bir datagram
+  yollayıp jetonu alır, kurbanın oturumunu bitirirdi. Bedeli: yeniden
+  başlayan sunucu AYNI `bind` adresine bağlanmalı (OPS §2).
+- Jeton: `HMAC-BLAKE2s(kapı anahtarı, "gsb-rudp-reset/1" ‖ cid_le)[..16]`
+  (`ResetKey::token`). Accept'te (msg2) şifreli gider; yalnız istemci ve
+  sunucu bilir.
 
-**Akış (B5b'nin bağlayacağı biçim, QUIC RFC 9000 §10.3):**
-1. Yeniden başlayan sunucu, bilinmeyen CID taşıyan c→s SEALED datagramına
-   s→c bir reset yollar. Biçim: SEALED biçimli
-   `[0x40|rastgele faz][rastgele baytlar][jeton 16]`.
-   - Tetikleyen datagramdan **kısa** olur: amplifikasyon yok, iki uç
-     arasında reset döngüsü yok.
-   - En az `OVERHEAD_S2C + 1` B olur, normal SEALED datagramdan ayırt
-     edilmesin diye.
-   - Kaynak başına oranlanır.
-2. İstemci açamadığı (`Forged`) bir datagramın son 16 baytını sabit
-   zamanlı karşılaştırır (`ResetToken::matches`). Tutarsa oturum hemen
-   biter. 5 sn REL sınırı beklenmez ve B7'nin resume yolu açılır.
+**Reset datagramı (`seal::reset_datagram`):**
 
-**Açık soru (B5b):** reset datagramı önce `seal_forged`'a mı sayılır,
-yoksa yalnız `seal_stateless_reset`'e mi? Öneri: yalnız ikincisi (tek
-ad); `Opener` buna bir `Forged` sonrası kanca verir.
+```text
+[0x40 | rastgele faz biti][rastgele sayaç < 2^62, u64 LE][rastgele dolgu][jeton 16]
+boy = min(tetikleyen − 1, RESET_LEN_MAX = 41), en az RESET_LEN_MIN = 26
+```
+
+- **SEALED s→c kaydı biçiminde** (RFC 9000 §10.3'ün fikri): kind
+  baytı, sayaç boyunda bir alan, şifreli metin yerinde rastgele bayt,
+  tag yerinde jeton. Sayaç 2^62'nin altında tutulur: istemcinin açıcısı
+  onu `Malformed` değil AEAD'de `Forged` olarak reddeder (testli).
+  Boy aralığı küçük kontrol kayıtlarınınki (ACK 30 B, PROBE /
+  PATH_CHALLENGE 34 B).
+- **Ayırt edilemezlik sınırı (bilinçli):** sayaç düz gider (§10'un sayaç
+  gizlemesi sonra); oturumun sayaçlarını izleyen gözlemci rastgele bir
+  sayaç görür. Bayt biçimi ve boy açısından küçük bir kayıttır.
+- **Amplifikasyon yok:** reset tetikleyenden KESİN kısadır, en çok 41 B,
+  yalnız tetikleyenin kaynağına gider. Tetikleyen c→s kaydı en az 33 B
+  (başlık + tag) olmalı ki CID okunabilsin; daha kısası `seal_malformed`.
+  Döngü yok: iki uç birbirinin datagramını bilinmeyen oturum sanırsa her
+  tur bir bayt kısalır, 33 B'nin altında durur (≤ 9 tur; istemci zaten
+  reset göndermez).
+- **Oran (`udp_stateless_resets_per_sec`, vars. 10 000/s, `0` = yok):**
+  kapı başına jeton kovası (DH bütçesinin `DhBudget`'ı, 50 ms'lik), entropi
+  çekiminden ve HMAC'ten ÖNCE. Aşan tetikleyici cevapsız kalır, sayılır
+  (`udp_stateless_resets_rate_limited`). Gerekçe: reset başına ~1 HMAC
+  (~4 BLAKE2s sıkıştırması) + bir `sendto` ≈ ~3 µs (tahmin, ölçülmedi)
+  → 10 000/s ≈ demux çekirdeğinin %3'ü; yeniden başlayan sunucu N oturumu
+  ~N / oran saniyede sıfırlar (her istemci kovada jeton bulan ilk
+  datagramıyla) — 10 000 oturum ~1 sn, 5 sn REL sınırının altında.
+- **Sayaçlar:** `udp_stateless_resets_sent`, `_rate_limited`,
+  `_send_failed`; tetikleyen datagram her durumda `udp_cid_unknown`
+  (datagramın adı; reset bir sonuçtur).
+
+**İstemci (`udp::client::seal`):**
+1. Açıcı datagramı reddeder (bütünlük sınırı dışındaki herhangi bir
+   retle — reset hemen her zaman `Forged` olur, ama `TooOld` /
+   `Replayed` / `WrongPhase`'e düşen bir reset de kaçmasın diye).
+2. Datagram SEALED türlü ve reset boyundaysa (26..=41 B) son 16 baytı
+   msg2'nin jetonuyla **sabit zamanlı** karşılaştırılır
+   (`ResetToken::matches`, `subtle`).
+3. Tutarsa oturum hemen biter (`is_established()` → `false`; dışarıda
+   kalan REL çerçeveleri `gave_up`) ve datagram **yalnız**
+   `stateless_resets_received` sayılır (§8'in eski açık sorusu: tek ad —
+   `seal_forged`'a girmez). Çağıran resume yoluna geçer (yeni soket, yeni
+   el sıkışma, aynı adla AUTH — RECONNECT §5).
+4. Tutmazsa datagram kendi `seal_*` adıyla sayılır, ayrıca
+   `stateless_resets_invalid` ("bunlardan": reset boyunda olup jetonu
+   tutmayan — anahtarı ya da adresi değişmiş bir sunucunun reseti ile
+   küçük sahte kayıt bilerek ayırt edilemez).
+
+**Testler:** `seal::tests::reset` (türetmeler; 0..=1472 her tetikleyen
+boyu için kısa reset; düzen; açıcının reddi ve kuyruk), `udp::demux::
+tests::sealed::reset` ("yeniden başlamış" demux: jeton, boy sınırı, oran,
+kapalı), `udp::sealed::tests::door` (kapıya bağlama, yapılandırılmış
+anahtar, oran ve politika config'ten), `udp::client::tests::reset`
+(doğru jeton bitirir, yanlış jeton / reset olamayacak biçim bitirmez),
+`udp::tests::reset` (gerçek soket: kapı kapanır, aynı adrese yenisi,
+istemci < 1 sn'de biter, yeni oturum kurar), `gsb-server`
+`tests/rudp_resume.rs` (iki sunucu örneği aynı anahtarlarla: reset,
+< 1 sn, aynı adla yeniden katılma). Mutasyonla kilitli: yanlış jetonla
+kabul, tetikleyenden büyük/sınırsız reset, oransız reset, demux'ın reset
+göndermemesi, kapıya bağlamama.
 
 ## 9. Düz metin kipi
 
@@ -414,57 +541,196 @@ rUDP yalnız açık bir config anahtarıyla açılır (yapıldı):
 
 ## 10. Sonraya kalanlar (karar 7, 4)
 
-- **CID rotasyonu:** ağlar arası bağlanabilirliği keser. Sunucu
-  NEW_CONNECTION_ID benzeri şifreli bir iç kind ile yedek CID'ler verir;
-  istemci göçte yenisine geçer.
-- **Sayaç gizleme:** QUIC başlık koruması gibi, sayacı şifreli örnekten
-  türetilen maskeyle örter. Bugün sayaç düz görünür: gözlemciye paket
-  hızını ve kaybı söyler.
+### 10.1 CID rotasyonu — tasarım (B5b'de yapılmadı)
+
+**Neden bu turda değil:** "ucuz ve güvenli" değil. Oturum indeksi tek
+CID varsayar (`table`: `cid → key`), reset jetonu CID başına
+(her yeni CID'ye jeton), emeklilik ve sırasız gelen eski-CID'li kayıtlar,
+göçün aday/doğrulama makinesiyle etkileşim ve iki yeni iç tür + istemci
+durumu gerekir. Yanlış yapılırsa bugün kapalı olan bir şeyi açar
+(başka oturumun CID'sine yönlendirme, jeton sızması). Kazancı yalnız
+gizlilik (pasif bağlanabilirlik, §3 son satır); güvenlik değil.
+
+**Tasarım (QUIC NEW_CONNECTION_ID / RETIRE_CONNECTION_ID, RFC 9000
+§5.1, §9.5):**
+1. **Tel:** iki taşıma çerçevesi, REL bandında (sıralı, güvenilir,
+   kayıp/yeniden gönderim kuralları hazır; uygulamaya çıkmaz — istemci ve
+   yazıcı onları tüketir, `UDP_ACK` gibi):
+   - `NEW_CID` (s→c; yük `[u32 sıra][u64 cid][jeton 16]`, 28 B): sunucu
+     yedek bir CID ve onun reset jetonunu verir.
+   - `RETIRE_CID` (c→s; yük `[u32 sıra]`): istemci bir CID'yi bıraktı.
+   Kayıt katmanının içinde gittikleri için şifreli ve doğrulanmış; düz
+   metin kapıda yok (orada CID taşıyıcı jetondur, rotasyon anlamsız).
+2. **Sunucu:** oturum başına en çok `K = 2` etkin CID (biri kullanımda,
+   biri yedek). Tablo `cid → key` çoklu girdi alır; `cid_taken` hepsini
+   kapsar. Yeni CID `draw_u64` ile, başka hiçbir oturumda yokken.
+   Jeton = `token(yeni cid)` (aynı kapı anahtarı — stateless reset yeni
+   CID için de çalışır).
+3. **İstemci:** yedeği saklar; **yalnız göçte** (`rebind` ya da yeni
+   yerel adres) yedeğe geçer — aynı yolda CID değiştirmek bağlanabilirliği
+   azaltmaz, yalnız durum harcar. Geçişte eski CID'yi emekliye ayırır
+   (`RETIRE_CID`), sunucu yeni bir yedek verir.
+4. **Göç kuralı değişmez:** yeni CID'li kayıt yeni adresten gelir; açılır
+   (aynı anahtar — CID kayıt anahtarını değiştirmez), en yenidir, yol
+   doğrulanır. CID değişimi tek başına göç tetiklemez.
+5. **Emeklilik ve sırasızlık:** emekli CID, eski yoldaki geç kayıtlar
+   için bir pencere boyunca (≥ 3 × RTO ya da yol doğrulamasının 3 sn'si)
+   tabloda "emekli" olarak tutulur, sonra silinir; silindikten sonra
+   gelen kayıt stateless reset ALMAZ (emekli CID listesi = kısa ömürlü
+   sınırlı küme; yoksa geç bir kayıt oturumu öldürürdü).
+6. **Sayaçlar:** `udp_cids_issued`, `udp_cids_retired`,
+   `udp_cid_retired_late` (emekli CID'li geç kayıt), istemcide
+   `cids_switched`.
+7. **Kalan sızıntı:** sayaç düz (aşağıda) — CID değişse de sayaç dizisi
+   iki yolu bağlar. **CID rotasyonu sayaç gizlemesiz yarım kalır:**
+   ikisi birlikte yapılmalı (BACKLOG satırı ikisini birlikte ister).
+
+### 10.2 Diğerleri
+
+- **Sayaç gizleme:** QUIC başlık koruması gibi, sayacı (ve faz bitini)
+  şifreli örnekten türetilen maskeyle örter. Bugün sayaç düz görünür:
+  gözlemciye paket hızını, kaybı ve (rotasyon gelince) yollar arası
+  bağı söyler; reset datagramının rastgele sayacı da onunla gizlenir.
+  Alıcı sayacı maskeyi çözmeden bilemediği için replay penceresi ve faz
+  kuralı sırası değişir: incelemeyle birlikte tasarlanmalı.
 - **Bilet anahtarı kipi:** netcode tarzı, FS yok. Şimdi yok; istenirse aynı
   kayıt katmanına ikinci el sıkışma kipi olarak eklenir.
 - **Adres doğrulama jetonu:** QUIC Retry/NEW_TOKEN gibi, yeniden bağlanmada
-  çerez turunu atlamak için.
+  çerez turunu atlamak için. Stateless reset sonrası yeniden bağlanma
+  bugün tam çerez turu (+1 RTT) yapar.
+- **İstemci kütüphanesinde EOF:** `gsb_client::Conn::recv` rUDP'de hiç
+  `Closed` döndürmez; oturumun bitişi (REL ölümü, sayaç sınırı, reset)
+  yalnız `UdpClient::is_established()`'dan okunur. Reset'i `Closed`
+  olarak yüzeye çıkarmak yük üretecinin ölüm sayımını değiştirir; ayrı
+  karar (BACKLOG).
 
-## 11. Dış güvenlik incelemesi (karar 8)
+## 11. Dış güvenlik incelemesi (karar 8, D13) — devir kapsamı
 
-**Ne zaman:** B5a bittikten sonra, kayıt katmanı rUDP'ye bağlıyken.
+Bu bölüm incelemeciye olduğu gibi verilecek kapsam dokümanıdır.
+**Ne zaman:** şimdi — kayıt katmanı rUDP'ye bağlı (B5a), politika ve
+reset bağlı (B5b); hat kapandı. İnceleme referansı: bu dalın birleştiği
+`main` commit'i.
 
-**Kapsam:**
-1. `crates/gsb-net/src/seal/` tamamı (test hariç ~1070 satır, yorumsuz ~690): nonce
-   kuralı, replay penceresi, anahtar fazı ve önceki anahtarın bırakılma
-   kuralı, bütünlük sınırı, ret sırası, anahtar silme (zeroize).
-2. NK'nin çerez el sıkışmasına binişi:
-   - DH'nin çerezden sonra olması;
-   - prologue bağlamı;
-   - idempotent proof (saklanan msg2);
-   - sahte accept toleransı.
-3. B5a'nın demux/writer bağlaması:
-   - CID → oturum yönlendirmesi;
-   - göç kuralının üç koşulu;
-   - PATH_* ve 3x bütçe;
-   - ACK → sayaç eşlemesi (`note_peer_ack`).
-4. Stateless reset (B5b): döngü ve amplifikasyon, sabit zamanlı
-   karşılaştırma.
-5. C# portu geldiğinde: aynı vektörlerle uyum (cacophony NK + bizim
-   SEALED vektörlerimiz).
+### 11.1 Sistem bir paragrafta
 
-**Kapsam dışı (hazır bileşenler):**
-- `snow`: denetlenmemiş, tek bakımcı. Yalnız el sıkışma için kullanılır;
-  gerekirse `clatter`'a ya da ~200 satırlık kendi NK'mize geçilir.
-- RustCrypto AEAD: NCC Group 2019–20 incelemesi, bulgu yok.
+Oyun sunucusu motorunun UDP protokolü (rUDP). Durumsuz çerez el
+sıkışmasının (HELLO → challenge → proof → accept) proof/accept adımına
+Noise `NK_25519_ChaChaPoly_BLAKE2s` biner (0 ek RTT; istemci sunucunun
+statik açık anahtarını sabitler). Sonra oturumun her datagramı iki yönde
+kendi kayıt katmanımızla mühürlenir: `[kind][cid c→s][sayaç u64]
+[şifreli][tag 16]`, ChaCha20-Poly1305, başlık = AAD, nonce = sayaç,
+1024'lük replay penceresi, Noise REKEY'li anahtar fazları (bir önceki
+anahtar toleransı), RFC 9001 §6.6 bütünlük sınırı. CID'le yönlendirme
+ve RFC 9146 §6 biçimli göç (doğrulanmış + en yeni + yolu doğrulanmış).
+Stateless reset HMAC jetonuyla. Tek kullanıcısı kendi istemcilerimiz
+(Rust; ileride C#/Unity portu). Standart uyumu yok (karar 2).
 
-## 12. Tur sırası: B3 → B89 → B5a → B5b → B7
+### 11.2 Kapsam (dosyalar)
+
+| # | Alan | Dosyalar (`crates/gsb-net/src/…`) | Boy |
+|---|---|---|---|
+| 1 | Kripto çekirdeği (sans-IO) | `seal/` (test hariç): `handshake.rs`, `identity.rs`, `key.rs`, `sealer.rs`, `opener.rs`, `replay.rs`, `reset.rs`, `reset/datagram.rs`, `wire.rs` | ~1210 satır, yorumsuz ~760 |
+| 2 | El sıkışmanın çereze binişi | `udp/demux/handshake.rs`, `udp/demux/noise.rs`, `udp/sealed.rs`, `udp/sealed/budget.rs`, `udp/cookie.rs`, `udp/client/handshake.rs` | |
+| 3 | Kayıt yolu ve göç | `udp/demux/record.rs`, `udp/demux/migrate.rs`, `udp/path.rs`, `udp/demux/table.rs`, `udp/writer/seal.rs`, `udp/client/seal.rs`, `udp/client/io.rs` | |
+| 4 | Anahtar fazı politikası ve ACK → sayaç | `udp/sealed/rekey.rs`, `udp/writer/{send, reliable}.rs`, `udp/client.rs` (`send_frame`) | |
+| 5 | Stateless reset | `udp/sealed/door.rs`, `udp/demux/reset.rs`, `seal/reset{,/datagram}.rs`, `udp/client/seal.rs` (`stateless_reset`) | |
+| 6 | Anahtar yönetimi | `gsb-server/src/config/udp_key.rs` (statik ve reset anahtarı, hata metinleri), `gsb-server/src/boot/{start, accept}.rs` | |
+
+2–6'nın kripto dokunan kısmı ~2300 satır (testler hariç, yorumlu).
+
+### 11.3 İncelemecinin doğrulaması istenen değişmezler
+
+1. **Nonce asla tekrar etmez:** yön başına bir anahtar zinciri, sayaç
+   monoton, fazlar boyunca sürer, 2^62'de sert ret (sarma yok); REKEY
+   nonce'u (2^64−1) kayıt sayacının erişemeyeceği yerde. Her yeniden
+   gönderim yeni sayaç (§15 karar 2).
+2. **Başlık bütünlüğü:** başlık AAD; `Sealer::seal` başlığı kendisi yazar
+   (başlık ile nonce ayrışamaz).
+3. **Ret sırası ve sayımı** (§5): ucuz kontroller AEAD'den önce;
+   pencere yalnız doğrulanmış kayıtla ilerler; sahte datagram yuva
+   yakamaz; bütünlük sınırı tüm anahtarlar üzerinden.
+4. **Anahtar fazı:** gönderen kuralları (mesafe ≥ 1024, onay) + açıcının
+   tek önceki anahtarı ⇒ dürüst eşin kaydı asla anahtarı tutulmayan bir
+   nesilden gelmez (§6; seeded model testi). ACK → sayaç eşlemesinin
+   yalnız ilk gönderime kefil olması; onaysız eşin oturumu durdurmaması.
+5. **DH yalnız çerezden, msg1 biçiminden, kaynak sınırından ve DH
+   bütçesinden sonra** (§4); prologue'un çerez alışverişine bağlanması;
+   idempotent proof (saklanan msg2) ve sahte accept toleransı.
+6. **Göç:** yalnız açılan + en yeni + yolu doğrulanmış kayıt adresi
+   taşır; doğrulanana kadar s→c eski yolda; 3× bütçe; koklanmış CID ile
+   sahte kayıt hiçbir şey başlatmaz (§7).
+7. **Stateless reset:** jetonun yalnız istemci ve sunucuda olması;
+   kapıya bağlamanın, bir kapının başka kapının canlı oturumunun
+   jetonunu vermesini engellemesi; resetin tetikleyenden kesin kısa
+   olması ve döngünün sonlanması; oranın her işten önce olması; istemci
+   karşılaştırmasının sabit zamanlı olması ve yalnız açılamayan
+   reset boyundaki SEALED datagramda yapılması (§8).
+8. **Anahtar hijyeni:** `Zeroizing` / `zeroize` kullanımı; hiçbir
+   `Debug`'ın, log'un ya da hata metninin anahtar baytı taşımaması
+   (statik, reset, oturum anahtarları, jeton); reset anahtarının statik
+   anahtardan türetilmesinin (HMAC, etiketli) statik anahtarın DH
+   kullanımıyla etkileşmemesi.
+9. **Sayaçların tam olması** ("her kaybı say"): her ret, her ertelenen
+   rekey, her reset kendi adıyla.
+
+### 11.4 Bilinçli kararlar ve kabul edilen riskler (incelemeci sorgulasın)
+
+- DTLS yerine kendi kayıt katmanı (§1) — standart uyum yok.
+- Sayaç ve faz biti düz (§10.2); CID ağlar arası sabit (§10.1).
+- Demux ACK'ini ve challenge'ı yazıcı üzerinden mühürlemek (tek sayaç
+  alanı, §15 karar 1).
+- Reset anahtarının varsayılan olarak statik anahtardan türetilmesi
+  (§8); sızan reset anahtarı = hizmet reddi (oturum bitirme), gizlilik
+  değil.
+- Reset boyundaki her yanlış jetonun kendi `seal_*` adıyla ayrıca
+  `stateless_resets_invalid` sayılması.
+- Rekey'in simetrik zincir olması (yeni DH yok): oturum içi ileri
+  gizlilik yalnız geçmiş fazlar için.
+- `snow`'un denetlenmemiş olması (yalnız el sıkışma; §11.6).
+
+### 11.5 Giriş noktaları ve kanıt
+
+- Testler: `cargo test -p gsb-net --lib seal` (çekirdek: RFC 8439 ve
+  cacophony vektörleri, REKEY = snow, her ret, seeded model),
+  `cargo test -p gsb-net --lib udp` (bağlama, göç, politika, reset,
+  gerçek soket), `cargo test -p gsb-server --test rudp_resume` (her akış
+  mühürlü/düz metin kapıda; yeniden başlatma). Zamanlama sondaları:
+  `seal::tests::cost`, `udp::demux::tests::sealed::cost` (`--ignored`).
+- Mutasyon kanıtları her turun CHANGELOG girdisinde (x1, B3, B5a, B5b).
+- Ölçümler: §4 (B110), §15 (B5a).
+
+### 11.6 Kapsam dışı
+
+- `snow` (yalnız el sıkışma; denetlenmemiş, tek bakımcı — gerekirse
+  `clatter`'a ya da ~200 satırlık kendi NK'mıza geçilir), RustCrypto
+  AEAD (NCC Group 2019–20 incelemesi, bulgu yok), `curve25519-dalek`,
+  `blake2`, `hmac`, `subtle`, `zeroize`.
+- Uç noktaların ele geçirilmesi, sunucu statik anahtarının sızması
+  (§3 "Kapsam dışı"), trafik analizi.
+- Düz metin kapı (`udp_security = "plaintext"`, dev/LAN): hiçbir şeyi
+  korumaz, tasarım gereği.
+- C# portu (gelince ayrı inceleme: aynı vektörler — cacophony NK + bizim
+  SEALED, REKEY, reset vektörlerimiz).
+
+### 11.7 İncelemeden beklenen
+
+Bulgu listesi (önem derecesiyle), §11.3'ün her maddesi için "doğrulandı
+/ bulgu" hükmü, §11.4'teki kararlardan değiştirilmesi önerilenler, ve
+C# portu için ek vektör önerileri. Bulgular BACKLOG'a satır olarak girer.
+
+## 12. Tur sırası ve durum: x1 → B3 → B89 → B5a → B5b → D13
 
 | Tur | Ne yapar |
 |---|---|
-| **x1 (bu tur)** | **Yapıldı:** `gsb_net::seal` çekirdeği (el sıkışma sarmalayıcısı, `Sealer`/`Opener`, replay penceresi, anahtar fazı, reset jetonu, SEALED başlık kodlaması) + bu doküman. **Bağlanmadı:** rUDP'nin hiçbir yolu bu modülü çağırmaz |
+| **x1** | **Yapıldı (2026-10-02):** `gsb_net::seal` çekirdeği (el sıkışma sarmalayıcısı, `Sealer`/`Opener`, replay penceresi, anahtar fazı, reset jetonu, SEALED başlık kodlaması) + bu doküman. **Bağlanmadı:** rUDP'nin hiçbir yolu bu modülü çağırmaz |
 | **B3** | **Yapıldı (2026-10-02):** kriptosuz CID ve göç (opt-in `udp_migration`): proof'a caps baytı, accept'te CID, etiketli c→s datagramı, PATH_CHALLENGE/RESPONSE, 3x bütçe, oturumlara iç anahtar + `addr→key` / `cid→key` indeksleri, writer'a `UDP_PATH` (`PathChanged`), `UdpClient::rebind()`, 15 sayaç; kind haritası kesin (§5). Ayrıntı §7, DESIGN §6 "Bağlantı göçü" |
 | **B89** | **Yapıldı (u89, 2026-10-02):** kaynak başına bekleyen oturum sınırı (`max_handshakes_per_source`, D11'in anahtarı; çerezden sonra, DH'den önce; `udp_proofs_refused_per_source`), göçte kaynağın taşınması (B113: aktörün `peer`'i, registry'nin D12 sayımı, demux'ın bekleyen yeri; dolu kaynağa taşınmaz — `unauth_source_moves_kept`, `udp_pending_source_moves_kept`), B110 ölçümü (§4). **B5a'ya devredildi:** DH'den önce küresel el sıkışma bütçesi (§4 tasarımı) — kaynak başına sınır hızı kesmez. SECURITY §4.3.3 |
 | **B5a** | **Yapıldı (2026-10-02):** DH'den önce küresel el sıkışma bütçesi (§4; B89'dan); msg1 proof'a, msg2 accept'e; SEALED kayıt; sunucu statik anahtarı config'den; `Sealer` writer'a, `Opener` demux'a (demux'ın kendi gönderdikleri `UDP_SEND` ile yazıcıdan); `Refusal` adları sayaçlara; göç kuralının üç koşulu; PATH_* şifreli iç kind; mühürlü kip varsayılan, düz metin dev/LAN anahtarı; demux'ta çözme CPU'sunun ölçümü. Ayrıntı §15 |
-| **B5b** | Anahtar fazı politikası (ne zaman rekey; ACK → `note_peer_ack` eşlemesi), stateless reset (config anahtarı, reset datagramı, istemci kontrolü), opsiyonel CID rotasyonu / adres doğrulama jetonu |
-| **B7** | **Kapandı (B5a ile):** `rudp_resume.rs`'in her rUDP akışı mühürlü ve düz metin kapıda koşar (RECONNECT §5). Reset sonrası hızlı yeniden el sıkışma B5b'nin stateless reset'iyle gelir |
+| **B5b** | **Yapıldı (2026-10-03):** anahtar fazı politikası (2 dk / 2^20 kayıt; REL ACK'iyle ilk-gönderim onayı; onaysız eş sayılır, durdurmaz — §6), stateless reset (config'de ya da statik anahtardan türetilen, kapıya bağlı anahtar; tetikleyenden kısa, oranlı reset; istemcide sabit zamanlı kontrol, tek ad — §8), 5 sayaç. CID rotasyonu tasarlandı, yapılmadı (§10.1). Ayrıntı §16 |
+| **B7** | **Kapandı (B5a ile):** `rudp_resume.rs`'in her rUDP akışı mühürlü ve düz metin kapıda koşar (RECONNECT §5). B5b yeniden başlatma akışını ekledi: reset, < 1 sn'de bitiş, aynı adla yeniden katılma |
+| **D13** | **Sırada:** dış inceleme, kapsam §11 |
 
-## 13. Bu turun çekirdeği (`crates/gsb-net/src/seal/`)
+## 13. Kripto çekirdeği (`crates/gsb-net/src/seal/`; x1, B5a ve B5b eklemeleri)
 
 **Modüller:**
 
@@ -477,7 +743,8 @@ rUDP yalnız açık bir config anahtarıyla açılır (yapıldı):
 | `sealer.rs` | `Sealer`, `SEAL_LIMIT`, `REKEY_MIN_DISTANCE`, `SealError` |
 | `opener.rs` | `Opener`, `Refusal`, `Opened`, `INTEGRITY_LIMIT` |
 | `replay.rs` | `REPLAY_WINDOW` bit halkası |
-| `reset.rs` | `ResetKey`, `ResetToken` (sabit zamanlı karşılaştırma) |
+| `reset.rs` | `ResetKey` (`from_bytes`, `derived_from`, `for_door`, `token`), `ResetToken` (sabit zamanlı karşılaştırma) |
+| `reset/datagram.rs` | Reset datagramının düzeni: `reset_datagram`, `reset_tail`, `RESET_LEN_{MIN,MAX}` (B5b) |
 | `wire.rs` | SEALED başlık sabitleri ve kodlama/çözme |
 
 **B5a'nın çekirdeğe eklediği** (vektörler ve testler değişmedi, yeşil):
@@ -489,6 +756,18 @@ rUDP yalnız açık bir config anahtarıyla açılır (yapıldı):
   `Opener::set_forged_for_test` `pub(super)` → `pub(crate)`
   (`#[cfg(test)]`; rUDP'nin sınır testleri onları kullanır).
 - Modül belgeleri "bağlı değil" yerine "B5a'da bağlandı".
+
+**B5b'nin çekirdeğe eklediği** (mevcut vektörler ve testler değişmedi,
+yeşil; `ResetKey::token` bayt bayt aynı):
+- `ResetKey::derived_from(&StaticKey)` — `HMAC-BLAKE2s(statik özel
+  anahtar, "gsb-rudp-reset-key/1")`; `ResetKey::for_door(&[u8])` —
+  `HMAC-BLAKE2s(anahtar, "gsb-rudp-reset-door/1" ‖ kapı)` (§8).
+- `reset_datagram`, `reset_tail`, `RESET_LEN_MIN` = 26, `RESET_LEN_MAX` =
+  41 (§8).
+- `impl Debug for ResetKey` — anahtarı yazmaz (testli).
+- `Sealer`/`Opener` değişmedi: politika ve ACK eşlemesi çekirdeğin
+  dışında (`udp::sealed::rekey`), çekirdeğin iki rekey kuralını kapı
+  olarak kullanır.
 
 **Bağımlılıklar** (hepsi saf Rust; `ring` yalnız mevcut quinn/rustls
 yolundan gelir, yenilerden hiçbiri getirmez):
@@ -520,6 +799,10 @@ yolundan gelir, yenilerden hiçbiri getirmez):
   - faz sınırında sırasızlık, önceki anahtarın tam sınırda bırakılması.
 - Seeded model testi (SplitMix64): sırasızlık, bekletme, düşürme, çoğaltma,
   sahteleme. Her hüküm anahtar bilmeyen bir modelle karşılaştırılır.
+- Reset (B5b, `tests/reset.rs`): türetmelerin yeniden başlatmada aynı,
+  başka anahtar/kapıda farklı olması; 0..=1472 her tetikleyen boyu için
+  kesin kısa reset ya da hiç; düzen (kind, sayaç < 2^62, dolgu, jeton);
+  açıcının reseti `Forged` reddetmesi ve kuyruğun jetonu taşıması.
 
 ## 14. Kaynaklar
 
@@ -577,7 +860,7 @@ uyumluluk matrisi DESIGN §6 "Kayıt katmanı"nda.
    adresten geleni okumaz (`udp_datagrams_no_session`).
 5. **Reset jetonu alanı dolu, kapı başına rastgele anahtardan.** Tel
    (msg2'nin 24 B'lik yükü) B5b'de değişmesin diye; anahtarın config'e
-   taşınması (karar 9) ve jetonun kullanımı B5b.
+   taşınması (karar 9) ve jetonun kullanımı B5b (yapıldı, §8, §16).
 6. **Anahtar biçimi: 64 hex, satır içi ya da dosya.** `udp_cookie_key`
    ile aynı yazım (config'de ham anahtar baytları için tek biçim);
    base64 (WireGuard) ek kod ve ikinci biçim olurdu. Dosya yolu üretim
@@ -660,7 +943,7 @@ p99'u ~1 sn uzar. Hızlı katılma isteyen dağıtım bütçeyi yükseltir
 (`udp_handshakes_per_sec`, OPS §2); seçim kullanıcıya (BACKLOG b5a
 satırı).
 
-**B5b'nin devraldığı:**
+**B5b'nin devraldığı** (ilk üçü B5b'de yapıldı ya da tasarlandı — §16; B120/B121 ölçüme bağlı açık):
 - Rekey politikası (ne zaman) ve ACK → sayaç eşlemesi
   (`Sealer::note_peer_ack`): REL ACK'i hangi kayıt sayacına karşılık
   geliyor — yazıcı her REL gönderiminin sayacını tutmalı (yeniden
@@ -672,5 +955,65 @@ satırı).
 - CID rotasyonu / adres doğrulama jetonu (opsiyonel).
 - Kova adaleti (B120) ve DH'yi işçi havuzuna taşıma (B121) — ölçüme
   bağlı.
-- Dış inceleme (D13) bu turun kodunu da kapsar (§11 madde 3).
+- Dış inceleme (D13) bu turun kodunu da kapsar (§11.2).
+
+## 16. B5b: anahtar fazları ve stateless reset (2026-10-03)
+
+**Kod:** `crates/gsb-net/src/udp/sealed/rekey.rs` (`RekeyPolicy`,
+`SendHalf`: politika + ACK → sayaç eşlemesi), `udp/sealed/door.rs`
+(`DoorSeal`: reset anahtarı, reset kovası, politika; `configure`),
+`udp/demux/reset.rs` (bilinmeyen CID → reset), `udp/client/seal.rs`
+(`stateless_reset`, istemcinin `SendHalf`'ı), `udp/writer/{seal, send,
+reliable}.rs` (ilk gönderimin sayacı, ACK), `udp/transport/config.rs`
+(`reset_key`, `stateless_resets_per_sec`, `rekey`), `seal/reset.rs` +
+`seal/reset/datagram.rs`; `gsb-server` `config/udp_key.rs`
+(`udp_reset_key[_file]`), `config/axes/listeners.rs`
+(`udp_stateless_resets_per_sec`).
+
+**Kararlar ve gerekçeleri:**
+1. **Tetik 2 dk ya da 2^20 kayıt, iki yön bağımsız** (§6 "Politika").
+   Rekey bir sınırın cevabı değil; ele geçen anahtarın açtığını daraltır.
+   Config anahtarı yok: güvenlik politikası motorundur; kütüphane
+   kullanıcısı `RekeyPolicy` verebilir (testler kısa politika kullanır).
+2. **Onay = REL ACK'inin kapsadığı ilk gönderim sayacı** (§6). Yoklama
+   (PROBE/REPORT) da bir onay kaynağı olabilirdi (yeniden gönderilmez,
+   rapor adını taşır); gerekmedi — heartbeat REL'dir ve canlı oturumda iki
+   yönü de besler. REL trafiği hiç olmayan oturum rekey etmez, sayılır.
+3. **Sayım kısılır** (10 sn'de bir): her mühürlemede sayılsa canlı ama
+   REL'siz bir oturum sayacı saniyede yüzlerce artırırdı (anlam aynı,
+   gürültü değil bilgi istenir). Mesafe ertelemesi hiç sayılmaz (normal).
+4. **Reset anahtarı opsiyonel, yoksa statik anahtardan türetilir, kapıya
+   bağlanır** (§8). Taslağın "yoksa başlatma hatası"ndan sapma: zorunlu
+   yeni anahtar her dağıtımı kırardı, türetme aynı kalıcılığı ek sır
+   olmadan verir.
+5. **Reset düzeni SEALED s→c kaydı biçiminde, ≤ 41 B, tetikleyenden
+   kısa** (§8). Sayaç düz gittiği için tam ayırt edilemezlik yok; ucuz
+   olan (kind, boy, rastgele gövde) yapıldı, gerisi sayaç gizlemeyle.
+6. **İstemcide tek ad** (`stateless_resets_received`; §8'in açık
+   sorusunun cevabı) + "bunlardan" `stateless_resets_invalid`.
+7. **Oran 10 000/s, `0` = kapalı** (§8): yeniden başlatma fırtınasını
+   ~1 sn'de bitirir, demux'ın ~%3'ü. Tahmin, ölçülmedi (BACKLOG b5b
+   satırı).
+8. **CID rotasyonu yapılmadı** (§10.1): ucuz ve güvenli değil; sayaç
+   gizlemesiz yarım kalır.
+
+**Tel:** değişen yok, eklenen tek datagram reset (§8 tablosu). El
+sıkışma, kayıt ve msg2 B5a'dakinin bayt bayt aynısı (jeton alanı B5a'da
+ayrılmıştı). Eski (B5a) istemci reseti tanımaz: açamadığı kayıt olarak
+`seal_forged` sayar, 5 sn REL sınırıyla biter — uyumlu.
+
+**Sayaçlar** (taşıma tablosunun sonuna 5; OPS §3): `udp_rekeys`,
+`udp_rekeys_unconfirmed` (yazıcı), `udp_stateless_resets_sent`,
+`udp_stateless_resets_rate_limited`, `udp_stateless_resets_send_failed`
+(demux). İstemci `UdpClientStats`: `rekeys`, `rekeys_unconfirmed`,
+`stateless_resets_received`, `stateless_resets_invalid`.
+
+**Config:** `udp_reset_key` / `udp_reset_key_file` (64 hex, opsiyonel;
+ikisi birden ya da bozuk → başlatma hatası `rUDP reset key: …`, anahtar
+yankılanmaz), `udp_stateless_resets_per_sec` (vars. 10 000, `0` = yok).
+Düz metin kapı ikisini de okumaz.
+
+**Ölçüm:** bu turda yeni ölçüm yok. Rekey bir ChaCha20 bloğu (iki
+uçta), oturum başına ~2 dk'da bir — ihmal edilir; reset maliyeti
+tahmin (yukarıda).
 
