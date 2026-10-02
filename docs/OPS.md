@@ -1065,8 +1065,8 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   satırında `metrics_dropped=`'den sonra; Prometheus/OTLP'de
   `gsb_metrics_reports_torn_at_cut_grace_total`,
   `gsb_metrics_dropped_total`'dan sonra; loadgen telinde üst düzey
-  `metrics_dropped`'tan sonra bir `u64` — düzen değişti, sihirli sayıyı
-  birleştirmede ebeveyn atar; `RESULT`'ta yok). Toplayıcının, bir
+  `metrics_dropped`'tan sonra bir `u64` — F72'nin sayacıyla birlikte
+  **GSNL**; `RESULT`'ta yok). Toplayıcının, bir
   sharded odanın turu uçuştayken `metrics::CUT_GRACE` (250 ms) dolunca
   yırtık yaydığı periyodik raporlar, kümülatif (DESIGN §12 "Sınırda
   yırtık çıkan rapor sayılır"). Kayıp değil; artıyorsa bir shard
@@ -1074,8 +1074,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
 - **Taşıma kapsamı: takılmış sürecin idle pencereleri (F72).** Satırın ve
   tablonun sonuna bir `counter`: `idle_windows_restarted_late`
   (`gsb_transport_idle_windows_restarted_late_total`; loadgen telinde
-  taşıma bölümü bir sayaç uzadı — sihirli sayıyı birleştirmede ebeveyn
-  atar —, `RESULT`'ta `transport_idle_windows_restarted_late=`). Akış
+  taşıma bölümü bir sayaç uzadı — F70'le birlikte **GSNL** —, `RESULT`'ta `transport_idle_windows_restarted_late=`). Akış
   kapılarının reader pump'ları ve rUDP demux'ının idle süpürmesi, son
   tarihi `gsb_net::pump::IDLE_STALL_GRACE` (250 ms) üstü GEÇ ateşlenen
   pencereyi kapatmak yerine YENİDEN BAŞLATIR ve sayar: süreç o sırada

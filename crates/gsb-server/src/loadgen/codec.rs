@@ -266,7 +266,11 @@ mod logic;
 /// section's `server_closes` and the registry's lost-verdict array are
 /// each one slot longer — and one more transport counter at the end of
 /// that section (B90: `ops_http_routes_timed_out`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4B;
+/// GSNL = the GSNK layout with one more top-level `u64` right after
+/// `metrics_dropped` (F70: `reports_torn_at_cut_grace`) and one more
+/// transport counter at the end of that section (F72:
+/// `idle_windows_restarted_late`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4C;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
