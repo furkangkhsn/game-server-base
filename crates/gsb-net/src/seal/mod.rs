@@ -16,8 +16,9 @@
 //!   phases (Noise REKEY) with a grace for the previous phase. Every
 //!   refused datagram is one [`Refusal`] variant, so each loss is counted
 //!   under its exact name.
-//! - **Stateless reset** ([`ResetKey`], [`ResetToken`]):
-//!   `HMAC-BLAKE2s(key, cid)` tokens from a key that survives restarts.
+//! - **Stateless reset** ([`ResetKey`], [`ResetToken`], [`reset_datagram`]):
+//!   `HMAC-BLAKE2s(key, cid)` tokens from a key that survives restarts,
+//!   and the reset datagram's layout (B5b).
 //! - **Wire layout** ([`wire`]): the SEALED header, encode/decode only.
 //!
 //! The two halves of a [`Session`] share nothing: the [`Sealer`] goes to
@@ -40,7 +41,10 @@ pub use identity::{
 };
 pub use opener::{INTEGRITY_LIMIT, Opened, Opener, Refusal};
 pub use replay::REPLAY_WINDOW;
-pub use reset::{RESET_KEY_LEN, RESET_TOKEN_LEN, ResetKey, ResetToken};
+pub use reset::{
+    RESET_KEY_LEN, RESET_LEN_MAX, RESET_LEN_MIN, RESET_TOKEN_LEN, ResetKey, ResetToken,
+    reset_datagram, reset_tail,
+};
 pub use sealer::{REKEY_MIN_DISTANCE, SEAL_LIMIT, SealError, Sealer};
 
 #[cfg(test)]

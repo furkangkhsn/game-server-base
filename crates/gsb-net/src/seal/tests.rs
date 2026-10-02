@@ -9,6 +9,7 @@ mod model;
 mod record;
 mod rekey;
 mod replay;
+mod reset;
 mod vectors;
 
 /// A completed handshake: (client sealer, client opener, server sealer,
