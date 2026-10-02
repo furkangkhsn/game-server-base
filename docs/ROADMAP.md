@@ -84,8 +84,8 @@ Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
 Son tur: **B5b** — rUDP kripto hattının son turu: anahtar fazı politikası
 (2 dk / 2^20 kayıt, REL ACK'iyle onay), stateless reset (statik anahtardan
 türetilen ya da config'deki, kapıya bağlı anahtar); CID rotasyonu
-tasarlandı. **rUDP hattı DTLS sınıfında tamam.** Sıradaki: dış inceleme
-**D13** (kapsam RUDP-SECURITY §11); 100k'da demux açma maliyeti (B123).
+tasarlandı. **rUDP hattı DTLS sınıfında tamam.** D13 (dış inceleme)
+kullanıcı kararıyla yapılmayacak; 100k'da demux açma maliyeti (B123).
 Önceki tur: **B5a** — Noise kayıt katmanı rUDP'ye bağlı, mühürlü kip
 varsayılan (sunucu anahtarı config'de), küresel DH bütçesi (vars. 1000/sn),
 göç = açılan + en yeni + doğrulanmış (mühürlü kapıda vars. açık); B7,

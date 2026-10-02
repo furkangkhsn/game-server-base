@@ -19,8 +19,10 @@
 >   oranlı reset; istemcide sabit zamanlı jeton kontrolü — §8). CID
 >   rotasyonu bu turda yapılmadı: ucuz değil, tasarımı §10. Ne yapıldığı:
 >   §16.
-> - **Kalan:** CID rotasyonu ve sayaç gizleme (§10, sonra); dış inceleme
->   (karar 8, D13 — kapsam §11).
+> - **Kalan:** CID rotasyonu ve sayaç gizleme (§10, sonra). Dış inceleme
+>   (karar 8, D13) kullanıcı kararıyla (2026-10-03) yapılmayacak — proje
+>   kendi kullanımımız için; §11 iç gözden geçirme kontrol listesi olarak
+>   kalır.
 >
 > Kaynak araştırma: x1 araştırma raporu (2026-10-02). Bu doküman onun
 > §4–§7'sini ve maintainer'ın 10 kararını sözleşmeye çevirir.
@@ -73,7 +75,7 @@
 | 5 | Kriptosuz göç (B3) | **Opt-in.** Kripto gelince varsayılan açık |
 | 6 | Kripto gelince düz metin | **Mühürlü (sealed) üretim varsayılanı;** düz metin yalnız açık bir dev/LAN anahtarıyla |
 | 7 | CID rotasyonu, sayaç gizleme | Sonra (§10). B5b: CID rotasyonu tasarlandı, yapılmadı (ucuz değil) |
-| 8 | Dış güvenlik incelemesi | Planlı: kayıt katmanı bağlanınca (§11) |
+| 8 | Dış güvenlik incelemesi | **Yapılmayacak** (kullanıcı kararı 2026-10-03: proje kendi kullanımımız için); §11 iç kontrol listesi |
 | 9 | Yeniden başlatmadan sağ çıkan stateless reset anahtarı config'de | Evet (§8). B5b: `udp_reset_key` opsiyonel; yazılmazsa statik anahtardan türetilir (o da config'de ve kalıcı) |
 | 10 | Göçte yeni adrese erken gönderim mi? | Hayır: **yeni yol doğrulanana kadar eski yolda beklenir** (§7) |
 
@@ -605,6 +607,11 @@ gizlilik (pasif bağlanabilirlik, §3 son satır); güvenlik değil.
   karar (BACKLOG).
 
 ## 11. Dış güvenlik incelemesi (karar 8, D13) — devir kapsamı
+
+> **Kullanıcı kararı (2026-10-03):** dış inceleme yapılmayacak — proje
+> kendi kullanımımız (ve GitHub'da açık bir referans) için. Bu bölüm iç
+> gözden geçirme kontrol listesi olarak ve ileride bir inceleme istenirse
+> devir kapsamı olarak kalır.
 
 Bu bölüm incelemeciye olduğu gibi verilecek kapsam dokümanıdır.
 **Ne zaman:** şimdi — kayıt katmanı rUDP'ye bağlı (B5a), politika ve

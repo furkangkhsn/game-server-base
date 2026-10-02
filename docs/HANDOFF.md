@@ -316,8 +316,9 @@ onay = REL ilk-gönderim sayacını kapsayan ACK. Reset: bilinmeyen CID →
 kısa, oranlı reset; anahtar opsiyonel (yoksa statik anahtardan), kapının
 adresine bağlı — **yeniden başlayan sunucu aynı `bind` ile bağlanmalı.**
 İstemci bitişi `is_established()` ile görür (`Conn::recv` hâlâ `Closed`
-döndürmez — B128). Loadgen teli GSNR. Kapandı: B5, B108. Açık: D13
-(sıradaki), B120, B121, B123, B124, B125–B130.
+döndürmez — B128). Loadgen teli GSNR. Kapandı: B5, B108; D13 kullanıcı kararıyla kapandı
+(dış inceleme yok — proje kendi kullanımımız için). Açık: B120, B121, B123,
+B124, B125–B130.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
