@@ -54,20 +54,34 @@ async fn a_client_that_asks_gets_a_cid_in_the_accept_and_keeps_it() {
     assert_eq!(d.mig.cids_assigned, 1, "granted once");
 }
 
-/// CIDs are random, not a sequence: two sessions, two unrelated CIDs.
+/// CIDs are random, not a sequence or a constant: four sessions, four
+/// unrelated CIDs, none 0, every one granted (a constant would collide
+/// and leave the later sessions without one). Each check fails by chance
+/// with p ≈ 2^-64.
 #[tokio::test]
 async fn cids_are_drawn_not_counted() {
-    let (mut d, _end_rx, a) = door(true).await;
-    let b = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let (mut d, _end_rx, first) = door(true).await;
+    let mut socks = vec![first];
+    for _ in 0..3 {
+        socks.push(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    }
     let mut cids = Vec::new();
-    for s in [&a, &b] {
+    for s in &socks {
         let peer = s.local_addr().unwrap();
         let p = proof(&d, peer, CAP_CID);
         feed(&mut d, peer, &p);
-        cids.push(u64_at(&answer(s).await.unwrap(), 5).unwrap());
+        let accept = answer(s).await.unwrap();
+        assert_eq!(accept.len(), 13, "granted: {cids:x?}");
+        cids.push(u64_at(&accept, 5).unwrap());
     }
-    assert_ne!(cids[0], cids[1]);
-    assert!(cids[0].abs_diff(cids[1]) > 1_000, "{cids:x?}");
+    assert_eq!((d.mig.cids_assigned, d.mig.entropy_failed), (4, 0));
+    for (i, x) in cids.iter().enumerate() {
+        assert_ne!(*x, 0, "{cids:x?}");
+        assert!(
+            cids[i + 1..].iter().all(|y| x.abs_diff(*y) > 1_000),
+            "{cids:x?}"
+        );
+    }
 }
 
 /// The compatibility matrix's server half. Migration off (the default),
