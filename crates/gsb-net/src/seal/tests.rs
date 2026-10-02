@@ -3,6 +3,7 @@
 use super::wire::{Direction, Header};
 use super::*;
 
+mod cost;
 mod handshake;
 mod model;
 mod record;
