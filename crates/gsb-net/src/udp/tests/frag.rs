@@ -77,8 +77,8 @@ async fn a_large_game_frame_round_trips_through_writer_and_client() {
     let mut got = Vec::new();
     while got.len() < 3 {
         let f = tokio::time::timeout(
-            Duration::from_secs(3),
-            client.recv_frame(Duration::from_millis(1000)),
+            Duration::from_secs(15),
+            client.recv_frame(Duration::from_secs(10)),
         )
         .await
         .expect("window")
@@ -113,18 +113,20 @@ async fn datagrams_within_the_budget_are_byte_identical() {
         .await
         .unwrap();
     assert_eq!(
-        next_datagram(&raw, 2000).await.expect("RAW"),
+        next_datagram(&raw, 10_000).await.expect("RAW"),
         vec![0, 0xEB, 0x03, 1, 2, 3]
     );
     assert_eq!(
-        next_datagram(&raw, 2000).await.expect("REL"),
+        next_datagram(&raw, 10_000).await.expect("REL"),
         vec![1, 1, 0, 0, 0, 9, 0, 8, 7]
     );
     // ACK it, so its retransmit does not interleave with what follows.
     raw.send_to(&encode_ack(2), addr).await.unwrap();
     let mut expected = vec![0, 0x4D, 0x04];
     expected.extend_from_slice(&at_budget);
-    let d = next_datagram(&raw, 2000).await.expect("RAW at the budget");
+    let d = next_datagram(&raw, 10_000)
+        .await
+        .expect("RAW at the budget");
     assert_eq!(d.len(), DEFAULT_MAX_DATAGRAM_BYTES);
     assert_eq!(d, expected, "exactly at the budget: still one RAW datagram");
 
@@ -139,13 +141,23 @@ async fn datagrams_within_the_budget_are_byte_identical() {
     let mut body = vec![0x4D, 0x04];
     body.extend_from_slice(&over);
     let chunk = DEFAULT_MAX_DATAGRAM_BYTES - 5;
-    let first = next_datagram(&raw, 2000).await.expect("fragment 0");
-    let second = next_datagram(&raw, 2000).await.expect("fragment 1");
+    let first = next_datagram(&raw, 10_000).await.expect("fragment 0");
+    let second = next_datagram(&raw, 10_000).await.expect("fragment 1");
     assert_eq!(&first[..5], &[KIND_FRAG, 0, 0, 0, 2]);
     assert_eq!(&first[5..], &body[..chunk]);
     assert_eq!(&second[..5], &[KIND_FRAG, 0, 0, 1, 2]);
     assert_eq!(&second[5..], &body[chunk..]);
-    assert_eq!(next_datagram(&raw, 200).await, None, "nothing else");
+    // Nothing else: the next datagram is a marker sent after it (from
+    // the same writer, on the same path — not a spell of silence, F75).
+    out_tx
+        .send(vec![FrameBody::new(1003, Bytes::from_static(&[6]))])
+        .await
+        .unwrap();
+    assert_eq!(
+        next_datagram(&raw, 10_000).await.expect("the marker"),
+        vec![0, 0xEB, 0x03, 6],
+        "nothing else"
+    );
 }
 
 /// The control band never fragments: a control frame over the budget is
@@ -168,7 +180,7 @@ async fn the_control_band_is_never_fragmented() {
         .await
         .unwrap();
     assert_eq!(
-        next_datagram(&raw, 2000).await.expect("REL"),
+        next_datagram(&raw, 10_000).await.expect("REL"),
         vec![1, 1, 0, 0, 0, 8, 0, 4, 2]
     );
     // 5 + 2 + 34 = 41 bytes: one over the budget.
@@ -214,7 +226,7 @@ async fn the_writers_losses_are_sent_when_it_ends() {
         Bytes::from_static(&[4, 2]),
     );
     out_tx.send(vec![ack]).await.unwrap();
-    assert!(next_datagram(&raw, 2000).await.is_some(), "REL seq 1");
+    assert!(next_datagram(&raw, 10_000).await.is_some(), "REL seq 1");
     // 16 fragments of at most 35 bytes cannot carry 2000.
     out_tx
         .send(vec![FrameBody::new(1000, Bytes::from(vec![7u8; 2000]))])

@@ -115,8 +115,8 @@ async fn sequential_handshakes_and_writer_roundtrip() {
     );
     out_tx.send(vec![fb]).await.expect("send to writer");
     let got = tokio::time::timeout(
-        Duration::from_secs(3),
-        b.recv_frame(Duration::from_millis(1000)),
+        Duration::from_secs(15),
+        b.recv_frame(Duration::from_secs(10)),
     )
     .await
     .expect("B recv window")

@@ -180,3 +180,30 @@ async fn a_closing_door_reports_its_last_kernel_drops() {
     listener.close();
     assert_eq!(reported(&mut rx, dropped).await, dropped);
 }
+
+/// The listener's close stops the watcher (BACKLOG B96): once the door
+/// is closed — its listener still held, so its socket and line live on
+/// — the metrics channel's last sender goes with the aborted watcher,
+/// and the channel closes, its last drops reported. A watcher the close
+/// left running would read the line every second for as long as the
+/// handle lives, and the channel would never close.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_closed_door_stops_its_watcher() {
+    use gsb_core::metrics::MetricsEvent;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    let (listener, dropped) = flooded_door(tx).await;
+    listener.close();
+    let mut reported = 0;
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(ev) = rx.recv().await {
+            if let MetricsEvent::Transport(t) = ev {
+                reported += t.udp_datagrams_dropped_kernel;
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the watcher outlived the close");
+    assert_eq!(reported, dropped);
+    drop(listener);
+}

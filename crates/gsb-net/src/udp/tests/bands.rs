@@ -30,10 +30,12 @@ async fn oversized_game_frame_is_fragmented_and_past_the_ceiling_dropped() {
         out_rx,
         crate::pump::PumpTimeouts::default(),
     );
-    let recv = async |client: &mut UdpClient, wait: u64| {
+    // A positive read: the frame returns as soon as it is there; the
+    // window only bounds a failure (BACKLOG F75).
+    let recv = async |client: &mut UdpClient| {
         tokio::time::timeout(
-            Duration::from_secs(3),
-            client.recv_frame(Duration::from_millis(wait)),
+            Duration::from_secs(15),
+            client.recv_frame(Duration::from_secs(10)),
         )
         .await
         .expect("window")
@@ -48,7 +50,7 @@ async fn oversized_game_frame_is_fragmented_and_past_the_ceiling_dropped() {
         )])
         .await
         .unwrap();
-    let ok = recv(&mut client, 200)
+    let ok = recv(&mut client)
         .await
         .expect("the in-budget frame must arrive");
     assert_eq!(ok.payload.as_ref(), &[1u8; 25]);
@@ -63,7 +65,7 @@ async fn oversized_game_frame_is_fragmented_and_past_the_ceiling_dropped() {
         )])
         .await
         .unwrap();
-    let whole = recv(&mut client, 1000)
+    let whole = recv(&mut client)
         .await
         .expect("the over-budget frame must arrive whole");
     assert_eq!(whole.op, 1000);
@@ -88,15 +90,27 @@ async fn oversized_game_frame_is_fragmented_and_past_the_ceiling_dropped() {
         )])
         .await
         .unwrap();
-    let ctl = recv(&mut client, 1000)
+    let ctl = recv(&mut client)
         .await
         .expect("control must still be delivered");
     assert_eq!(ctl.op, gsb_protocol::op::base::HEARTBEAT_ACK);
 
-    // The past-ceiling frame never arrives, not even in part: no
-    // fragment of it reached the client.
-    let next = recv(&mut client, 400).await;
-    assert!(next.is_none(), "the past-ceiling frame must be dropped");
+    // The past-ceiling frame never arrives, not even in part: the next
+    // game frame after it is a marker, and the client has seen exactly
+    // the game datagrams of the frames before it and the marker (1 RAW,
+    // 2 FRAG, 1 RAW) — a fragment of it would have come first, from the
+    // same writer on the same path (not a spell of silence — F75).
+    out_tx
+        .send(vec![FrameBody::new(1000, Bytes::from_static(&[5]))])
+        .await
+        .unwrap();
+    let next = recv(&mut client).await.expect("the marker");
+    assert_eq!(
+        next.payload.as_ref(),
+        &[5],
+        "the past-ceiling frame must be dropped"
+    );
+    assert_eq!(client.stats.game_datagrams_received, 4);
     assert_eq!(client.stats.frag_reassembled, 1);
     assert_eq!(client.stats.frag_dropped_incomplete, 0);
     assert_eq!(client.stats.frag_rejected, 0, "no fragment of it was sent");

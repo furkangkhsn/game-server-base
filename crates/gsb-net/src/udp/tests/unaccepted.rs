@@ -7,15 +7,20 @@ use super::*;
 
 use gsb_core::metrics::{MetricsEvent, TransportCounters};
 
-/// Every transport sample that arrives within `quiet` of the last one,
-/// summed.
+/// Every transport sample, summed until the last sender is gone (the
+/// door's tasks stopped, every endpoint dropped) — a condition, not a
+/// spell of silence (BACKLOG F75): nothing can arrive after it.
 async fn summed(rx: &mut mpsc::Receiver<gsb_core::metrics::MetricsEvent>) -> TransportCounters {
     let mut total = TransportCounters::default();
-    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
-        if let MetricsEvent::Transport(t) = ev {
-            total.add(&t);
+    let all = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(ev) = rx.recv().await {
+            if let MetricsEvent::Transport(t) = ev {
+                total.add(&t);
+            }
         }
-    }
+    })
+    .await;
+    assert!(all.is_ok(), "every metrics sender gone: {total:?}");
     total
 }
 
@@ -46,8 +51,10 @@ async fn a_queued_session_the_close_drops_is_counted() {
         raw_handshake(&raw, addr, nonce).await;
     }
     listener.close();
+    // The taken endpoint goes uncounted; with it and the listener go
+    // the last metrics senders (`bind` consumed the transport).
+    drop((taken, listener));
     let t = summed(&mut rx).await;
     assert_eq!(t.udp_sessions_unaccepted_closed, 2, "{t:?}");
     assert_eq!(t.udp_sessions_dropped_accept_gone, 0);
-    drop(taken);
 }
