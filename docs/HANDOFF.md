@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1811 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1846 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -269,6 +269,16 @@ B103 (sinyali oyuna taşı — 4 karar), B104 (varsayılanı `"pace"`'e
 modeli, SEALED düzeni, göç kuralı, tur sırası. B5a bu modülü değiştirmeden
 bağlamalı; değişiklik gerekirse doküman ve testler birlikte güncellenir.
 İkinci paralel dalga (r3, c2, w1, s2, x1, e1) birleşti (2026-10-02).
+
+**B3 tamam** (CHANGELOG "B3", DESIGN §6 "Bağlantı göçü"): `udp::path`
+(kurallar, `PathProbe`), `udp::demux::{table, dispatch, migrate,
+session}` (`SessionKey`, iki indeks), `udp::writer::path` (`UDP_PATH` = op
+14), `udp::client::migrate` (`rebind`, `migratable`). `udp_migration` vars.
+`false` (kriptosuz CID taşıyıcı jeton — SECURITY §4.6). Loadgen teli
+GSNN. B3 ve B109 kapandı; B7'nin B3 beklentisi eklendi. B103 kararları
+(2026-10-02, öneri gibi): `PathState` gsb-core'da taşımadan bağımsız,
+`TickCtx::budget` asıl API, `ConnIn` varyantı, varsayılan `"off"` kalır —
+1. aşama (çekirdek + kit + QUIC) sürüyor. Açık: B112–B116.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -972,6 +982,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1811 passed, 2 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1846 passed, 2 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

@@ -5,6 +5,47 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B3 — rUDP bağlantı göçü (`net/b3-migration`)
+
+Kullanıcı kuralı (2026-10-02): adresi değişen istemci (NAT yeniden
+bağlanması, Wi-Fi ↔ hücresel) için oturum kapatmak yanlış. Artık oturum
+adresten bağımsız bir CID taşıyabilir ve yol doğrulamasından sonra yeni
+adrese göçer. **Opt-in** (`udp_migration`, vars. `false` — kapı bayt bayt
+eskisi): kriptodan önce CID taşıyıcı jetondur (RUDP-SECURITY karar 5).
+
+- Tel, hepsi eklemeli: proof'a caps baytı (bayt 18; 19 B), accept'te CID
+  (`ACK{1}` + u64, 13 B; yeniden proof'a aynı CID), CID verildikten sonra
+  her c→s datagram etiketli `[k|0x80][u64 cid][gövde]`, `7`
+  PATH_CHALLENGE (s→c), `0x88` PATH_RESPONSE (c→s). Kind haritası kesin:
+  `0x00–0x3F` düz, `0x40–0x7F` SEALED, `0x80–0xBF` etiketli; SEALED c→s
+  CID'yi aynı ofsette taşır (B109).
+- Demux: oturumlar iç anahtarla (`SessionKey`), `addr→key` / `cid→key`
+  indeksleri; deadline kümesi ve reap kuyruğu anahtarla (c2'nin geç
+  ateşleme kuralı aynı). Yeni adresten etiketli datagram kabul edilir ve
+  doğrulama başlatır; s→c doğrulanana kadar eski yolda (karar 10);
+  challenge ≤ 200 ms'de bir, ≤ 3× bütçe; eşleşen yanıt oturumu taşır,
+  yazıcıya `UDP_PATH` (op 14, tele çıkmaz). Doğrulama tek adla biter: göç,
+  zaman aşımı (3 sn), yerine yenisi, oturum sonunda açık.
+- Yazıcı yeni IP'de RTT, oyun bandı tahmini ve tıkanıklığı sıfırlar (RFC
+  9000 §9.4), yalnız port değişiminde korur. İstemci:
+  `UdpClientConfig::migration` (vars. açık), `UdpClient::rebind()`,
+  `migratable()`; `gsb_client::Conn::udp_client_mut()`.
+- CID ve challenge nonce'u `getrandom` 0.4.3'ten, 64 bit, tahmin
+  edilemez; entropi yoksa oturum CID'siz (sayılır), asla zayıf değer.
+- 15 yeni taşıma sayacı (`udp_cids_assigned` … `udp_migrations_port_only`);
+  loadgen teli **GSNN** (ebeveyn atadı).
+
+Testler 1811 → 1846 (`otlp` ile 1829 → 1864): saf kurallar, demux
+(verme/yönlendirme/doğrulama/sınırlar), yazıcı, istemci, gerçek soket NAT
+yeniden bağlanması ve `rebind`, uyumluluk matrisi, göç kapalıyken bayt
+bayt kimlik, `rudp_resume`'da göç beklentisi (el sıkışmasız, resume'suz,
+`closes 0`). Ajanın 31 mutasyonu yakalandı. Ebeveyn doğrulaması: tam
+kapılar yeşil; ilk teslimde challenge nonce'unu sabit (0) yapmak sağ
+çıktı — yol dışı saldırganın kurban adresini taklit edip akışı ona
+yönlendirmesine kapı (RFC 9000 §8.2); kilit testleri eklendi (nonce
+tazeliği, tahmin/bayat nonce reddi), CID'ye sabit/ardışık değer de artık
+açık iddiayla düşüyor.
+
 ## x1 — rUDP kripto çekirdeği (`net/x1-seal-core`)
 
 rUDP güvenlik kararının (2026-10-02, kullanıcı: Noise + kendi kayıt
