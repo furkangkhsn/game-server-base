@@ -2,8 +2,11 @@
 //! an attack on an entity a neighbour lends through the border strip is
 //! validated here (range, against the lent record — the anti-cheat
 //! locality rule of `docs/CROSS-SHARD.md` §2) and sent to its owner as a
-//! remote effect, which the owner applies (`Combat::apply_remote`). One
-//! function (`Combat::strike`) changes hit points, on whichever shard
+//! remote effect, which the owner applies (`Combat::apply_remote`).
+//! Which of the two a wire id is, and the one view both are checked on,
+//! the kit's `Seam::find` answers (`target`: the seam's precedence — own
+//! over a lent copy, an entity handed on last tick lent by its new
+//! owner). One function (`Combat::strike`) changes hit points, on whichever shard
 //! owns the victim: a mob at zero dies there; a player at zero is
 //! DEFEATED (back at the nearest waystone, full health). Both put a
 //! player victim in combat — the owner marks it, so a parked character
@@ -18,17 +21,19 @@
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::identity::WireId;
-use gsb_kit::sharded::Seam;
+use gsb_kit::sharded::{Found, Holder, Seam};
 
-use crate::codec::{MmoWire, from_dm};
+use crate::codec::MmoWire;
 use crate::components::{InCombat, Kind, MoveTarget, Pos3, Vitals};
 use crate::effect::MmoEffect;
 use crate::world::{ATTACK_DAMAGE, ATTACK_RANGE, COMBAT_TICKS, PLAYER_HP, nearest_waystone};
 
 mod feed;
+mod target;
 
 pub(crate) use feed::Feed;
 pub use feed::{HITS_DROPPED_CLOSED, HITS_DROPPED_FULL};
+use target::{Target, local_target};
 
 /// The owner refuses a strike older than this (ticks since the attacker
 /// swung): a melee hit that took longer to arrive is not a hit. The
@@ -57,11 +62,6 @@ pub struct Hit {
     pub tick: u64,
 }
 
-/// A position from a (lent) wire record.
-fn pos_of(w: &MmoWire) -> Pos3 {
-    Pos3::new(from_dm(w.x), from_dm(w.y), from_dm(w.z))
-}
-
 /// One shard's combat state: its index and the optional kill feed
 /// (with its loss counts).
 pub(crate) struct Combat {
@@ -70,7 +70,10 @@ pub(crate) struct Combat {
 }
 
 impl Combat {
-    /// `attacker` (this shard's entity) attacks wire id `target`.
+    /// `attacker` (this shard's entity) attacks wire id `target`: found
+    /// through the seam — local or lent, the kit's precedence — or, with
+    /// no seam, in this world; checked once, on the one view
+    /// ([`Target`]); then struck here or sent to its owner.
     pub(crate) fn attack(
         &mut self,
         world: &mut World,
@@ -87,39 +90,40 @@ impl Combat {
         if target == me {
             return;
         }
-        let mut q = world.query::<(Entity, &WireId, &Pos3)>();
-        let local = q
-            .iter(world)
-            .find(|(_, w, _)| w.get() == target)
-            .map(|(e, _, p)| (e, *p));
-        if let Some((victim, at)) = local {
-            if from.dist(&at) <= ATTACK_RANGE && self.strike(world, victim, me, ATTACK_DAMAGE, tick)
-            {
-                enter_combat(world, attacker, tick);
-                // A local blow is invisible to the kit: report it, so a
-                // fight that crystallized onto this shard is held here
-                // while it lasts (`world::CRYSTALLIZE`).
-                if let Some(seam) = seam {
-                    seam.contact(me, target);
+        let found = match seam.as_deref() {
+            Some(seam) => seam.find::<Target>(world, target),
+            None => local_target(world, target),
+        };
+        let Some(Found { holder, view, .. }) = found else {
+            return;
+        };
+        if !view.up || from.dist(&view.at) > ATTACK_RANGE {
+            return;
+        }
+        match (holder, seam) {
+            (Holder::Local(victim), seam) => {
+                if self.strike(world, victim, me, ATTACK_DAMAGE, tick) {
+                    enter_combat(world, attacker, tick);
+                    // A local blow is invisible to the kit: report it, so
+                    // a fight that crystallized onto this shard is held
+                    // here while it lasts (`world::CRYSTALLIZE`).
+                    if let Some(seam) = seam {
+                        seam.contact(me, target);
+                    }
                 }
             }
-            return;
-        }
-        // Not ours: a neighbour's entity we see through the strip?
-        let Some(seam) = seam else { return };
-        let Some(lent) = seam.lent(target) else {
-            return;
-        };
-        if lent.state.hp == 0 || from.dist(&pos_of(lent.state)) > ATTACK_RANGE {
-            return;
-        }
-        let strike = MmoEffect::Strike {
-            damage: ATTACK_DAMAGE,
-        };
-        match seam.emit(target, me, strike.encode()) {
-            // Swinging is being in combat, wherever the hit is applied.
-            Ok(_) => enter_combat(world, attacker, tick),
-            Err(why) => tracing::debug!(target, ?why, "cross-seam attack not sent"),
+            // Not ours: a neighbour's entity we see through the strip.
+            (Holder::Lent { .. }, Some(seam)) => {
+                let strike = MmoEffect::Strike {
+                    damage: ATTACK_DAMAGE,
+                };
+                match seam.emit(target, me, strike.encode()) {
+                    // Swinging is being in combat, wherever it lands.
+                    Ok(_) => enter_combat(world, attacker, tick),
+                    Err(why) => tracing::debug!(target, ?why, "cross-seam attack not sent"),
+                }
+            }
+            (Holder::Lent { .. }, None) => {}
         }
     }
 
@@ -145,11 +149,8 @@ impl Combat {
         let Some(&at) = world.get::<Pos3>(target) else {
             return EffectOutcome::NoTarget;
         };
-        let source = match seam.local(effect.source) {
-            Some(e) => world.get::<Pos3>(e).copied(),
-            None => seam.lent(effect.source).map(|l| pos_of(l.state)),
-        };
-        if source.is_some_and(|p| p.dist(&at) > ATTACK_RANGE + RANGE_SLACK) {
+        let source = seam.find::<Target>(world, effect.source);
+        if source.is_some_and(|f| f.view.at.dist(&at) > ATTACK_RANGE + RANGE_SLACK) {
             return EffectOutcome::Rejected;
         }
         let damage = damage.min(ATTACK_DAMAGE);

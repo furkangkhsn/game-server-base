@@ -4156,9 +4156,26 @@ taraf, ayakta mı — birimden ya da ödünç kayıttan) `SeamView`; saldırı
 ve uzak darbenin kaynak denetimi `Seam::find` + TEK denetim, `Holder`
 "burada vur / sahibine gönder"i söylüyor. Seam'siz yol (tek dünyalı
 takım odası) dünyadan aynı `Found`'u kuruyor. Hedefler ve retler aynı
-(önce kilitlenen test), tel dokunulmadı. **MMO olduğu gibi** (not: aynı
-iki noktayı `find`'a çevirmek doğrusal dünya sorgusunu da kaldırır —
-ihtiyaç olunca).
+(önce kilitlenen test), tel dokunulmadı.
+
+**Benimseyen: MMO** (BACKLOG F26, 2026-10; `combat.rs`,
+`combat/target.rs`): savaşın deseni — `Target` (konum, canı var mı —
+entity'den ya da ödünç kayıttan) `SeamView`; `Combat::attack` artık
+seam varken doğrusal dünya sorgusu yerine `Seam::find` ile bulur, tek
+denetimden sonra `Holder` "burada vur (ve crystallization için
+`contact`) / sahibine gönder"i söylüyor; `apply_remote`'un kaynak
+menzil denetimi de `find`. Seam'siz yol (tek dünya) aynı `Found`'u
+dünyadan kuruyor. Davranış aynı: yerel hedefte can denetimini önceden
+yapmak `strike`'ın zaten reddettiğini tekrarlar (bu yüzden o mutasyon
+gözlemlenemez); MMO kendi entity'sini devre dışı bırakmadığı için
+`find`'ın `Disabled` süzgeci eski `world.get` ile aynı cevabı verir.
+Kilit: değişiklikten ÖNCE eski kodla yazılıp geçen
+`combat::tests::attacks_reach_local_and_lent_targets` (yerel ve ödünç
+hedefler, ödünç/yerel kaynaklı uzak darbe retleri) — eski kodda 5/5,
+yeni kodda 8/9 mutasyonu kırıyor ("yalnız yerel bul" saldırıda ve
+kaynakta ayrı ayrı dahil; sağ kalan yerel `up`, savaştaki gibi
+gözlemlenemez); mevcut seam ötesi MMO testleri değişmeden yeşil, tel
+dokunulmadı.
 
 **Elenenler.** *Birleşik bir kopya kurmak* (tick başına tahsis, bayatlık
 semantiğini saklar); *kapanış (closure) çifti* `lent_pos` gibi —
