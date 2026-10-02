@@ -103,10 +103,27 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
         n
     }
 
-    /// The game's own counters (F9), forwarded
-    /// ([`Game::counters`]).
+    /// The logic's own counters (F9): the snapshot budget's when the
+    /// room opted in, then the game's ([`Game::counters`]).
     fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
+        if let Some(b) = &self.budget {
+            b.counters(out);
+        }
         self.game.counters(world, out);
+    }
+
+    /// The path budget's gate (B103): [`crate::budget::SnapshotBudget`]
+    /// when the room opted in, every frame otherwise.
+    fn ship_snapshot(
+        &mut self,
+        _world: &mut World,
+        ctx: &TickCtx,
+        player: PlayerId,
+        _group: &Self::GroupKey,
+        bytes: usize,
+        budget: usize,
+    ) -> bool {
+        crate::budget::SnapshotBudget::gate(&mut self.budget, player, ctx.tick, bytes, budget)
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {

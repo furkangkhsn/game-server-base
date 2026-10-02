@@ -19,6 +19,9 @@
 //!   (`TeamRoom<G, V>`), [`pvs`] (`SectorRoom<G, M>`), [`sharded`]
 //!   (`ShardedRoom<G, P>`, `ShardedSpatialRoom<G, P, S>`) — the
 //!   strategies, one module each;
+//! - [`budget`] (`SnapshotBudget`) — the opt-in answer of the
+//!   full-snapshot rooms to a member whose path its transport limits
+//!   (BACKLOG B103): its frames at the rate its byte budget carries;
 //! - `common` (private) — what every strategy shares: the cell-delta
 //!   engine and the snapshot envelope, park policy, the input sequence
 //!   rule, `Private` framing, orphan stamping, the room accounting around
@@ -40,6 +43,7 @@
 //! `[dev-dependencies]` free of games.
 
 pub mod aoi;
+pub mod budget;
 pub mod client;
 pub mod codec;
 mod common;

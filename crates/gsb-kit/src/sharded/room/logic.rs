@@ -91,13 +91,31 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
     }
 
     /// The logic's own counters (F9): crystallization's six `crystal_*`
-    /// when the room opted in (`crate::sharded::crystal`), then the
-    /// game's ([`Game::counters`](crate::game::Game::counters)).
+    /// when the room opted in (`crate::sharded::crystal`), the snapshot
+    /// budget's when it opted in to that (B103), then the game's
+    /// ([`Game::counters`](crate::game::Game::counters)).
     fn logic_counters(&self, world: &World, out: &mut gsb_core::metrics::LogicCounters) {
         if let Some(crystal) = &self.crystal {
             crystal.counters(out);
         }
+        if let Some(b) = &self.budget {
+            b.counters(out);
+        }
         self.game.counters(world, out);
+    }
+
+    /// The path budget's gate (B103): [`crate::budget::SnapshotBudget`]
+    /// when the room opted in, every frame otherwise.
+    fn ship_snapshot(
+        &mut self,
+        _world: &mut World,
+        ctx: &TickCtx,
+        player: PlayerId,
+        _group: &Self::GroupKey,
+        bytes: usize,
+        budget: usize,
+    ) -> bool {
+        crate::budget::SnapshotBudget::gate(&mut self.budget, player, ctx.tick, bytes, budget)
     }
 
     fn on_join(&mut self, world: &mut World, conn: ConnectionId) -> Admission {

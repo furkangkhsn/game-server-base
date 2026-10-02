@@ -114,6 +114,10 @@ pub struct ShardedRoom<G: ShardGame, P: Partition<Wire<G>>> {
     /// (`crate::common::Cached`, A12): the orphan stamp, the border
     /// export, the own records and the migration scan.
     pub(in crate::sharded) queries: Queries<G, P>,
+    /// The path budget's building block (`None` unless the room opted
+    /// in — [`Self::with_snapshot_budget`]): shard-local, like the
+    /// member rows it gates.
+    pub(in crate::sharded) budget: Option<crate::budget::SnapshotBudget>,
 }
 
 impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
@@ -143,6 +147,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             crystal: None,
             departures: Departures::default(),
             queries: Queries::default(),
+            budget: None,
         }
     }
 

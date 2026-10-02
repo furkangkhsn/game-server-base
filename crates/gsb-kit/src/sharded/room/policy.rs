@@ -20,6 +20,22 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         self
     }
 
+    /// Opt in to [`SnapshotBudget`] (BACKLOG B103): a member whose path
+    /// its transport limits (`TickCtx::budget`) gets this room's
+    /// full-snapshot frames at the rate its budget carries — every one
+    /// when the frame fits — and at least one in every
+    /// `held_max + 1`; the rest are withheld (counted by the core,
+    /// `snapshots_withheld`; a frame sent over budget by that bound by
+    /// the block, `snapshot_budget_forced`). A room that does not opt in
+    /// ships every frame. Every shard of a room should carry the same
+    /// block; a member's credit is shard-local (a crossing starts it
+    /// over, within the same staleness bound). Builder-style.
+    #[must_use]
+    pub fn with_snapshot_budget(mut self, budget: crate::budget::SnapshotBudget) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
     /// Set the disconnect-park grace (see
     /// [`crate::room::OpenRoom::with_disconnect_grace`]; RECONNECT §3).
     /// Every shard of a room should carry the same policy (the factory

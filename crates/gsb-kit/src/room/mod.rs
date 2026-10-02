@@ -153,6 +153,9 @@ pub struct OpenRoom<G: Game> {
     /// (`crate::common::Cached`, A12).
     records: RecordPass<G::Codec>,
     orphans: Orphans<<G::Codec as RecordCodec>::Marker>,
+    /// The path budget's building block (`None` unless the room opted
+    /// in — [`Self::with_snapshot_budget`]).
+    budget: Option<crate::budget::SnapshotBudget>,
 }
 
 impl<G: Game> OpenRoom<G> {
@@ -170,7 +173,22 @@ impl<G: Game> OpenRoom<G> {
             park_ledger: HashMap::new(),
             records: Cached::default(),
             orphans: Cached::default(),
+            budget: None,
         }
+    }
+
+    /// Opt in to [`SnapshotBudget`] (BACKLOG B103): a member whose path
+    /// its transport limits (`TickCtx::budget`) gets this room's
+    /// full-snapshot frames at the rate its budget carries — every one
+    /// when the frame fits — and at least one in every
+    /// `held_max + 1`; the rest are withheld (counted by the core,
+    /// `snapshots_withheld`; a frame sent over budget by that bound by
+    /// the block, `snapshot_budget_forced`). A room that does not opt in
+    /// ships every frame. Builder-style.
+    #[must_use]
+    pub fn with_snapshot_budget(mut self, budget: crate::budget::SnapshotBudget) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     /// Set the disconnect-park grace (RECONNECT §3): a dropped transport

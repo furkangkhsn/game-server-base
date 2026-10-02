@@ -131,6 +131,9 @@ pub struct SectorRoom<G: Game, M: SectorMap> {
     /// (`crate::common::Cached`, A12).
     placed: Placed<G, M>,
     orphans: Orphans<<G::Codec as RecordCodec>::Marker>,
+    /// The path budget's building block (`None` unless the room opted
+    /// in — [`Self::with_snapshot_budget`]).
+    budget: Option<crate::budget::SnapshotBudget>,
 }
 
 /// The bucket pass's query: every broadcastable entity's wire identity,
@@ -162,7 +165,22 @@ impl<G: Game, M: SectorMap> SectorRoom<G, M> {
             encoded: 0,
             placed: Cached::default(),
             orphans: Cached::default(),
+            budget: None,
         }
+    }
+
+    /// Opt in to [`SnapshotBudget`] (BACKLOG B103): a member whose path
+    /// its transport limits (`TickCtx::budget`) gets this room's
+    /// full-snapshot frames at the rate its budget carries — every one
+    /// when the frame fits — and at least one in every
+    /// `held_max + 1`; the rest are withheld (counted by the core,
+    /// `snapshots_withheld`; a frame sent over budget by that bound by
+    /// the block, `snapshot_budget_forced`). A room that does not opt in
+    /// ships every frame. Builder-style.
+    #[must_use]
+    pub fn with_snapshot_budget(mut self, budget: crate::budget::SnapshotBudget) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     /// Set the disconnect-park grace (see
