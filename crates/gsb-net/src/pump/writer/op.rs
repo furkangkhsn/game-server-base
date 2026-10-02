@@ -16,7 +16,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
-use std::time::Instant;
+use tokio::time::Instant;
 
 use futures::Sink;
 

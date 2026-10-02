@@ -23,9 +23,10 @@
 
 mod op;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
