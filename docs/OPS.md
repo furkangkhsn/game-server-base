@@ -922,6 +922,23 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   #5). Sınır yazılmamışsa ikisi de hep 0. Kapı başına dökümü
   `Listener::handshake_stats()` (`refused_per_source`,
   `retried_per_source`) ve kabul görevinin kapanış özeti verir.
+- **Taşıma kapsamı: çekirdeğin rUDP soketinde düşürdükleri (B85).**
+  Satırın ve tablonun sonuna (D11 ve B49'un dördünden sonra) bir `counter`:
+  `udp_datagrams_dropped_kernel`
+  (`gsb_transport_udp_datagrams_dropped_kernel_total`); loadgen telinde
+  `GSNH`, `RESULT`'ta `transport_udp_datagrams_dropped_kernel=` (her
+  satırda). rUDP kapısının TEK soketinin alma kuyruğu doluyken çekirdeğin,
+  demux okuyamadan düşürdüğü datagramlar — **soket başına**: soketin
+  `/proc/net/udp` (IPv6: `udp6`) satırının `drops` sütunu, satır soketin
+  inode'uyla bulunur (`/proc/self/fd/<fd>` → `socket:[inode]`), demux'ın
+  dışında küçük bir görev saniyede bir okur ve büyümeyi taşıma yolundan
+  (`Flusher`) gönderir; dinleyici kapanınca son bir kez okur. Önceden tek
+  görünüm sistem geneli `/proc/net/snmp` `Udp: RcvbufErrors`'tı (makinedeki
+  HER UDP soketi — aynı makinedeki loadgen istemcileri dahil). **Yalnız
+  Linux:** başka platformda (ya da `/proc` okunamazsa — bind'da uyarı)
+  görev başlamaz, sayaç 0 kalır. Sütun `u32`, sarar; fark sarmalı
+  aritmetikle alınır. Sayaç artıyorsa ilacı `udp_recv_buffer_bytes`
+  (§2, B4). Kapı metrik raporlamıyorsa (gömen, test) görev yok.
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

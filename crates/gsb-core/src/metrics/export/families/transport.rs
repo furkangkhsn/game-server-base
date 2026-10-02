@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 48] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 49] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -265,6 +265,12 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 48] 
         "gsb_transport_ops_http_writes_timed_out_total",
         "Ops HTTP responses whose write outran http_write_timeout_secs (a peer that did not read its answer); the connection was closed, cumulative.",
         |t| t.ops_http_writes_timed_out,
+    ),
+    // B85: what the kernel dropped before the demux saw it.
+    tr(
+        "gsb_transport_udp_datagrams_dropped_kernel_total",
+        "Datagrams the kernel dropped on the rUDP door's socket because its receive queue was full, before the demux could read them (per socket, from the socket's /proc/net/udp drops column; Linux only, 0 elsewhere), cumulative.",
+        |t| t.udp_datagrams_dropped_kernel,
     ),
 ];
 

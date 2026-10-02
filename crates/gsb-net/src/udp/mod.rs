@@ -502,6 +502,10 @@
 //! `net.core.rmem_max`/`wmem_max`, then doubled for its bookkeeping).
 //! The QUIC door binds its endpoint's socket the same way.
 //!
+//! What the full queue still drops is counted per socket since B85:
+//! `udp_datagrams_dropped_kernel`, read from the socket's `/proc/net/udp`
+//! line off the demux (Linux; see `kernel`).
+//!
 //! ## Session teardown (feature 4)
 //!
 //! UDP has no FIN. The previous turn's `idle_timeout` mechanism carries
@@ -574,6 +578,7 @@ mod client;
 mod cookie;
 mod demux;
 mod frag;
+mod kernel;
 mod rel;
 mod transport;
 mod wire;

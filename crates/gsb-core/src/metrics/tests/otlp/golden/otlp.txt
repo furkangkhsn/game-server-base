@@ -210,6 +210,8 @@ gsb_transport_ops_http_conns_refused sum t=2 mono=true unit="" n=1 | Connections
   [] 1000..2000 int 47
 gsb_transport_ops_http_writes_timed_out sum t=2 mono=true unit="" n=1 | Ops HTTP responses whose write outran http_write_timeout_secs (a peer that did not read its answer); the connection was closed, cumulative.
   [] 1000..2000 int 48
+gsb_transport_udp_datagrams_dropped_kernel sum t=2 mono=true unit="" n=1 | Datagrams the kernel dropped on the rUDP door's socket because its receive queue was full, before the demux could read them (per socket, from the socket's /proc/net/udp drops column; Linux only, 0 elsewhere), cumulative.
+  [] 1000..2000 int 49
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

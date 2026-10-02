@@ -2010,6 +2010,44 @@ kapsamı dışında: seyrek kontrol bandında sonraki örneğe dek sürer
 (BACKLOG B87). Karar bakımcının: el sıkışma geri çekilmesine tavan ya da
 bandın el sıkışmanın geri çekilmesini devralmaması (BACKLOG B86).
 
+**Çekirdeğin soket kayıpları sunucuda (BACKLOG B85 — 2026-10-02).** B4'ün
+ölçümü fırtınada koşu başına binlerce datagram'ın çekirdekte düştüğünü
+yalnız sistem geneli `RcvbufErrors` farkıyla görebildi; demux o kaybı hiç
+görmez. Şimdi kapının kendi soketi sayılıyor:
+`udp_datagrams_dropped_kernel` (OPS §3). **Karar: soketin `/proc/net/udp`
+satırı, demux'ın dışında.** Linux her sokete bir `sk_drops` tutar ve
+onu `/proc/net/udp{,6}`'nın `drops` sütununda gösterir; satır soketin
+inode'uyla bulunur (`/proc/self/fd/<fd>` bağlantısı `socket:[inode]`).
+Bind'da, kapı metrik raporluyorsa, `udp::kernel` küçük bir görev başlatır:
+tek beklenen kaynağı uyku (1 sn), sonra satırı okur ve büyümeyi
+`Flusher`'la gönderir; satır kaybolunca (soket kapandı) biter, dinleyicinin
+`close`'u onu demux'la birlikte keser ve `Drop`'u satırı son bir kez okur.
+Sütun `u32`'dir, sarar. *Platform:* yalnız Linux; başka yerde görev
+başlamaz, sayaç 0 (derleme aynı). *Bağımlılık:* yok — `std::fs`.
+
+*Elenenler.* (a) *`SO_RXQ_OVFL`* (çekirdek her datagram'a soketin kayıp
+sayısını kontrol mesajı olarak ekler) — kesin ve datagram başına, ama
+seçeneği kurmak ham `setsockopt` ister: ne tokio ne `socket2` 0.6 onu
+sunuyor, `unsafe` yasak, `nix` lock'ta yok; okumak da demux'ın
+`recv_from`'unu kontrol tamponlu `recvmsg`'e çevirir — taşımanın en sıcak
+yolunu, 1 sn'lik bir yoklamanın aynı iyi karşıladığı bir sayaç için
+değiştirmek. (b) *Sistem geneli `RcvbufErrors`* — B85'in yerini aldığı
+şey; makinedeki her UDP soketini karıştırır. (c) *Satırı demux'ta okumak*
+— procfs okuması bütün oturumların paylaştığı tek görevde durur ve
+makinedeki UDP soketi sayısıyla büyür (in-process loadgen'in 1000
+istemcisi aynı tabloda).
+
+*Testler (önce kırmızı; mutasyonlu).* `udp::kernel::tests`: sütun ve
+inode ayrıştırması; sarma; okunmayan tek sayfalık bir sokette çekirdeğin
+düşürdüğü tam olarak `gönderilen − kuyruktaki` (loopback'te başka kayıp
+yok); kapının izleyicisi uçtan uca — tek iş parçacıklı çalışma zamanında
+selin sırasında demux koşamaz, toplayıcıya giden toplam satırdakine
+eşit; ilk okumadan önce kapanan kapı da (`Drop`'taki son okuma). Öldürülen
+mutasyonlar: izleyiciyi başlatmamak (2 test), `Drop`'ta göndermemek (1),
+farkı değil mutlak değeri toplamak (1), yanlış sütun (4). Sağ çıkan:
+`close`'ta izleyiciyi kesmemek (dinleyici tutamacı yaşadıkça okumaya
+devam eder; ölçen test "sessizliğe dek" türünden olurdu — yazılmadı).
+
 **El sıkışma geri çekilmesinin tavanı (BACKLOG B86 — 2026-10-02, bakımcı
 kararı: seçenek (a)).** B2'nin ölçümü (yukarıda) iki bedel gösterdi:
 kaybolan bir el sıkışma adımı 50/100/200/400 ms'de yeniden gönderiliyor,

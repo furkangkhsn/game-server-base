@@ -249,7 +249,10 @@ mod logic;
 /// `handshakes_refused_per_source`, `handshakes_retried_per_source`),
 /// then the ops HTTP surface's limits (B49: `ops_http_conns_refused`,
 /// `ops_http_writes_timed_out`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E47;
+/// GSNH = the GSNG layout with one more transport counter at the end of
+/// that section (the kernel's drops on the rUDP door's socket — B85:
+/// `udp_datagrams_dropped_kernel`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E48;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

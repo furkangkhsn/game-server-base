@@ -255,6 +255,13 @@ transport_counters! {
     /// included) outran `http_write_timeout_secs` — a peer that sent its
     /// request and did not read the answer; the connection was closed.
     ops_http_writes_timed_out,
+    /// rUDP door (B85): datagrams the KERNEL dropped on the door's one
+    /// socket because its receive queue was full — before the demux could
+    /// see them. Per socket (the `drops` column of the socket's
+    /// `/proc/net/udp` line, read once a second off the demux); Linux
+    /// only, 0 elsewhere. The system-wide `RcvbufErrors` mixes every UDP
+    /// socket of the host; this is the door's own.
+    udp_datagrams_dropped_kernel,
 }
 
 impl TransportCounters {

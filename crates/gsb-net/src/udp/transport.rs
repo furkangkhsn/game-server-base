@@ -72,6 +72,8 @@ pub(super) struct UdpListenerHandle {
     /// lock, and locks are banned in this workspace).
     end_rx: Receiver<Queued>,
     demux: JoinHandle<()>,
+    /// The kernel-drop watcher of the socket (B85; Linux, with metrics).
+    kernel: Option<JoinHandle<()>>,
     /// Closed by [`Listener::close`]: ends the pending accept (B16).
     door: Door,
 }
@@ -106,12 +108,14 @@ impl Transport for UdpTransport {
                     ))
                 })?,
             };
+            let kernel = kernel::spawn(&sock, &self.config.metrics);
             let demux = tokio::spawn(demux(sock.clone(), end_tx, key, self.config.clone()));
             info!(%addr, %key_source, "rUDP transport bound (shared demux started)");
             Ok(Arc::new(UdpListenerHandle {
                 sock,
                 end_rx,
                 demux,
+                kernel,
                 door: Door::new(),
             }) as Arc<dyn Listener>)
         })
@@ -174,6 +178,10 @@ impl Listener for UdpListenerHandle {
         // socket clones on the way.
         self.door.close();
         self.demux.abort();
+        if let Some(kernel) = &self.kernel {
+            // Its `Drop` reads the socket's line one last time.
+            kernel.abort();
+        }
         // What is queued now will never be accepted: dropped here, each
         // counting itself (B74). One the demux still queues before the
         // abort lands counts itself when the handle goes.
