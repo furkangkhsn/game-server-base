@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1617 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1620 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -164,6 +164,17 @@ olan izleyici `LitGroup::Viewer(p)` grubunda yalnız aydınlık kayıtları
 alır, ötekiler paylaşılan hücre paketini. Hiçbir demo kullanmıyor. Açık:
 A39 (shard'lı mekânsal kompozitte ışık), A40. Kit hattı (A8 → A5 → A7 → A9)
 bitti.
+
+**Altı paralel tur (2026-10-02, kullanıcı kararı):** r2 (rUDP sinyalleri:
+B86, alıcı raporu, B85, B87), t1 (yükte düşen testler: F51, F52, B88),
+c1 (kapanış nedenleri: F60, F28, B30), s1 (kapı/ops sınırları: D11, B49),
+m1 (F29, F64), g1 (demolar: B81, F26). Ajanlar yalnız hedefli test koşar;
+tam kapıları ebeveyn sırayla koşar (kullanıcı kuralı).
+
+**g1 tamam** (CHANGELOG "g1"): demo muharebe beslemesinin kayıpları
+sayılıyor (`combat_hits_dropped_{full,closed}`, F17 kuralıyla yalnız >0);
+MMO `Seam::find` + `Target` görünümüyle (savaşın deseni). Tel ve pinli
+özetler değişmedi. Açık: F65 (`gsb_core::channel`'da sayan `try_send`).
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -867,6 +878,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1617 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1620 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

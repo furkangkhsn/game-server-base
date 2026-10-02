@@ -5,6 +5,36 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## g1 — B81, F26: demo muharebe beslemesi sayılıyor; MMO `Seam::find`'a geçti (`demo/g1-combat`)
+
+- **B81 — her düşen vuruş sayılıyor.** Savaş ve MMO'nun vuruş beslemesi
+  (`set_combat_feed`, `try_send`) alamadığı vuruşu sessizce atıyordu.
+  Artık iki demoda da `combat/feed.rs` her düşen vuruşu sebebine göre
+  F9 mantık sayacında sayıyor: `combat_hits_dropped_full` (besleme
+  dolu — okuyucu geride) ve `combat_hits_dropped_closed` (okuyucu
+  gitmiş) — çekirdeğin full/closed ayrımı. F17'nin kuralıyla yalnız
+  sıfırdan büyükken konur: düşürmeyen bir beslemenin sayaç kümesi aynı
+  (MMO'nun altı `crystal_*`'ı, savaşın `war_kills`'i), beslemesiz oda
+  hiç koymaz. Sınır çağıranın (verdiği posta kutusunun kapasitesi);
+  sayaç küçük bir sınırın görünür yüzü. MMO `Combat`'ı artık `&mut`;
+  iki demo `tokio`'yu (zaten dev-bağımlılıktı) normal bağımlılık
+  yaptı, `Cargo.lock` değişmedi.
+- **F26 — MMO `Seam::find`'ı benimsedi.** `Combat::attack` seam varken
+  doğrusal dünya sorgusu + elle "değilse ödünç" yerine `Seam::find` ile
+  tek görünümden (`Target`: konum, canı var mı — `combat/target.rs`)
+  buluyor, tek denetimden sonra `Holder` "burada vur / sahibine
+  gönder"i söylüyor; `apply_remote`'un kaynak denetimi de `find`. Davranış
+  aynı; tel dokunulmadı; mevcut seam ötesi MMO testleri değişmeden yeşil.
+
+Testler 1617 → 1620 (`otlp` ile 1635 → 1638; kapanış denetimi 144 →
+147). B81: iki demoda da önce kırmızı görülen test; mutasyonların 10/10'u
+yakalandı. F26: eski kodla yazılıp geçen kilit testi eski kodda 5/5, yeni
+kodda 8/9 mutasyonu yakalıyor (sağ kalan yerel `up` mutasyonu
+gözlemlenemez — `strike` zaten reddediyor, savaştaki gibi). Ebeveyn
+doğrulaması: tam kapılar ebeveynde (yük ~57'de yeşil); sıfırdan büyük
+koşulunu `> 1`'e çekmek testi düşürdü. Ayrıntı: KIT-ARCHITECTURE §10
+"F6" (MMO), §10 "F9" (Kullanan); OPS F9.
+
 ## A9 — oyuncu başına aydınlık: `LitAoiRoom`, `LitGame` (`kit/k4-lit-cells`)
 
 Kit hattının dördüncü turu.
