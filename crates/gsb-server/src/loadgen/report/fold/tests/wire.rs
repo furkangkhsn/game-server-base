@@ -157,6 +157,22 @@ fn the_undelivered_answers_survive_the_wire() {
     }
 }
 
+/// The frames a limited member's logic withheld (B103) cross the wire
+/// as their own field, right after the room's snapshots.
+#[test]
+fn the_withheld_snapshots_survive_the_wire() {
+    let sent = three_shards();
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(
+            (a.snapshots, a.snapshots_withheld, a.snap_bytes_s),
+            (b.snapshots, b.snapshots_withheld, b.snap_bytes_s),
+            "shard {:?}",
+            a.room
+        );
+    }
+}
+
 /// The fan-out's closed-channel sends (GSMI, B32) cross the wire as
 /// their own field, between the drop rate and the keep-alive re-sends.
 #[test]

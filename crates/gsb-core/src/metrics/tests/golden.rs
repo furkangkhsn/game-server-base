@@ -99,6 +99,8 @@
 //! F70's `reports_torn_at_cut_grace=` after the net line's
 //! `metrics_dropped=`, with `gsb_metrics_reports_torn_at_cut_grace_total`
 //! after `gsb_metrics_dropped_total`.
+//! B103's room-scope `snapshots_withheld=` after `snapshots=`, with
+//! `gsb_room_snapshots_withheld_total` after `gsb_room_snapshots_total`.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -203,6 +205,7 @@ pub(super) fn golden_report() -> MetricReport {
     a2.dropped_frames = 2;
     a2.sends_closed = 1;
     a2.requests_refused_congested = 3;
+    a2.snapshots_withheld = 4;
     a2.requests_dropped_unread = 2;
     a2.requests_undelivered = 1;
     a2.actions_dropped_unread = 3;

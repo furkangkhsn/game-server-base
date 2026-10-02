@@ -5,7 +5,7 @@
 use super::{RoomFamily, RoomValue, counter, gauge};
 
 /// Tick health through group state, in exposition order.
-pub(super) const TICK: [RoomFamily; 30] = [
+pub(super) const TICK: [RoomFamily; 31] = [
     gauge(
         "gsb_room_hz",
         "Measured room step rate (Δsteps/s over the last sample interval).",
@@ -102,6 +102,13 @@ pub(super) const TICK: [RoomFamily; 30] = [
         "gsb_room_snapshots_total",
         "Group snapshots encoded, cumulative.",
         |r| r.snapshots,
+    ),
+    // B103: a limited member's group frame the logic chose not to ship
+    // (the kit's opt-in SnapshotBudget) — never offered, so not a drop.
+    counter(
+        "gsb_room_snapshots_withheld_total",
+        "Group frames the logic withheld from a member whose path its transport limits (GameLogic::ship_snapshot), cumulative.",
+        |r| r.snapshots_withheld,
     ),
     gauge(
         "gsb_room_snap_bytes_s",

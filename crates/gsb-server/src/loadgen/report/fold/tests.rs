@@ -65,6 +65,7 @@ pub(in crate::report) fn shard(i: usize) -> RoomReport {
         sends_closed: [1, 0, 6][i],
         keepalive_resends: [5, 6, 7][i],
         snapshots: [100, 200, 300][i],
+        snapshots_withheld: [1, 0, 5][i],
         snap_bytes_s: [1_000.0, 2_000.0, 4_000.0][i],
         snap_bytes_max: [300, 1_200, 700][i],
         snap_overflows: [1, 0, 2][i],

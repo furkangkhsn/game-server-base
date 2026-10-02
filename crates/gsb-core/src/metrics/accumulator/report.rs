@@ -56,6 +56,7 @@ impl MetricAccumulator {
                 sends_closed: latest.sends_closed,
                 keepalive_resends: latest.keepalive_resends,
                 snapshots: latest.snapshots,
+                snapshots_withheld: latest.snapshots_withheld,
                 snap_bytes_s,
                 snap_bytes_max: latest.snap_bytes_max,
                 snap_overflows: latest.snap_overflows,

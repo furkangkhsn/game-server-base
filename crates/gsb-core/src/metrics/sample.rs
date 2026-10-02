@@ -71,6 +71,12 @@ pub struct RoomSample {
     /// Group snapshots encoded (a group that reports "unchanged" encodes
     /// nothing), cumulative.
     pub snapshots: u64,
+    /// Group frames the logic WITHHELD from a member whose path is
+    /// limited — its transport paces it and `GameLogic::ship_snapshot`
+    /// said no (BACKLOG B103: the kit's opt-in `SnapshotBudget`) —
+    /// cumulative, one per member per tick. Not a failed send: the
+    /// frame was never offered to the member's channel.
+    pub snapshots_withheld: u64,
     /// Snapshot payload bytes encoded (once per group per emit),
     /// cumulative.
     pub snap_bytes: u64,

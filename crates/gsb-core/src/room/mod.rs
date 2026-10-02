@@ -87,7 +87,7 @@ pub(crate) use config::idle_close;
 pub use config::{AfkAction, DEFAULT_MAX_DETACH_HOLD, InputRate, RoomConfig};
 pub use control::{Detach, ExpireTo, ResumeFound, RoomControl, TickCtx};
 pub(crate) use counters::{
-    GroupState, HoldEnd, RoomConn, RoomCounters, SendFailures, Shipped, undelivered,
+    GroupState, HoldEnd, RoomConn, RoomCounters, SendFailures, Shipped, ships_group, undelivered,
 };
 pub(crate) use idle::IdleClock;
 pub use idle::IdleView;

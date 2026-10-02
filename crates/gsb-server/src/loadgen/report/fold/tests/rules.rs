@@ -59,6 +59,7 @@ fn folding_shards_applies_one_rule_per_field() {
     close(f.dropped_s, 7.0, "dropped_s");
     assert_eq!(f.keepalive_resends, 18, "keepalive_resends");
     assert_eq!(f.snapshots, 600, "snapshots");
+    assert_eq!(f.snapshots_withheld, 6, "snapshots_withheld");
     close(f.snap_bytes_s, 7_000.0, "snap_bytes_s");
     assert_eq!(f.snap_bytes_max, 1_200, "snap_bytes_max");
     assert_eq!(f.snap_overflows, 3, "snap_overflows");

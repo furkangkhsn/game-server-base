@@ -53,6 +53,9 @@ pub struct RoomReport {
     pub keepalive_resends: u64,
     /// Snapshots encoded (cumulative) and encoded-byte rate (Δ/s).
     pub snapshots: u64,
+    /// Group frames withheld from limited members (cumulative — see
+    /// `RoomSample::snapshots_withheld`).
+    pub snapshots_withheld: u64,
     pub snap_bytes_s: f64,
     pub snap_bytes_max: u32,
     pub snap_overflows: u64,

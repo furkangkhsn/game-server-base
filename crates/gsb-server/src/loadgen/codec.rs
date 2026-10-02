@@ -33,6 +33,7 @@ mod logic;
 ///     u64 late_min_us  f64 late_mean_us  u64 late_max_us
 ///     u64 lagged_events  u64 lagged_ticks  u64 dropped  f64 dropped_s
 ///     u64 sends_closed  u64 keepalive_resends  u64 snapshots
+///     u64 snapshots_withheld
 ///     f64 snap_bytes_s  u32 snap_bytes_max  u64 snap_overflows
 ///     u64 snap_records  u64 shipped_bytes  f64 shipped_s
 ///     u64 shipped_frames  u64 private_frames
@@ -325,6 +326,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(room.sends_closed);
         w.u64(room.keepalive_resends);
         w.u64(room.snapshots);
+        w.u64(room.snapshots_withheld);
         w.f64(room.snap_bytes_s);
         w.u32(room.snap_bytes_max);
         w.u64(room.snap_overflows);
@@ -542,6 +544,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             sends_closed: r.u64()?,
             keepalive_resends: r.u64()?,
             snapshots: r.u64()?,
+            snapshots_withheld: r.u64()?,
             snap_bytes_s: r.f64()?,
             snap_bytes_max: r.u32()?,
             snap_overflows: r.u64()?,

@@ -87,3 +87,31 @@ impl Shipped {
         m.shipped_bytes = m.shipped_bytes.saturating_add(self.bytes);
     }
 }
+
+/// The path budget's gate on one member's group frame (BACKLOG B103):
+/// a member whose transport limits it (`TickCtx::budget` is known) asks
+/// the logic ([`GameLogic::ship_snapshot`](crate::room::GameLogic::ship_snapshot))
+/// whether this tick's frame of `bytes` goes; a frame the logic withholds
+/// is counted (`snapshots_withheld`). Every other member ships without a
+/// question — and a room with no measured path pays one empty-table
+/// check per member. Shared by the room and the shard actor.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ships_group<W, L>(
+    logic: &mut L,
+    world: &mut W,
+    ctx: &crate::room::TickCtx,
+    player: crate::id::PlayerId,
+    group: &L::GroupKey,
+    bytes: usize,
+    m: &mut RoomCounters,
+) -> bool
+where
+    L: crate::room::GameLogic<W> + ?Sized,
+{
+    let Some(budget) = ctx.budget(player) else {
+        return true;
+    };
+    let ships = logic.ship_snapshot(world, ctx, player, group, bytes, budget);
+    m.snapshots_withheld += u64::from(!ships);
+    ships
+}

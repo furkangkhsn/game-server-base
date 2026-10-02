@@ -65,3 +65,47 @@ async fn a_crossing_member_carries_its_path_to_the_next_shard() {
     assert!(b.handle_msg(msg, 3));
     assert_eq!(b.paths.get(p), Some(paced(40_000)), "the receiver knows it");
 }
+
+/// The shard's fan-out asks the same gate: a member whose frame is over
+/// its budget gets no group frame (counted); a member with no path gets
+/// it as always; a budget the frame fits ships.
+#[tokio::test]
+async fn the_shard_s_fan_out_withholds_what_the_logic_withholds() {
+    let (n0, _n0_rx) = channel::<ShardMsg<TState, TStrip>>(8);
+    let (n1, _n1_rx) = channel::<ShardMsg<TState, TStrip>>(8);
+    let mut a = rig_actor(0, vec![n0, n1]);
+    let mut join = |conn: u64| {
+        let (reply, mut joined) = oneshot::channel();
+        let (out, out_rx) = mpsc::channel::<FrameBatch>(8);
+        assert!(a.handle_msg(
+            ShardMsg::Join {
+                conn: ConnectionId(conn),
+                epoch: 1,
+                identity: String::new(),
+                out,
+                reply,
+            },
+            1,
+        ));
+        let (_e, actions) = joined.try_recv().expect("sync").expect("joined");
+        (actions, out_rx)
+    };
+    // Conns 1..=3 spawn at x = -9..-7: shard 0's own region.
+    let (tight, mut tight_out) = join(1);
+    let (_none, mut none_out) = join(2);
+    let (roomy, mut roomy_out) = join(3);
+    tight
+        .try_send(path_action(ConnectionId(1), &paced(30)))
+        .expect("room");
+    roomy
+        .try_send(path_action(ConnectionId(3), &paced(30_000)))
+        .expect("room");
+    a.step_phases(&tinfo(2));
+    assert!(
+        tight_out.try_recv().is_err(),
+        "1 B/tick: the 48 B frame is withheld"
+    );
+    assert!(none_out.try_recv().is_ok(), "no path: as always");
+    assert!(roomy_out.try_recv().is_ok(), "999 B/tick: the frame fits");
+    assert_eq!(a.m.snapshots_withheld, 1);
+}

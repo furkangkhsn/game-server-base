@@ -9,7 +9,7 @@ use std::hash::Hash;
 use tracing::warn;
 
 use crate::id::{ConnectionId, PlayerId};
-use crate::room::{GroupState, SendFailures, Shipped, TickCtx, undelivered};
+use crate::room::{GroupState, SendFailures, Shipped, TickCtx, ships_group, undelivered};
 use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
@@ -240,7 +240,24 @@ where
             // Counted once the channel takes the batch (the room's 4d,
             // B57).
             let mut ship = Shipped::default();
-            if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
+            // The path budget's gate (B103): a limited member's frame
+            // may be withheld by the logic, counted.
+            if let Some(payload) = self
+                .groups
+                .get(&rc.group)
+                .and_then(|st| st.sent.clone())
+                .filter(|p| {
+                    ships_group(
+                        &mut *self.logic,
+                        &mut self.world,
+                        ctx,
+                        player,
+                        &rc.group,
+                        p.len(),
+                        &mut self.m,
+                    )
+                })
+            {
                 with_snapshot = true;
                 ship.frame(payload.len(), false);
                 rc.batch

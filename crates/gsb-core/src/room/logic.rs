@@ -145,6 +145,36 @@ pub trait GameLogic<W>: Send {
         false
     }
 
+    /// Ship this tick's group frame (`bytes` long) to `player`, whose
+    /// path is limited (BACKLOG B103): its transport paces it and the
+    /// member takes `budget` bytes per tick (`TickCtx::budget`).
+    /// `false` WITHHOLDS the group frame from this member this tick —
+    /// its private frame still goes — and the room counts it
+    /// (`snapshots_withheld`). Called in the fan-out, once per member
+    /// with a known budget whose group has a frame this tick, before
+    /// that player's [`Self::private`]; a member whose path is unknown
+    /// or keeps up is never asked (it gets the frame, as always).
+    ///
+    /// Withhold only what the client can do without: a full,
+    /// self-contained snapshot — the next one it gets heals the gap —
+    /// never a delta whose loss the client cannot see (the kit's
+    /// `SnapshotBudget` thins only its full-snapshot rooms). The logic
+    /// decides; the core neither re-sends nor waits.
+    ///
+    /// Default: ship — nothing a game that does not opt in sends
+    /// changes.
+    fn ship_snapshot(
+        &mut self,
+        _world: &mut W,
+        _ctx: &TickCtx,
+        _player: PlayerId,
+        _group: &Self::GroupKey,
+        _bytes: usize,
+        _budget: usize,
+    ) -> bool {
+        true
+    }
+
     /// This tick's batch for `player`'s connection was NOT delivered: its
     /// bounded outbound channel was full (a slow client) or already
     /// closed, and the fan-out dropped the whole batch (the room's

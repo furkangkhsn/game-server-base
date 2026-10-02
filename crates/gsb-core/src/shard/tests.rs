@@ -184,6 +184,20 @@ impl GameLogic<TWorld> for TLogic {
         }
         true
     }
+    /// The path budget's gate (B103, `tests/path.rs`): a frame over the
+    /// member's budget is withheld. No other suite sets a path, so no
+    /// other suite is ever asked.
+    fn ship_snapshot(
+        &mut self,
+        _w: &mut TWorld,
+        _ctx: &TickCtx,
+        _player: PlayerId,
+        _g: &Self::GroupKey,
+        bytes: usize,
+        budget: usize,
+    ) -> bool {
+        bytes <= budget
+    }
     fn on_join(&mut self, w: &mut TWorld, conn: ConnectionId) -> Admission {
         // Deterministic spawn: x = (conn.0 % 20) - 10 (conn 1 → -9 in
         // shard 0; conn 10 → 0 in shard 1; conn 11 → +1 in shard 1),

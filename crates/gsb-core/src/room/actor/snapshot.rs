@@ -248,7 +248,24 @@ where
             // it (B57: `shipped_*` means shipped — a dropped or refused
             // batch is `dropped_frames` / `sends_closed`, not traffic).
             let mut ship = Shipped::default();
-            if let Some(payload) = self.groups.get(&rc.group).and_then(|st| st.sent.clone()) {
+            // The path budget's gate (B103): a limited member's frame
+            // may be withheld by the logic, counted.
+            if let Some(payload) = self
+                .groups
+                .get(&rc.group)
+                .and_then(|st| st.sent.clone())
+                .filter(|p| {
+                    ships_group(
+                        &mut *self.logic,
+                        &mut self.world,
+                        ctx,
+                        player,
+                        &rc.group,
+                        p.len(),
+                        &mut self.m,
+                    )
+                })
+            {
                 with_snapshot = true;
                 ship.frame(payload.len(), false);
                 rc.batch

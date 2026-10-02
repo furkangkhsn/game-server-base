@@ -342,6 +342,9 @@ gsb_room_keepalive_resends sum t=2 mono=true unit="" n=2 | Keep-alive re-sends o
 gsb_room_snapshots sum t=2 mono=true unit="" n=2 | Group snapshots encoded, cumulative.
   [room=r1] 1000..2000 int 29
   [room=r7] 1000..2000 int 0
+gsb_room_snapshots_withheld sum t=2 mono=true unit="" n=2 | Group frames the logic withheld from a member whose path its transport limits (GameLogic::ship_snapshot), cumulative.
+  [room=r1] 1000..2000 int 4
+  [room=r7] 1000..2000 int 0
 gsb_room_snap_bytes_s gauge unit="" n=2 | Encoded snapshot byte rate (Δ/s).
   [room=r1] 0..2000 double 3000
   [room=r7] 0..2000 double 0

@@ -14,7 +14,7 @@ mod hold;
 mod logic;
 mod observe;
 
-pub(crate) use fanout::{SendFailures, Shipped, undelivered};
+pub(crate) use fanout::{SendFailures, Shipped, ships_group, undelivered};
 pub(crate) use hold::HoldEnd;
 
 #[cfg(test)]
@@ -159,6 +159,10 @@ pub(crate) struct RoomCounters {
     pub(crate) sends_closed: u64,
     /// Keep-alive re-sends, cumulative.
     pub(crate) keepalive_resends: u64,
+    /// Group frames the logic withheld from a member whose path is
+    /// limited (`GameLogic::ship_snapshot` said no — BACKLOG B103),
+    /// cumulative: one per member per tick.
+    pub(crate) snapshots_withheld: u64,
     /// Group snapshots encoded, cumulative (+ encoded bytes, max payload).
     pub(crate) snapshots: u64,
     pub(crate) snap_bytes: u64,
@@ -307,6 +311,7 @@ impl Default for RoomCounters {
             dropped_frames: 0,
             sends_closed: 0,
             keepalive_resends: 0,
+            snapshots_withheld: 0,
             snapshots: 0,
             snap_bytes: 0,
             snap_bytes_max: 0,

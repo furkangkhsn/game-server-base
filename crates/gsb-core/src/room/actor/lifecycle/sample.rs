@@ -37,6 +37,7 @@ where
             sends_closed: self.m.sends_closed,
             keepalive_resends: self.m.keepalive_resends,
             snapshots: self.m.snapshots,
+            snapshots_withheld: self.m.snapshots_withheld,
             snap_bytes: self.m.snap_bytes,
             snap_bytes_max: self.m.snap_bytes_max,
             snap_overflows: self.m.snap_overflows,
