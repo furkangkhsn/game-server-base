@@ -294,6 +294,37 @@ udp_congestion = "pace"   # vars. "off"
 - **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` ve `[[listeners]]`
   girdisi reddeder. Bilinmeyen değer ayrıştırma hatası.
 
+**Sunucu düzeyi: rUDP bağlantı göçü `udp_migration` (BACKLOG B3).** Her
+rUDP kapısı — düz anahtardan türeyen kapı ya da `[[listeners]]`'ın her
+`udp` girdisi.
+
+```toml
+udp_migration = true   # vars. false
+```
+
+- **`false` (varsayılan):** CID verilmez; adresi değişen istemci (NAT
+  yeniden bağlanması, Wi-Fi ↔ hücresel) YENİ oturumdur: yeni el sıkışma
+  ve resume (RECONNECT §5). Kapı anahtardan önceki gibi, bayt bayt
+  (istemcinin proof'una eklediği caps baytı yok sayılır).
+- **`true`:** isteyen her istemciye (varsayılan `UdpClient` ister) rastgele
+  bir bağlantı kimliği (CID) verilir; yeni adresten konuşan oturum yol
+  doğrulamasından (o adrese challenge, yanıtı) sonra oraya **göçer** —
+  el sıkışma yok, resume yok, kapanış yok. Doğrulanana kadar sunucu eski
+  adrese yollamaya devam eder.
+- **Ne zaman açılır:** oyuncular mobil veride / ağ değiştiren
+  cihazlardaysa (`server_close_idle_timeout` ve resume sayıları adres
+  değişiminden geliyorsa). **Güvenlik bedeli:** rUDP kaydı şifrelenene
+  kadar (B5a) CID düz metindir — istemcinin trafiğini koklayabilen biri
+  oturumun sunucu → istemci akışını kendine çekebilir (SECURITY §4.6).
+  Güvenilir ağda ya da bu riski kabul eden dağıtımda açın.
+- **Okuma:** `udp_migrations` (göçen oturum), `udp_migrations_port_only`
+  (bunların NAT yeniden bağlanması olanı); başarısız denemeler
+  `udp_path_validations_timed_out` (sahte ya da kaybolan aday),
+  `udp_cid_unknown` (bitmiş oturumun ya da sahte CID'nin datagram'ı) —
+  §3 "Taşıma kapsamı: rUDP bağlantı göçü".
+- **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` ve `[[listeners]]`
+  girdisi reddeder.
+
 **Sunucu düzeyi: kaynak başına el sıkışma sınırı
 `max_handshakes_per_source` (BACKLOG D11).** El sıkışan her kapının —
 WS, TLS, QUIC; düz anahtarlardan türeyen kapı ya da `[[listeners]]`'ın
@@ -1140,6 +1171,35 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   ortalama kesinti = `rate_cuts ÷ episodes`. Kayıplar (dropped, unsent)
   B32 kuralıyla ayrı adlarda; darboğazın kendi kaybı yine
   `udp_game_datagrams_reported_lost`'ta.
+- **Taşıma kapsamı: rUDP bağlantı göçü (B3).** Satırın ve tablonun
+  sonuna 15 `counter` (tıkanıklık tepkisininkilerden sonra); loadgen
+  telinin transport bölümü 15 sayaç uzar — düzen değişti, sihirli değer
+  bu turda çevrilmedi (bir sonraki **GSNN**) —, `RESULT`'ta
+  `transport_<ad>=`. Yalnız `udp_migration = true` iken artar (§2):
+  `udp_cids_assigned` (CID verilen oturum — isteyen istemci; kayıp
+  değil), `udp_entropy_draws_failed` (OS entropisinin veremediği CID ya
+  da challenge nonce'u — oturum CID'siz kuruldu ya da aday doğrulanmadı;
+  zayıf değer asla), `udp_cid_unknown` (hiçbir oturumu anmayan etiketli
+  datagram, düştü), `udp_path_validations_started` (oturumun adresi
+  olmayan bir adresten etiketli datagram: doğrulama başladı),
+  `udp_path_challenges_sent` / `udp_path_challenges_send_failed` (soketin
+  aldığı / reddettiği PATH_CHALLENGE), `udp_path_amplification_capped`
+  (adaydan alınanın 3 katını aşacağı için tutulan challenge),
+  `udp_path_address_in_use` (başka oturumun adresi olduğu için reddedilen
+  aday), `udp_path_responses_unmatched` (bekleyen doğrulamaya uymayan
+  PATH_RESPONSE, düştü), `udp_path_changes_not_forwarded` (eşleşen ama
+  yazıcı kanalı dolu/kapalı olduğu için taşınamayan — doğrulama bekler),
+  `udp_path_validations_timed_out` (3 sn'de yanıt gelmedi, oturum eski
+  yolda), `udp_path_validations_superseded` (daha yeni bir aday
+  adres geldi), `udp_path_validations_open_at_end` (oturum biterken hâlâ
+  süresi içinde bekleyen), `udp_migrations` (doğrulanmış yeni adrese
+  taşınan oturum), `udp_migrations_port_only` (bunlardan yalnız portu
+  değişen — NAT yeniden bağlanması, yol tahmini korunur). **Defter:**
+  `started = migrations + timed_out + superseded + open_at_end` (+ hâlâ
+  bekleyenler). **Okuma:** göçün başarısı `migrations ÷ started`;
+  `timed_out` sıçraması sahte kaynak denemesi ya da kaybolan istemci
+  işaretidir. Demux'ın duruş satırında `migrations`, `cid_unknown`;
+  yazıcının oturum satırında `path_changes`, `path_resets`.
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

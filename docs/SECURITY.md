@@ -538,6 +538,30 @@ değeri alıyor, kapı yine hizmet ediyor), `gsb-server`
 kurucuya veriyor), `tests/udp_buffers.rs` (varsayılan, ayrıştırma,
 aralık dışı değer hiçbir şey bağlanmadan başlatmayı durdurur).
 
+### 4.6 rUDP bağlantı göçü: kriptosuz CID taşıyıcı jetondur (B3)
+
+`udp_migration = true` (OPS §2, DESIGN §6 "Bağlantı göçü") istemciye
+rastgele 64 bitlik bir bağlantı kimliği (CID) verir; oturum, CID'li ve
+yolu doğrulanmış yeni bir adrese göçer. **Varsayılan kapalı** — kapı
+bayt bayt eskisidir. Kriptodan (B5a) önce açmanın bedeli açıktır:
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **Opt-in** (RUDP-SECURITY §2 karar 5) | Düz metin CID **taşıyıcı jetondur**: istemcinin trafiğini koklayan biri CID'yi okur, düz metin PATH_CHALLENGE'ı kendi adresinden yanıtlar ve oturumun s→c akışını kendine çeker (oturumu kaçırır). Yol dışı saldırgan CID'yi tahmin edemez (`getrandom`, 64 bit; `ConnectionId` gibi sıralı değil) |
+| 2 | Doğrulanana kadar s→c **eski yolda** (karar 10); yeni adrese yalnız challenge gider, adresten alınan baytların en çok 3 katı | Sahte kaynaklı etiketli datagram kurbanı yalnız 9 B'lik challenge'larla, aday konuştukça ve en çok 200 ms'de bir vurabilir: oran yapısal olarak ≤ 1 (`udp_path_amplification_capped` kuralı B5a'nın mühürlü boyları için yerinde) |
+| 3 | Doğrulanmamış adresten **gelen** girdi oturuma kabul edilir | Kriptosuz bu, eski adresi sahtelemenin zaten açtığından fazlasını açmaz (o da enjekte eder); CID'yi bilmek gerekir (yol dışı için 2^64). Düşürmek her dürüst göçe bir RTT girdi kaybettirirdi |
+| 4 | Yanıtlanmayan challenge 3 sn'de biter, oturum eski yolda kalır; başka oturumun adresi aday olamaz; bilinmeyen CID düşer | Sahte kaynak göç yaptıramaz (sayılır: `udp_path_validations_timed_out`, `udp_cid_unknown`); bir oturum başka bir oturumun adresini devralamaz (`udp_path_address_in_use`) |
+| 5 | Kriptodan sonra (B5a) challenge şifreli, göç kuralı RFC 9146 §6'nın üç koşuluna çıkar, varsayılan açılır | RUDP-SECURITY §7 |
+
+**Kalan yüzey (bilinçli):** CID ağlar arası sabittir — pasif bir
+gözlemci iki ağdaki oturumu ilişkilendirebilir (gizlilik; çözüm CID
+rotasyonu, RUDP-SECURITY §10, B5b). Göçte registry'nin kaynak başına
+sayımı (§4.3.2) ve aktörün `peer`'i ilk adreste kalır — B89.
+
+Kilit: `udp::demux::tests::{grant, migrate}`, `udp::tests::migrate`
+(gerçek soket: NAT yeniden bağlanması, `rebind`, uyumluluk matrisi,
+göç kapalıyken bayt bayt kimlik), `udp::path::tests`.
+
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 
 K4'ten beri (GAME-MODULE "K4 — oyuncu kimliği → ev shard'ı") bağlantının
@@ -596,7 +620,7 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
   cevabını bekleyen yönlendirmenin süre sınırı (B90,
   `http_route_timeout_secs`, aşılırsa `504`; OPS §3); kaynak adres başına
   tavan yok (localhost sözleşmesi)
-- rUDP crypto — deneysel statü
+- rUDP crypto — deneysel statü (çekirdek `gsb_net::seal` hazır, bağlama B5a); o zamana dek göç opt-in ve CID taşıyıcı jeton (§4.6)
 - Kaynak adres başına sınırın kapsamadığı evre: rUDP demux'ının kayıttan
   önceki oturum tablosu (§4.3.1 #8, BACKLOG B89; kaydedilmiş rUDP
   oturumları §4.3.2'ye girer)

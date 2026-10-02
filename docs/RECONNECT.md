@@ -634,6 +634,28 @@ resume gerekmez" beklentisi kapı-başı beklentinin yanına EKLENİR; yeni
 port + yeni el sıkışma + aynı kimlik yolu (ve F32 devralması) geri
 düşüş olarak kalır. Şifreli e2e B5'ten sonra.
 
+**Göç ve resume (B3, 2026-10-02).** `udp_migration = true` olan kapıda
+oturum adresten bağımsız bir CID taşır (DESIGN §6 "Bağlantı göçü"):
+adresi değişen istemci (NAT yeniden bağlanması — istemci görmez; ya da
+`UdpClient::rebind`, yeni yerel soket) **aynı oturumda** kalır, sunucu
+yeni adresi doğrulayınca oraya taşır. Bu yolda bağlantı katmanı hiçbir
+şey görmez: aktör, registry satırı, oda üyeliği ve `ConnectionId`
+aynıdır; park, resume, kapanış yoktur. Kilit
+(`rudp_resume.rs`, `Door::Migrating`):
+`a_migrating_rudp_session_survives_its_address_change` (oyun içi
+oyuncunun soketi değişir, aynı varlık yeni soketin girdisiyle yürür;
+oda `joins 1 / resumes 0 / detached 0`, registry `opens 1 / closes 0 /
+conns 1 / leaves 0`, kapanış ailesi boş, `udp_migrations = 1`) ve
+`with_migration_on_a_vanished_rudp_client_still_resumes` (göç açıkken de
+geri düşüş aynı: kaybolan istemci yeni el sıkışma + resume ile döner).
+Yedi eski test değişmeden yeşil (göç kapalı varsayılan kapıda).
+**Resume ne zaman hâlâ gerekir:** göç kapalıysa; istemci CID istemiyorsa
+(eski istemci) ya da sunucu vermiyorsa (eski sunucu); yeni adres 3 sn
+içinde doğrulanamazsa (oturum eski yolda kalır, REL bandı oradan
+ölürse oturum biter); istemci süreci/soketi tamamen kaybolduysa (bellek
+gitti: CID de gitti). Kriptodan (B5a) önce CID taşıyıcı jetondur —
+SECURITY §4.6.
+
 ## 6. Shard rotasyonu: broadcast-resume
 
 `home_shard` spawn noktasına göre rota seçer; oyuncu arada migrate
@@ -890,7 +912,7 @@ disiplinine uygun "doğru yolda artış" testleriyle.
 | Combat-lock sonsuz uzatma (harass-lock) | Çekirdekte mutlak tavan: `RoomConfig::max_detach_hold` (varsayılan 10 dk, DETACH anından ölçülür). Tavanda hâlâ duran veto ezilir, hold `ExpireTo`'suna biter, oda bir kez uyarır; süreli ve süresiz hold'a aynı tavan (§17) |
 | Ölüyken düşme | Politika detayı — respawn sayacı world'te yaşar, otomatik doğru |
 | RPC pending detach anında | Bugünkü leave semantiği: pending düşer, late raporlar sessizce atılır (zaten yapısal) |
-| rUDP üstünde resume | Transport-agnostic: resume bağlantı katmanındadır; rUDP deneysel statüsünü değiştirmez. Yeni adres → yeni el sıkışma → resume yolu uçtan uca kilitli (§5 sonu, B7) |
+| rUDP üstünde resume | Transport-agnostic: resume bağlantı katmanındadır; rUDP deneysel statüsünü değiştirmez. Yeni adres → yeni el sıkışma → resume yolu uçtan uca kilitli (§5 sonu, B7); `udp_migration` açıkken adres değişimi resume'suz göçtür (§5 "Göç ve resume", B3) |
 
 ## 12. Test planı (uygulama turunun kilidi)
 

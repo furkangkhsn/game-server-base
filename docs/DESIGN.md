@@ -409,7 +409,9 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   rUDP **taşıma işaretleri**, aktör katmanının altında işlenir, mesaj
   tablosunda değiller; `13` = UDP_REPORT, aynı türden işaret — istemcinin
   oyun bandı raporu demux'tan yazıcıya bu opcode'la geçer, §6 "Oyun bandı
-  geri bildirimi"); `1000+` oyun bandı
+  geri bildirimi"; `14` = UDP_PATH, aynı türden ve hiç tele çıkmaz —
+  demux'ın "oturum doğrulanmış yeni adrese göçtü" bildirimi yazıcıya bu
+  opcode'la gider, §6 "Bağlantı göçü"); `1000+` oyun bandı
   (MOVE_TO=1000, WORLD_SNAPSHOT=1003; PRIVATE=1004 `RoomLogic::private`
   için ayrılmış, demo kullanmaz; 1001/1002 boş — eski ENTITY_SPAWNED /
   ENTITY_REMOVED kaldırıldı, üyelik snapshot'ta var olmaya indirgendi).
@@ -1933,10 +1935,11 @@ hiç öğrenemez. (4) *İstemci karelerinin cookie taşıması* (TCP SYN
 cookie tarzı, her kare yeniden doğrular) — oturum başına bir 5 B
 datagram'dan kaçmak için oturumun her datagram'ına 8 B.
 
-NAT yeniden bağlanması yeni 4-tuple = yeni el sıkışma =
-yeni `ConnectionId` (eski oturum, boşta kalana kadar idle sweep'e
-kadar yaşar — sınır: `idle_timeout`); aktörü ölmüş oturum ise artık hemen gider —
-aşağıda "Aktörü ölmüş oturum").
+NAT yeniden bağlanması: `udp_migration` kapalıyken (varsayılan) yeni
+4-tuple = yeni el sıkışma = yeni `ConnectionId` (eski oturum, boşta
+kalana kadar idle sweep'e kadar yaşar — sınır: `idle_timeout`); açıkken
+oturum CID ile yeni adrese göçer (aşağıda "Bağlantı göçü", B3). Aktörü
+ölmüş oturum ise artık hemen gider — aşağıda "Aktörü ölmüş oturum".
 
 **Datagram çerçevesi:** `[u8 kind]` — `0` RAW `[u16 op][payload]`
 (oyun bandı: kayıp toleranslı, sırasız — snapshot'lar ve MOVE_TO);
@@ -1947,7 +1950,11 @@ RTO yeniden gönderim, **sıralı teslim** — AUTH/JOIN/LEAVE/HEARTBEAT);
 istemci, bütçeyi aşan oyun bandı karesi — aşağıda "MTU"); `5` PROBE
 `[u32 sonda id][u32 yankı µs]` (yalnız sunucu → istemci) ve `6` REPORT
 `[u32 sonda id][u32 alınan oyun datagram'ı]` (yalnız istemci → sunucu) —
-oyun bandının geri bildirimi, aşağıda "Oyun bandı geri bildirimi".
+oyun bandının geri bildirimi, aşağıda "Oyun bandı geri bildirimi";
+`7` PATH_CHALLENGE `[u64 nonce]` (yalnız sunucu → istemci) ve `8`
+PATH_RESPONSE (yalnız istemci → sunucu, her zaman etiketli) ile
+`0x80 | k` CID etiketli istemci datagram'ı — bağlantı göçü, aşağıda
+"Bağlantı göçü".
 Band ayrımı: `op 1..=64` (11 hariç) = kontrol (güvenilir), `op ≥ 1000`
 = oyun (kayıp toleranslı). Yeniden gönderim: uyarlanan RTO (RFC 6298,
 50 ms–1 sn, geri çekilmeli — B2, aşağıda; önceden sabit 50 ms); tek
@@ -2640,6 +2647,224 @@ pencere dönmüyor, pencere sessizliği silmiyor, baytlar sayılmıyor; B96:
 karesinin kovadan düşülmemesi (hızlıyken yeniden gönderim nadir;
 ilk gönderimin düşülmesi test ediliyor) — bilinçli bırakıldı.
 
+**Bağlantı göçü (BACKLOG B3 — 2026-10-02, opt-in; bakımcı kararları
+RUDP-SECURITY §2 #5 ve #10).** Eskiden demux oturumu istemcinin
+4-tuple'ıyla anahtarlıyordu: NAT yeniden bağlanması (yeni kaynak portu)
+ya da Wi-Fi ↔ hücresel geçiş (yeni adres) YENİ bir oturumdu — yeni el
+sıkışma, aynı kimlikle resume (RECONNECT §5). Bakımcı kuralı: mobil
+oyuncu adresini sürekli değiştirir, bunun için oturum kapatmak yanlış.
+Artık oturum adresten bağımsız bir **bağlantı kimliği (CID)** taşıyabilir
+ve yol doğrulamasından sonra yeni adrese **göçer**. Kod: `udp::path`
+(kurallar ve saf durum), `udp::demux::{table, dispatch, migrate}`,
+`udp::writer::path`, `udp::client::migrate`.
+
+*Opt-in (karar 5).* Kriptodan önce CID **taşıyıcı jetondur**: istemcinin
+trafiğini koklayan biri CID'yi okur, düz metin PATH_CHALLENGE'ı kendi
+adresinden yanıtlar ve oturumun s→c akışını kendine çeker. Bu yüzden
+sunucu CID'yi yalnız `udp_migration = true` ise verir; varsayılan
+`false` kapı bayt bayt eskisidir (test, aşağıda). B5a'dan (mühürlü kayıt)
+sonra challenge şifreli olur ve varsayılan açılır (RUDP-SECURITY §7).
+
+*Tel — hepsi eklemeli (§5'in evrim kuralı):*
+
+| Datagram | Bayt düzeni | Boy | Not |
+|---|---|---|---|
+| proof | `[3][u64 nonce][u64 cookie][0][u8 caps]` | 19 B | bayt 17 HELLO'nun hep sıfır olan dolgusu (değişmedi); caps bayt 18'e EKLENİR; bit 0 = `CAP_CID` ("bana CID ver"). Challenge isteği değişmedi (18 B) |
+| accept | `[2][u32 1][u64 cid]` | 13 B | `ACK{1}` + CID; yeniden gönderilen proof'a AYNI CID (idempotent). CID yoksa 5 B'lik eski accept |
+| etiketli c→s | `[k \| 0x80][u64 cid][k türünün gövdesi]` | +8 B | CID verildikten sonra istemcinin HER datagram'ı (RAW, REL, ACK, REPORT); s→c asla etiketlenmez |
+| PATH_CHALLENGE | `[7][u64 nonce]` | 9 B | yalnız s→c, aday adrese |
+| PATH_RESPONSE | `[0x88][u64 cid][u64 nonce]` | 17 B | yalnız c→s, her zaman etiketli |
+
+*Kind bayt haritası (kesin; B109 kapandı):* `0x00..=0x3F` düz metin
+türler (`0..=8` kullanımda); `0x40..=0x7F` SEALED kayıt
+(`crate::seal`, `0x40 | anahtar fazı`; B5a'ya dek bağlı değil);
+`0x80..=0xBF` CID etiketli düz metin tür (yalnız c→s);
+`0xC0..=0xFF` boş. SEALED c→s kaydı CID'yi kendi başlığında aynı
+konumda (bayt 1..9) taşıdığı için etiket bitini almaz; demux iki
+biçimde de CID'yi aynı yerden okur. Aralıkların ayrıklığı ve CID
+konumunun eşitliği derleme zamanı `assert`'leridir (`udp/mod.rs`).
+
+*Kurallar (RFC 9000 §9 ve karar 10):*
+- **Yönlendirme.** Etiketsiz datagram adresle (eskisi gibi), etiketli
+  datagram CID ile bulunur. Bilinmeyen CID düşer, sayılır
+  (`udp_cid_unknown`). Göç kapalı kapıda etiketli datagram bilinmeyen
+  türdür: `udp_datagrams_malformed`, oturuma dokunulmaz (eski kod yolu).
+- **Yeni adresten etiketli datagram** bir doğrulama başlatır: sunucu o
+  adrese taze rastgele nonce'lu `PATH_CHALLENGE` yollar ve **diğer her
+  şeyi eski yolda göndermeye devam eder** (karar 10 — doğrulanmamış
+  adrese erken gönderim yok). Challenge en çok `CHALLENGE_RESEND`
+  (200 ms = el sıkışma adımının tavanı) aralıkla, yalnız aday yeniden
+  konuşunca, ve adaydan alınan baytların 3 katını aşmadan yeniden gider.
+- **Doğrulanmamış adresten gelen girdi KABUL edilir** (oyun, kontrol,
+  ACK, rapor). Gerekçe: RFC 9000 §9 bu paketleri işler; kriptodan önce
+  yeni adresten gelen datagram eskiden gelen kadar güvenilirdir (hiç —
+  eski adresi sahtelemek de aynı enjeksiyonu yapar), düşürmek ise her
+  dürüst yeniden bağlanmaya bir RTT'lik girdi kaybettirirdi. Demux'ın
+  cevapları (REL'in ACK'i) yine eski, doğrulanmış adrese gider.
+- **Eşleşen `PATH_RESPONSE`** (bekleyen nonce, aday adresten) oturumu
+  taşır: adres indeksi yeni adrese geçer, yazıcıya çıkış kanalından
+  `UDP_PATH` (op 14, tele çıkmaz) bildirimi gider — piggyback ACK gibi:
+  yazıcının tek beklenen kaynağı aynı kalır, kilit yok. Bildirimden önce
+  kuyruğa giren kareler eski adrese, sonrakiler yeni adrese. Yazıcının
+  kanalı doluysa taşıma yapılmaz (sayılır), doğrulama bekler, bir sonraki
+  challenge turu yeniden dener.
+- **Eski adres göç bitene dek çalışır.** Göçten sonra eski adres
+  kimsenin değildir; oradan etiketli bir artık datagram CID ile yine
+  oturumundur ve yeni bir aday sayılır.
+- **Doğrulama tek adla biter:** göç (`udp_migrations`), zaman aşımı
+  (`VALIDATION_TIMEOUT` = 3 sn — RFC 9000 §8.2.4'ün yeni yolun ilk
+  RTT'siyle üç PTO'su; REL canlılık sınırının (5 sn) altında, ki eski
+  yolu ölmüş istemci bandı ölmeden göçsün; oturumun bir sonraki
+  datagram'ında ya da sonunda fark edilir), yerine yenisinin gelmesi
+  (üçüncü bir adresten etiketli datagram: en yeni aday kazanır — RFC
+  9000 §9.3'ün "en yüksek numaralı sondalamayan paket" kuralı, B5a'ya
+  dek numarasız), oturum biterken açık. Defter:
+  `started = migrations + timed_out + superseded + open_at_end` (+ hâlâ
+  bekleyenler).
+- **Başka oturumun adresi aday olamaz** (`udp_path_address_in_use`):
+  bir adres, bir oturum.
+- **CID:** 64 bit, `getrandom` (0.4.3, cookie key'in kullandığı sürüm)
+  ile oturum başına çekilir; `ConnectionId`'nin sırası değil, tahmin
+  edilemez. Entropi başarısızsa (ya da 2^64'te bir çakışırsa) oturum
+  CID'siz kurulur — taşınamaz ama çalışır, sayılır
+  (`udp_entropy_draws_failed`); zayıf değerle asla.
+- **Yol tahmini (RFC 9000 §9.4):** yeni IP'de yazıcı REL bandının RTT
+  tahmincisini (`Rto::default`), oyun bandının pencereli RTT'sini ve
+  tahminini (`Feedback::new_path`) ve tıkanıklık denetimini (açık,
+  hızlanmamış — kuyruktakiler bir sonraki geçişte gider) sıfırlar; yalnız
+  port değişimi (NAT yeniden bağlanması — aynı yol) tahmini korur.
+  Yoldaki sondalar ve aralık temeli korunur: rapor yine sondasını anar,
+  gönderilen her datagram bir kez sayılır.
+
+*Demux'ın tablosu.* Oturumlar iç anahtarla (`SessionKey`, asla yeniden
+kullanılmaz, tele çıkmaz) tutulur; iki indeks: `addr → key`, `cid → key`.
+Deadline kümesi `(Instant, SessionKey)`, reap kuyruğu da anahtar taşır:
+göç ne deadline'ı ne reap sinyalini taşımak zorundadır. c2'nin geç
+deadline kuralı aynen çalışır (girdi yine `last_seen + idle` ile
+karşılaştırılır; aynı adrese gelen yeni oturumun anahtarı farklı olduğu
+için eskisinin girdileri doğrudan bayattır). Datagram başına maliyet bir
+hash araması artar (adres ya da CID → anahtar → oturum).
+
+*İstemci.* `UdpClientConfig::migration` (varsayılan AÇIK: proof'a bir
+bayt; eski ya da göçü kapalı sunucu yok sayar ve CID vermez, istemci de
+hiç etiketlemez). CID'yi yalnız istediği accept'ten alır; sonra her
+datagram'ı etiketler (REL'in sakladığı ve yeniden gönderdiği datagram
+da etiketli). Challenge'ı anında, etiketli yankılar.
+`UdpClient::rebind()`: yeni yerel soket (Wi-Fi ↔ hücresel), aynı
+oturum; eski soket kapanır, yeni soketten hemen etiketli kümülatif ACK
+gider ki sunucu bir sonraki kareyi beklemeden doğrulamaya başlasın. CID
+yoksa `Unsupported` döner ve hiçbir şey değişmez (çağıran reconnect +
+resume yapar). NAT yeniden bağlanması için istemci hiçbir şey yapmaz:
+onu göremez, her datagram'ı oturumunu CID ile anar. Sayaçlar
+(`UdpClientStats`): `rebinds`, `path_challenges_answered`,
+`path_responses_send_failed`, `path_challenges_ignored`.
+
+*Uyumluluk matrisi (her iddia kodda ve testte doğrulandı).*
+- **Yeni istemci → eski sunucu:** eski `handle_hello` proof'un yalnız
+  1..17 baytlarını okur (`n < 18` kontrolü, sondaki bayt yok sayılır),
+  5 B accept yollar; istemci CID almaz, hiç etiketlemez, `rebind`
+  `Unsupported`. Göçü kapalı yeni sunucu aynı yoldadır (test).
+- **Eski istemci → yeni sunucu:** caps yok → CID yok → 5 B accept, etiket
+  yok, tel bayt bayt eskisi (test). Eski istemci accept'in yalnız 1..5
+  baytlarını okur (`d.len() < 5` kontrolü), sondaki CID'yi yok sayardı;
+  zaten istemeyen istemciye CID gitmez.
+- **Eski istemci → eski sunucu:** değişmedi.
+- **Yeni ↔ yeni, göç açık:** göç (test).
+- Eski istemci NAT arkasında yeniden bağlanırsa geri düşüş yolu: yeni
+  adresinden gelen datagram'ları oturumsuz sayılır
+  (`udp_datagrams_no_session`), resume'la döner (test).
+
+*Amplifikasyon.* 3× bütçe kuralı uygulanır ve sayılır
+(`udp_path_amplification_capped`), ama bugünkü boylarla **bağlamaz**:
+aday ancak ≥ 9 B'lik etiketli bir datagram'la doğar ve her challenge
+9 B, yeniden gönderim de yalnız adaydan yeni bir datagram gelince olur
+— oran yapısal olarak ≤ 1. Kural B5a'nın mühürlü boyları ya da ileride
+bir PMTU dolgusu için oradadır; saf durumda ve demux'ta testle
+kilitli. Challenge dolgulanmaz (QUIC'in 1200 B'si gibi): rUDP'nin
+datagram bütçesi kapı genelinde tek değerdir, yola göre keşfedilmez.
+
+*Sayaçlar (taşıma kapsamı, OPS §3; tablonun sonuna eklendi):*
+`udp_cids_assigned`, `udp_entropy_draws_failed`, `udp_cid_unknown`,
+`udp_path_validations_started`, `udp_path_challenges_sent`,
+`udp_path_challenges_send_failed`, `udp_path_amplification_capped`,
+`udp_path_address_in_use`, `udp_path_responses_unmatched`,
+`udp_path_changes_not_forwarded`, `udp_path_validations_timed_out`,
+`udp_path_validations_superseded`, `udp_path_validations_open_at_end`,
+`udp_migrations`, `udp_migrations_port_only`. (Brifteki
+`udp_paths_validated` ayrı bir sayaç değil: eşleşen yanıt ya taşır
+(`udp_migrations`) ya yazıcıya ulaşamaz (`udp_path_changes_not_forwarded`,
+doğrulama bekler) — iki ad, iki anlam, B32'nin kuralı.) Yazıcının
+oturum log'unda `path_changes`, `path_resets`.
+
+*Elenenler.* (1) *Göçü varsayılan açmak* — karar 5: kriptosuz CID
+taşıyıcı jeton. (2) *Doğrulanmamış adrese erken gönderim* (yeni adresi
+hemen kullanmak) — karar 10; bedeli ~1 RTT oyun bandı kaybı, REL zaten
+yeniden gönderir. (3) *Doğrulanmamış adresten gelen girdiyi düşürmek* —
+yukarıda: güvenlik kazancı yok, her dürüst göçe bir RTT girdi kaybı.
+(4) *Oturumları yeni adrese yeniden anahtarlamak (tek indeks, deadline'ı
+taşımak)* — reap sinyali ve geç deadline girdileri adresi izlemek
+zorunda kalırdı; iç anahtar ikisini de adresten bağımsız yapar. (5)
+*Her ACK'e CID eklemek* (accept kaybına karşı) — oturum başına her
+ACK'te 8 B; accept kaybolursa istemci proof'u yeniden yollar ve yeniden
+cevaplanan accept aynı CID'yi taşır. (6) *Challenge'ı zamanlayıcıyla
+yeniden göndermek* — demux'a ikinci beklenen kaynak ya da tarama; aday
+konuştukça yeniden göndermek yeter. (7) *`ConnectionId`'yi CID olarak
+kullanmak* — sıralı, tahmin edilebilir.
+
+*Testler (önce kırmızı; mutasyonlu).* `udp::path::tests` (saf kurallar:
+challenge aralığı, 3× bütçe, reddedilen challenge bütçe yemez,
+nonce+adres eşleşmesi, zaman aşımı sınırı, `UDP_PATH` yükü),
+`udp::demux::tests::grant` (CID yalnız göç açık + istenmişse; 13 B
+accept; yeniden proof'a aynı CID; iki oturum, ilgisiz iki CID; göç kapalı
+ya da eski istemci → 5 B accept; göç kapalı kapıda etiketli datagram
+bilinmeyen tür), `udp::demux::tests::migrate` (kendi adresinden etiketli
+datagram yönlenir; bilinmeyen CID sayılır; tam göç: B'den girdi kabul,
+B'ye yalnız challenge, ACK A'ya, A çalışır, eşleşen yanıt taşır ve
+yazıcıya söyler; sahte kaynak yanıtlamaz → zaman aşımı, eski yol
+etkilenmez, yanlış nonce/adres eşleşmez; en yeni aday kazanır, başka
+oturumun adresi reddedilir; `limits`: 3× bütçe, dolu yazıcı kanalı
+taşımayı erteler, oturum sonu defteri, istemcinin göndermediği etiketli
+türler, yeni IP port-only değildir), `udp::writer::tests::path` (yeni
+port: gönderimler yeni adrese, tahmin korunur; yeni IP: RTT, oyun
+tahmini ve tıkanıklık sıfırlanır; bildirim oturum karesi sayılmaz),
+`udp::client::tests::migrate` (CID yalnız istenen accept'ten; sonrası
+hep etiketli — yeniden gönderim, rapor, ACK dahil; challenge yankısı;
+`rebind` soketi taşır, CID'siz reddeder), `udp::tests::migrate` (gerçek
+soket: istemcinin görmediği NAT yeniden bağlanması — iki bant iki yön
+akar, yeni el sıkışma yok, `udp_migrations = 1`, port-only; `rebind`;
+matrisin diğer köşeleri; `identity`: göç kapalı kapı, caps'li ya da
+caps'siz proof ve göç açık kapıda eski istemci — sunucunun her baytı
+aynı ve eski telin baytları), `gsb-server/tests/rudp_resume`
+(`a_migrating_rudp_session_survives_its_address_change`: el sıkışmasız,
+resume'suz, `closes 0`, registry `opens 1`; göç açıkken kaybolan
+istemci yine resume eder; yedi geri düşüş testi değişmeden yeşil).
+Testler uygulamanın iskeletinden sonra yazıldı; kırmızıları her kuralı
+tek tek bozarak gösterildi: **31 mutasyonun 31'i öldü** (her biri dosya
+karalama dizinine yedeklenip bozuldu, koşuldu, geri yüklendi):
+etiketli yönlendirmeyi kapatmak, challenge göndermemek, nonce'u ya da
+adresi denetlememek, yazıcıya söylemeden taşımak, doğrulamadan önce
+taşımak (karar 10), 3× bütçeyi kaldırmak, challenge'ı her datagram'da
+yollamak, zaman aşımını kaldırmak, bekleyeni değiştirmemek, başka
+oturumun adresini kabul, oturum sonunu deftere yazmamak, CID'yi göç
+kapalıyken ya da istenmeden vermek, yeniden proof'a CID'siz cevap,
+sıralı CID, istemcinin istemediği CID'yi alması, istemcinin
+etiketlememesi, challenge'ı yanıtlamaması, yazıcının eski adreste
+kalması, port değişiminde sıfırlamak, IP değişiminde sıfırlamamak
+(REL, oyun tahmini, tıkanıklık — üçü ayrı ayrı), bilinmeyen CID'yi
+saymamak, bildirimi oturum karesi saymak, port-only'yi hep saymak,
+`rebind`'in dürtmesini kaldırmak, caps baytını yanlış konumdan okumak,
+sunucunun `udp_migration`'ı kapıya iletmemesi (`rudp_resume`).
+
+*B89 ve B5a'ya kalanlar.* B89: kaynak başına el sıkışma/oturum sınırı
+göçte sayımı taşımalı — bugün registry'nin kaynak başına sayımı
+(D12) bağlantının ilk adresinde kalır, göç onu güncellemez; aktörün
+`peer`'i de ilk adres kalır (yalnız log/ihlal sinyali). B5a: CID'yi
+msg2'nin şifreli yükünde ver; etiketli düz metin yerine SEALED c→s
+(CID aynı konumda); göç kuralının üç koşulu (`Opener::open` Ok +
+`newest` + yol doğrulanmış), PATH_* şifreli iç tür olur; "en yeni aday"
+kuralı `newest` ile gerçek sıraya kavuşur; sonra `udp_migration`
+varsayılanı açılır.
+
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
 geçerli. Eskiden bütçe üstü çıkan datagram atılır + sayılırdı; oda
@@ -2763,7 +2988,8 @@ gönderim) — bant kendini iyileştirir; yeniden gönderilen eski snapshot
 sıradakinden değersizdir; (5) *sunucuda da birleştirme* (istemci → sunucu
 parçaları) — yukarıda; ihtiyaç yok, yüzey var.
 
-**Boşta kapatma (FIN yok):** demux'un `BTreeSet<(Instant, SocketAddr)>`
+**Boşta kapatma (FIN yok):** demux'un `BTreeSet<(Instant, SessionKey)>`
+(B3'ten beri oturumun iç anahtarıyla, adresle değil)
 deadline heap'i (gömlekli geçersiz kılma — girdi yalnız
 `son_görülme + idle`'e eşkenken geçerli) + `timeout(min_deadline,
 recv_from)`. Sweep, oturuma `ConnIn::ServerClosed` yollar ve oturumu
@@ -4190,7 +4416,7 @@ beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 | rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
 | rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
 | ~~rUDP: SO_RCVBUF ayarı yok~~ *(kapandı — B4: `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`, rUDP ve QUIC kapıları, `socket2` ile; yazılmazsa dokunulmaz — §6 "UDP kapılarının soket arabellekleri")* | — | — |
-| rUDP: NAT yeniden bağlanması = yeni el sıkışma + yeni `ConnectionId`; eski oturum idle sweep'e kadar yaşar (≤ `idle_timeout`) | stateless cookie, 4-tuple anahtarlı oturum | istemci tarafı reconnect + sunucu tarafı kimlik eşleme (auth katmanı) |
+| rUDP: **bağlantı göçü opt-in** *(B3: `udp_migration = true` — CID + yol doğrulaması, NAT yeniden bağlanması ve ağ değişimi oturumu bitirmez; varsayılan kapalı: yeni el sıkışma + resume, eski oturum idle sweep'e kadar)* | Kriptodan önce CID taşıyıcı jetondur: koklayan, challenge'ı yanıtlayıp s→c akışını kendine çekebilir (RUDP-SECURITY §3, §7) | B5a (mühürlü kayıt) — sonra varsayılan açık |
 | Oda kapasitesi **vardır**: `max_players` (vars. `Some(10_000)` = ölçülen duvar) + sunucu geneli `max_connections` (vars. `Some(100_000)`) | koruma katmanı (bu tur); semantiği: nazik reddi — oda dolu `ERROR 8` (bağlantı yaşar), cap `ERROR 9` + kapatma; çünkü sınır, ölçülen sayılara dayandı (C1 duvarı 9–10k), tahmine değil | sınırsız oda gerekirse `None` (0 = sınırsız) |
 | join/leave tick sınırında işlenir (≤ 1 tick gecikme) | CONTROL fazı determinizmi (bilinen tick'te spawn/leave) | v1'de kabul edilen özellik; gerekirse tick-içi hızlı yol |
 | Girdi kaybı **yalnızca göndericinin kendi kanalında** ve **atfeli**: connection actor `try_send` Full'u kendi metrik örneğinde sayar (`actions_dropped`, `actions_dropped_top`); odaya çeken READ fazı sınırlı çekmedir — bağlantı başına tick bütçesi 16 + oda çekme bütçesi 65536, oda çektiği aksiyonu asla atmaz | flooding bir bağlantı başkasının aksiyonunu evicted edemez (eski merged-list en eskiyi atıyordu); hasar saldırgana sınırlı | ~~sürekli (sn başına) rate-limit~~ opt-in olarak var (E1, §4 "Girdi HACMİ"): aşan girdi göndericinin aktöründe düşer, `input_rate_limited` sayılır |

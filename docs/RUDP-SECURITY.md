@@ -5,6 +5,9 @@
 >   yok, tokio yok) ve bu doküman. Testli, ama **rUDP'ye bağlı değil**.
 > - **Bağlama:** B5a (§12). O tura kadar rUDP bugünkü gibi düz metindir
 >   (BACKLOG B5).
+> - **B3 (2026-10-02):** kriptosuz CID ve göç yapıldı, opt-in
+>   (`udp_migration`); kind bayt haritası kesinleşti (§5, B109). Ne
+>   yapıldığı ve B5a'ya ne kaldığı: §7.
 >
 > Kaynak araştırma: x1 araştırma raporu (2026-10-02). Bu doküman onun
 > §4–§7'sini ve maintainer'ın 10 kararını sözleşmeye çevirir.
@@ -154,8 +157,22 @@ kind = 0x40 | anahtar fazı biti (0x01)
 - **İç datagram, bugünkü datagramın aynısıdır** (RAW/REL/ACK/FRAG/PROBE/
   REPORT ve B3'ün PATH_*'ı). Anlamları içeride değişmez.
   - B5a bütçeyi ek yük kadar küçültür: 1472 − 33 c→s, 1472 − 25 s→c.
-- **kind 0x40:** düz metin kind'ler 0..=8, B3'ün CID etiketi 0x80 biti.
-  Kesin değer B5a'da B3'ün düzeniyle teyit edilir.
+- **kind 0x40 — kesin (B3, B109 kapandı).** Kind bayt haritası:
+
+  | Aralık | Anlamı |
+  |---|---|
+  | `0x00..=0x3F` | Düz metin türler: `0` RAW, `1` REL, `2` ACK, `3` HELLO, `4` FRAG, `5` PROBE, `6` REPORT, `7` PATH_CHALLENGE, `8` PATH_RESPONSE; `9..=0x3F` boş |
+  | `0x40..=0x7F` | SEALED kayıt: `0x40 \| faz` (`0x40`, `0x41`); `0x42..=0x7F` boş |
+  | `0x80..=0xBF` | CID etiketli düz metin tür `0x80 \| k` (yalnız c→s, B3): `[0x80\|k][u64 cid][k'nın gövdesi]` |
+  | `0xC0..=0xFF` | Boş (SEALED etiket bitini almaz: CID'yi kendi başlığında taşır) |
+
+  - Etiketli düz metin ile SEALED c→s, CID'yi **aynı konumda** taşır
+    (bayt 1..9): demux iki biçimde de oturumu aynı yerden bulur.
+  - Ayrıklık ve konum eşitliği derleme zamanı `assert`'leridir
+    (`crates/gsb-net/src/udp/mod.rs`).
+  - Eski sunucu bilmediği türü düşürür ve `udp_datagrams_malformed`'a
+    sayar (`_ => bad_datagrams` kolu, oturuma dokunmaz); yeni istemci
+    zaten yalnız CID verilmişse etiketler.
 - **AAD = başlığın kendisi.** `Sealer::seal` başlığı kendisi yazar ve AAD
   olarak kullanır; başlık ile nonce ayrışamaz.
 - **Nonce:** Noise ChaChaPoly kodlaması: 4 sıfır bayt + sayaç (u64 LE).
@@ -262,6 +279,50 @@ adresini yalnız şu üçü birden doğruysa değiştirir:
 - **Opt-in** (karar 5). Çünkü orada CID taşıyıcı jetondur (§3).
 - Kripto gelince (B5a) varsayılan açılır.
 
+**B3'te yapılan (2026-10-02; ayrıntı ve gerekçeler DESIGN §6
+"Bağlantı göçü", kod `crates/gsb-net/src/udp/path.rs`):**
+- **Config:** `udp_migration = true|false`, varsayılan `false` (kapı
+  bayt bayt eskisi — testle kilitli).
+- **CID:** 64 bit, `getrandom` 0.4.3, oturum başına; entropi
+  başarısızsa oturum CID'siz kurulur ve sayılır, zayıf değer yok.
+- **Tel (eklemeli):**
+  - proof `[3][nonce][cookie][0][u8 caps]` (19 B; caps bit 0 = CID);
+  - accept `[2][u32 1][u64 cid]` (13 B; yeniden proof'a aynı CID);
+  - etiketli c→s `[k|0x80][u64 cid][gövde]`;
+  - `PATH_CHALLENGE [7][u64 nonce]` (s→c, 9 B);
+  - `PATH_RESPONSE [0x88][u64 cid][u64 nonce]` (c→s, 17 B).
+- **Kurallar:** yukarıdaki üç koşulun kriptosuz karşılığı yalnız 3.'sü
+  (yol doğrulaması) — 1. (kimlik) ve 2. (`newest`) B5a'nın. Doğrulanana
+  kadar s→c eski yolda (karar 10); doğrulanmamış adresten GELEN girdi
+  oturuma kabul edilir (RFC 9000 §9; kriptosuz bu, eski adresi
+  sahtelemekten fazlasını açmaz); challenge en çok 200 ms'de bir ve
+  yalnız aday konuştukça, ≤ 3× bütçe; doğrulama 3 sn'de zaman aşımına
+  uğrar; üçüncü adres bekleyeni değiştirir (en yeni aday — B5a'da
+  `newest` ile gerçek sıra); başka oturumun adresi aday olamaz.
+- **Yol tahmini:** yeni IP'de RTT, oyun bandı tahmini ve tıkanıklık
+  sıfırlanır (RFC 9000 §9.4); yalnız port değişimi korur.
+- **Sayaçlar:** `udp_cids_assigned`, `udp_entropy_draws_failed`,
+  `udp_cid_unknown`, `udp_path_validations_{started,timed_out,
+  superseded,open_at_end}`, `udp_path_challenges_{sent,send_failed}`,
+  `udp_path_amplification_capped`, `udp_path_address_in_use`,
+  `udp_path_responses_unmatched`, `udp_path_changes_not_forwarded`,
+  `udp_migrations`, `udp_migrations_port_only` (OPS §3).
+- **Amplifikasyon notu:** bugünkü boylarla 3× sınırı bağlamaz (aday
+  ≥ 9 B'lik datagram'la doğar, challenge 9 B, yeniden gönderim yalnız
+  adaydan yeni datagram'la); kural ve sayacı B5a'nın mühürlü boyları
+  için yerinde ve testli.
+
+**B5a'nın B3'ten devraldığı:**
+- CID'yi accept'in düz metin uzantısı yerine msg2'nin şifreli yüküne
+  taşı (`Accept`); caps baytı msg1'den önce kalır.
+- Etiketli düz metin yerine SEALED c→s (CID aynı bayt 1..9'da);
+  PATH_* şifreli iç tür olur; demux'ın yönlendirmesi değişmez.
+- Göç kuralına 1. ve 2. koşulu ekle (`Opener::open` Ok + `newest`):
+  "en yeni aday" kuralı numarasızdan sayaç sırasına geçer.
+- `udp_migration` varsayılanını aç (karar 5).
+- B89 önce gelir: kaynak başına sayımın göçte taşınması (bugün
+  registry'nin D12 sayımı ve aktörün `peer`'i ilk adreste kalır).
+
 ## 8. Stateless reset
 
 **Anahtar:**
@@ -342,7 +403,7 @@ Kripto bağlandıktan sonra (B5a) **mühürlü kip üretim varsayılanıdır**
 | Tur | Ne yapar |
 |---|---|
 | **x1 (bu tur)** | **Yapıldı:** `gsb_net::seal` çekirdeği (el sıkışma sarmalayıcısı, `Sealer`/`Opener`, replay penceresi, anahtar fazı, reset jetonu, SEALED başlık kodlaması) + bu doküman. **Bağlanmadı:** rUDP'nin hiçbir yolu bu modülü çağırmaz |
-| **B3** | Kriptosuz CID ve göç (opt-in): proof'a caps baytı, accept'te CID, etiketli c→s datagramı, PATH_CHALLENGE/RESPONSE, 3x bütçe, oturumlara iç anahtar + `addr→key` / `cid→key` indeksleri, writer'a `PathChanged`, `UdpClient::rebind()`, sayaçlar (`cid_unknown`, `path_*`, `migrations`). DESIGN/SECURITY'ye "kriptosuz CID = taşıyıcı jeton" notu |
+| **B3** | **Yapıldı (2026-10-02):** kriptosuz CID ve göç (opt-in `udp_migration`): proof'a caps baytı, accept'te CID, etiketli c→s datagramı, PATH_CHALLENGE/RESPONSE, 3x bütçe, oturumlara iç anahtar + `addr→key` / `cid→key` indeksleri, writer'a `UDP_PATH` (`PathChanged`), `UdpClient::rebind()`, 15 sayaç; kind haritası kesin (§5). Ayrıntı §7, DESIGN §6 "Bağlantı göçü" |
 | **B89** | Kaynak adres başına el sıkışma oranı ve oturum sınırı; göçte sayımın taşınması; DH'den önce global el sıkışma bütçesi. Kriptodan **önce** gelir: DH ve AEAD maliyetini o korur |
 | **B5a** | **Bu modülü bağlar:** msg1 proof'a, msg2 accept'e; SEALED kayıt; sunucu statik anahtarı config'den; `Sealer` writer'a, `Opener` demux'a; `Refusal` adları sayaçlara; göç kuralının üç koşulu; PATH_* şifreli iç kind; mühürlü kip varsayılan, düz metin dev/LAN anahtarı; demux'ta çözme CPU'sunun ölçümü (100k'da) |
 | **B5b** | Anahtar fazı politikası (ne zaman rekey; ACK → `note_peer_ack` eşlemesi), stateless reset (config anahtarı, reset datagramı, istemci kontrolü), opsiyonel CID rotasyonu / adres doğrulama jetonu |
