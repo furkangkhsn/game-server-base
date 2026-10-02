@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1891 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1900 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -286,6 +286,10 @@ B3'ün `UDP_PATH`'i). Oyun `TickCtx::budget/path` okur; kit
 `with_snapshot_budget`. Loadgen teli GSNO. Açık: faz 2 (rUDP yazıcısının
 yayımı), B117 (kayıt düzeyinde öncelikli inceltme — kullanıcı kararı),
 B118 (akış kapılarına `TCP_INFO`).
+
+**B103 tamam** (faz 2, CHANGELOG "B103 faz 2"): rUDP `"pace"`'te yazıcı
+`ConnIn::Path` yayar (yeni IP'de taze `Open`; `"off"`'ta hiçbir şey).
+Uçtan uca test `gsb-server/tests/path_budget.rs`. Açık: B104, B117, B118.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -989,6 +993,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1891 passed, 2 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1900 passed, 2 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

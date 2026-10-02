@@ -5,6 +5,26 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B103 faz 2 — rUDP yolu odaya söyler (`core/b103-path-signal`)
+
+- rUDP çekirdeğin `PathState`'ini doğrudan kullanır (`gsb_net::udp::PathState`
+  onun yeniden ihracı; ayrı tip ve dönüşüm yok). `udp_congestion = "pace"`
+  iken yazıcının her kararı (rapor, cevapsız halka) durumu `PathSignal`'e
+  sunar, haberi `ConnIn::Path` olarak aktöre `try_send` eder (dolu kutu →
+  en yenisi borçlu, sonraki kararda); yeni IP'de (B3, RFC 9000 §9.4) taze
+  `Open` söylenir; `"off"`'ta aktöre hiçbir şey gitmez (test).
+- Uçtan uca (`gsb-server/tests/path_budget.rs`): policer arkasında hızlanan
+  oturumun bütçesi oyunun `TickCtx`'ine varır (196–406 B/tick) ve
+  `SnapshotBudget`'lı kit `OpenRoom`'u kareleri tutar (`snapshots_withheld`
+  31); `"off"`'ta bütçe yok, tutulan 0.
+- B103 bitti (faz 1 + 2): taşıma (rUDP `"pace"`'te, QUIC her zaman) →
+  `ConnIn::Path` → aktör → oda → `TickCtx::{budget, path}` → kit
+  `SnapshotBudget`. Loadgen teli değişmedi (GSNO).
+
+Testler 1891 → 1900 (`otlp` ile 1909 → 1918). Ajanın mutasyonları
+yakalandı. Ebeveyn doğrulaması: tam kapılar yeşil; açık yolda da hız
+bildirmek altı testi düşürdü.
+
 ## B103 faz 1 — yol sinyali çekirdekte ve kit'te (`core/b103-path-signal`)
 
 Kullanıcı kararları (2026-10-02): (a) `PathState` gsb-core'da, taşımadan
