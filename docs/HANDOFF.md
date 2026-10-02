@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1679 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1710 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -207,6 +207,14 @@ eşlenir (sabit `udp` modülünde gizli) — o değişirse
 süreç donmasında tasarım gereği açık "kanıtsız koşu" mesajıyla düşer.
 Açık: F72 (duvar saatli idle penceresi — karar), F73, F74, F75 (rUDP'nin
 riskli testleri).
+
+**rUDP sertleştirme 2 tamam** (CHANGELOG "rUDP sertleştirme 2", DESIGN §6):
+`rel::HANDSHAKE_MAX_RTO` (200 ms) + `Rto::seed`; `udp::kernel` →
+`udp_datagrams_dropped_kernel`; `udp::feedback` (PROBE 5 / REPORT 6,
+`UdpClientConfig::game_reports` varsayılan açık, `UdpClient::connect_with`),
+`GameEstimate`, 14 `udp_game_*` sayacı, `op::base::UDP_REPORT = 13`,
+loadgen teli GSNJ. B85, B86, B87 kapandı; B1 tur 3'e daraldı. Açık: B91,
+B93, B94, B96. Altı paralel turun hepsi birleşti (2026-10-02).
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -910,6 +918,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1679 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1710 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

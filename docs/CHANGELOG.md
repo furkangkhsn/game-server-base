@@ -5,6 +5,66 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## rUDP sertleştirme 2 — B86 el sıkışma tavanı, B85 çekirdek kayıpları, oyun bandı geri bildirimi (B1 sinyalleri, B87) (`net/r2-feedback`)
+
+rUDP sertleştirme paketinin (E3) ikinci turu: tıkanıklık denetiminin (B1,
+tur 3) okuyacağı sinyaller.
+
+- **B86 — el sıkışma geri çekilmesine tavan (kullanıcı kararı (a)):** adım
+  zamanlayıcısı katlanır ama 200 ms'de durur (`rel::HANDSHAKE_MAX_RTO`);
+  REL bandı el sıkışmanın geri çekilmesini devralmaz (`Rto::seed`: yalnız
+  tahmin — temiz adımın örneği SRTT'yi yine tohumlar). Tel ve sunucu
+  değişmedi; bant içinde RFC 6298 aynı.
+- **B85 — çekirdeğin soket kayıpları sunucuda:** `udp_datagrams_dropped_kernel`
+  — kapının soketinin `/proc/net/udp{,6}` satırındaki `drops` (inode ile;
+  demux dışında saniyede bir okuyan küçük görev, `udp::kernel`). Yalnız
+  Linux; başka yerde 0. Yeni bağımlılık yok (`SO_RXQ_OVFL` ham setsockopt +
+  recvmsg isterdi).
+- **Oyun bandı geri bildirimi (EKLEMELİ, kullanıcı kararı (a)):** iki yeni
+  datagram türü — `5 PROBE [u32 id][u32 yankı µs]` (sunucu → istemci),
+  `6 REPORT [u32 id][u32 alınan oyun datagram'ı]` (istemci → sunucu); var
+  olan her bayt aynı. İstemci bağlanınca duyurur (`REPORT{0}`, en çok 3),
+  yalnız duyuran oturum saniyede bir sondalanır, istemci her sondayı
+  sayısıyla anında cevaplar; iki cevaplı sonda arası = kayıp (sırasız,
+  fazlalık taşınır), sondanın turu = RTT örneği — oturumun REL `Rto`'sunu
+  da besler, yankı istemcinin bandını besler (**B87 kapandı**). Doğrulama
+  oturum başına: geçersiz (hiç gönderilmemiş id — sıradaki dahil, sarma
+  dahil — ya da geri giden sayaç) / geç / kırpılmış, hepsi sayılır. Eski
+  istemci (ya da `UdpClientConfig { game_reports: false }`): sonda yok,
+  tel bayt bayt aynı. Eski sunucu: duyuruyu `udp_datagrams_malformed`'ta
+  sayar (oturum başına ≤3, oturum dokunulmaz — 95e6342'ye karşı
+  doğrulandı). Bedel: oturum başına her yönde 37 B/sn (IPv4). Tahmin
+  `feedback::GameEstimate` / `UdpWriter::game_estimate()` — davranış henüz
+  değişmedi.
+- **Sayaçlar:** 14 `udp_game_*` taşıma sayacı (duyuru, sonda
+  gönderilen/reddedilen/cevapsız/oturum sonunda açık, rapor
+  alınan/geç/geçersiz/kırpılan/iletilemeyen, raporlanan gönderilen/kayıp
+  datagram, RTT örnek sayısı/toplamı) + `udp_datagrams_dropped_kernel`;
+  `udp_datagrams_no_session` HELP'i REPORT'u da anar.
+  `gsb_protocol::op::base::UDP_REPORT = 13` (taşıma işareti). Loadgen teli
+  GSNH → GSNI → GSNJ (s1'in GSNG'sinin üstünde); `loadgen_smoke` yeni
+  anahtarları sabitler.
+- **Ölçüm (sakin makine, yük 2,9–4,9, `main` 6a00d31 üstünde):** varsayılan
+  arabellekte connect p99 357–557 ms (B2 sonrası 755–769, öncesi 149–216 —
+  adımlar 200 ms'ye dek hâlâ geri çekiliyor), `errors` ve bütün `errors_*`
+  0; sunucu soketinin kaybı sistem genelinin %82–84'ü; 4 MiB'de kayıp ve
+  yeniden deneme 0, p99 48–58 ms. Her oturum duyurdu ve sondalandı;
+  raporlanan kayıp 0.
+- Elenenler: tavanı config'e açmak, yalnız devralmayı kaldırmak;
+  `SO_RXQ_OVFL`, satırı demux'ta okumak; RAW/FRAG'a sıra no, RAW2, istemci
+  saatli rapor, duyurusuz sonda, ayrı RTT tahmini, raporu REL'de taşımak,
+  kayıp gauge'u.
+
+Testler 1679 → 1710 (`otlp` ile 1697 → 1728). Mutasyonlar B86 3/3, B85 4/5,
+geri bildirim 22'de 21 + sonradan eklenenler (sağ çıkanlar eşdeğer ya da
+"sessizliğe dek" testi isteyen davranış — B96). Ebeveyn doğrulaması: tam
+kapılar yeşil; ilk teslimde "sıradaki id'ye rapor" `late` sayılıyordu
+(`<=` mutasyonu sağ çıktı) — düzeltmede sarma kuralı da yanlış çıktı
+(sarmadan hemen önce gönderilen id'ler `invalid`); `was_sent` artık tam,
+iki yeni test; aralığı bir genişletmek ikisini de düşürür. DESIGN §5, §6
+("El sıkışma geri çekilmesinin tavanı", "Çekirdeğin soket kayıpları
+sunucuda", "Oyun bandı geri bildirimi", B2 ölçüm tablosu); OPS §3.
+
 ## t1 — F52 + F51 + B88: yükte güvenilir testler, loadgen istemcisinin pencereleri (`test/t1-load-flakes`)
 
 - **Yöntem:** iş parçacığı düzeyinde aç bırakma (`taskset -c 0,1` + 24
