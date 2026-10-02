@@ -5,6 +5,44 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## u89 — B89 + B113: rUDP kapısında kaynak başına bekleyen oturum sınırı, göçte kaynak; B110 ölçümü (`net/b89-udp-source-on-main`)
+
+- **B89 — rUDP kapısında kaynak başına sınır (isteğe bağlı).** Çerez el
+  sıkışması durum tutmaz; durum (ve B5a'dan sonra DH) doğrulanan proof'la
+  başlar. D11'in anahtarı `max_handshakes_per_source` (aynı anlam: bir
+  kaynağın bir kapıda ilk durumundan accept döngüsünün uç noktayı almasına
+  dek tuttuğu) rUDP'de bir kaynağın **bekleyen** oturumlarını sınırlar.
+  Vars. yok = kapı bayt bayt eskisi. Sınır üstü doğrulanmış proof hiçbir
+  şey kurmaz, kabul almaz, sayılır (`udp_proofs_refused_per_source`);
+  istemci yeniden yollar, yer açılınca girer. Bakış çerezden **sonra**: yol
+  dışı sahteci yer tutamaz, kurbanı reddettiremez. Sayım demux görevinde,
+  kilitsiz (`udp/demux/source.rs`, `Pending` düşünce yer geri döner);
+  `ConnOpened` alımdan sonra — D12 ile çift sayım yok. Sınır eşzamanlı
+  kuruluşları keser, DH **hızını** kesmez (B5a'nın küresel bütçesi, B119).
+  SECURITY §4.3.3.
+- **B113 — göç kaynağı taşır.** Doğrulanan göç bağlantı aktörüne de
+  söylenir (`ConnIn::PeerChanged`, yazıcıyla birlikte ya da hiç — iki
+  kanalda önce yer ayrılır): aktör `peer`'ini günceller, registry'ye
+  `ConnPeerChanged` yollar; registry satırın kaynağını (D12 sayımı), demux
+  bekleyen oturumun yerini taşır. Yeni kaynak sınırdaysa sayım eski
+  kaynakta kalır, göç yine olur ve sayılır (`unauth_source_moves_kept`,
+  `udp_pending_source_moves_kept`): dürüst oyuncu ölü yolda kalmaz, göç
+  sınırı delemez.
+- **B110 ölçüldü:** responder el sıkışması ~175–186 µs (yüklü 7950X),
+  çekirdek-saniyede ~5,5 bin; statik anahtarın yeniden türetilmesi ~%25.
+  `seal::tests::cost` (yok sayılan sonda — sayımda 3. ignored).
+- Üç yeni sayaç (iki taşıma, bir registry); iki golden bilerek güncellendi.
+  Loadgen teli **GSNP** (taşıma bölümü iki, registry bölümü bir `u64`
+  büyüdü; GSNO B103'ün). İstemci teli değişmedi.
+
+Testler 1900 → 1916 (`otlp` ile 1918 → 1934; ignored 2 → 3). 22
+mutasyonun 22'si yakalandı. Ebeveyn doğrulaması: ilk tam kapıda göç e2e
+testi yükte düştü — testin sıra varsayımı (rUDP oturumunun kaydı TCP
+denemesinden önce) motorca garanti değildi; test koşul beklemeye çevrildi
+(20 düz + 5 yüklü koşu yeşil). Ajanın `rebase`'i izin sisteminde
+reddedildi, commit'ler `main` üstüne cherry-pick edildi. Sınır
+karşılaştırmasını `>`'a kaydırmak iki testi düşürdü.
+
 ## B103 faz 2 — rUDP yolu odaya söyler (`core/b103-path-signal`)
 
 - rUDP çekirdeğin `PathState`'ini doğrudan kullanır (`gsb_net::udp::PathState`

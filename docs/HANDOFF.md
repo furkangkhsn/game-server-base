@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1900 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1916 test yeşil (3 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -290,6 +290,12 @@ B118 (akış kapılarına `TCP_INFO`).
 **B103 tamam** (faz 2, CHANGELOG "B103 faz 2"): rUDP `"pace"`'te yazıcı
 `ConnIn::Path` yayar (yeni IP'de taze `Open`; `"off"`'ta hiçbir şey).
 Uçtan uca test `gsb-server/tests/path_budget.rs`. Açık: B104, B117, B118.
+
+**u89 tamam** (CHANGELOG "u89"): rUDP'de `max_handshakes_per_source`
+bekleyen oturumu sınırlar (çerezden sonra); göç aktörün `peer`'ini
+(`ConnIn::PeerChanged`), registry'nin D12 sayımını (`ConnPeerChanged`) ve
+demux'ın bekleyen yerini taşır, dolu kaynağa sayım taşınmaz. B110: ~180
+µs / el sıkışma. Loadgen teli GSNP. Açık: B119–B122; sıradaki B5a.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -993,6 +999,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1900 passed, 2 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1916 passed, 3 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
