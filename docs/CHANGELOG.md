@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## x1 — rUDP kripto çekirdeği (`net/x1-seal-core`)
+
+rUDP güvenlik kararının (2026-10-02, kullanıcı: Noise + kendi kayıt
+katmanı, DTLS kütüphanesi değil; araştırma ve 10 karar
+`docs/RUDP-SECURITY.md`) çekirdeği; **rUDP'ye bağlı değil** (bağlama B5a).
+
+- `gsb_net::seal` (sans-IO): Noise `NK_25519_ChaChaPoly_BLAKE2s` el
+  sıkışması (`snow` 0.10, varsayılan özellikler kapalı — varsayılanı
+  `ring` çekiyor); DH yalnız çerez doğrulandıktan sonra (`Msg1::parse` →
+  `cookie_verified`); msg2'de şifreli `{cid, reset jetonu}`; sahte accept
+  el sıkışmayı bitirmez.
+- Kayıt: ChaCha20-Poly1305, yön başına anahtar (`Sealer`/`Opener`, ortak
+  durum yok), 64-bit sayaç = nonce (tavan 2^62), başlık = AAD (`seal`
+  başlığı kendisi yazar), 1024'lük replay penceresi (AEAD geçtikten sonra
+  işaretlenir), anahtar fazı (Noise REKEY; karşı tarafın onayı ve pencere
+  mesafesi şart; bir önceki anahtar için tolerans), bütünlük sınırı 2^36;
+  her ret ayrı ad (`Refusal`, `seal_*`).
+- Stateless reset jetonu `HMAC-BLAKE2s(anahtar, cid)[..16]`, sabit zamanlı
+  karşılaştırma; SEALED başlık kodlaması (c→s 33 B, s→c 25 B ek yük;
+  `KIND_SEALED` 0x40 geçici — B3'ün CID biti ile teyit, B109).
+- Yeni bağımlılıklar saf Rust: snow, chacha20poly1305, blake2, hmac
+  (+ subtle, zeroize zaten vardı); `cargo tree -i ring` → `ring` yalnız
+  mevcut quinn/rustls yolundan, snow'dan değil. Kodumuzda `unsafe` yok.
+- Test dışı kod ~690 satır (hedef 300–600; kayıt yolu ~320).
+- Tasarım: `docs/RUDP-SECURITY.md` (karar, 10 karar, tehdit modeli, SEALED
+  düzeni, göç kuralı, reset, rekey, inceleme kapsamı, tur sırası B3 → B89
+  → B5a → B5b → B7).
+
+Testler 1777 → 1811 (`otlp` ile 1795 → 1829): RFC 8439 ve cacophony NK
+vektörü (kendi sarmalayıcımızdan), seeded model testi (3 tohum × 20k
+adım, yeniden sıralama/çoğaltma/sahte/rekey); 16/16 mutasyon yakalandı.
+Ebeveyn doğrulaması: tam kapılar yeşil; başlığı AAD'den çıkarmak bit-flip
+testini düşürdü.
+
 ## rUDP sertleştirme 3 — tıkanıklık tepkisi (B1), B91, B93, B96, F75 (`net/r3-congestion`)
 
 rUDP sertleştirme paketinin (E3) üçüncü turu: tur 2'nin sinyallerine tepki.

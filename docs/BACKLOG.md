@@ -75,7 +75,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | Madde | Tetikleyici | Kaynak |
 |---|---|---|
 | B3 rUDP'de NAT yeniden bağlanması oturumu bitiriyor | E3 | udp/mod.rs:316, DESIGN:1219 |
-| B5 rUDP kripto yok | — (v1 kapsam dışı) | udp/mod.rs:328, SECURITY:19 |
+| B5 rUDP kripto — **çekirdek x1'de yapıldı** (`gsb_net::seal`, `docs/RUDP-SECURITY.md`; karar 2026-10-02: Noise NK + kendi kayıt katmanı); kalan: B5a bağlama (B107), B5b faz/reset/rotasyon (B108) | B3 + B89 sonrası | RUDP-SECURITY §12 |
 | B7 rUDP üstünde reconnect/resume e2e'si — düz metin yarısı TAMAM (e1: `rudp_resume.rs`, 7 test); kalan: aynı akışlar B5 (Noise) indikten sonra şifreli kanaldan; B3 göç beklentisini (`flows.rs`: göç eden oturum el sıkışmasız, resume sayılmaz, `closes 0`) ekler | B3 / B5 | RECONNECT §5 "rUDP üstünde resume (B7, düz metin)" |
 | B8 QUIC rehome (REHOME çerçevesi, relay, 0-RTT) | çok makineli dağıtım | DISTRIBUTED:167-193 |
 | B9 Süreçler arası oturum relay'i | A2 / iki makine | DISTRIBUTED:147-165 |
@@ -103,6 +103,11 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B104 `udp_congestion` varsayılanını `"pace"`'e çevirme — önce titreşimli gerçek yolda (netem/Wi-Fi/hücresel) sahte gecikme sinyali ölçümü ve B103 | ölçüm + karar | DESIGN §6 "Tıkanıklık tepkisi" |
 | B105 Sunucunun kendi çıkışı darboğazken (100k) oturumlar arası adalet ölçülmedi; soket genelinde DRR elendi | düşerse | DESIGN §6 "Tıkanıklık tepkisi" karar 6 |
 | B106 Hızlıyken REL yeniden gönderiminin kovadan düşülmesi testsiz (mutasyon sağ) | düşerse | `udp::writer::reliable` |
+| B107 B5a: NK msg1 → proof, msg2 → accept; SEALED kayıt; sunucu statik anahtarı config'de (yoksa başlatma hatası); `Sealer` writer'a, `Opener` demux'a; `Refusal` sayaçları; göç = doğrulanmış + `newest` + yol doğrulanmış; mühürlü varsayılan, düz metin dev/LAN anahtarı; demux çözme CPU'su 100k'da ölçülecek | B3 + B89 | RUDP-SECURITY §4–§7, §9 |
+| B108 B5b: rekey politikası (ACK → `note_peer_ack` eşlemesi); stateless reset (config anahtarı, reset datagramı daha kısa ve oranlı, istemci sabit zamanlı kontrol; sayaç adı kararı — `seal_stateless_reset`); opsiyonel CID rotasyonu ve adres doğrulama jetonu | B5a | RUDP-SECURITY §6, §8, §10 |
+| B109 SEALED kind değeri (0x40, faz biti 0x01) B3'ün 0x80 CID etiketiyle teyit | B3/B5a | RUDP-SECURITY §5 |
+| B110 Sunucu el sıkışma başına 4 X25519 (snow statik açık anahtarı her responder kurulumunda yeniden türetiyor) — ölç; gerekirse `clatter` ya da kendi NK | B89/B5a | RUDP-SECURITY §4 |
+| B111 C# portu için SEALED test vektörleri (cacophony NK + bizim başlık/AAD vektörlerimiz) | C# istemci başlarken | RUDP-SECURITY §11.5 |
 
 ### C. Dağıtık, kalıcılık, ufuk
 
@@ -134,6 +139,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | D8 Ticket odası bağlantı ömrü boyunca sabit | — | RPC-CONTROL-PLANE:467 |
 | D9 Conn tarafında RPC kapısı | — | RPC-CONTROL-PLANE:476 |
 | D10 Bağlantı başına RPC geçmişi | — | RPC-CONTROL-PLANE:465 |
+| D13 rUDP kayıt katmanının dış güvenlik incelemesi (kullanıcı kararı 8; kapsam RUDP-SECURITY §11) | B5a bitince | RUDP-SECURITY §11 |
 
 ### E. Kullanıcı kararı bekleyenler (tek başına verilmez)
 
@@ -169,7 +175,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | F77 Duvar saatli diğer son tarihler — odanın girdi-boşta tavanı (tick saati), detach park süresi, el sıkışma son tarihleri, `AUTH_WINDOW` — süreç takılmasında aynı anda dolabilir; dakikalık tavanlar için risk düşük | ölçüm ihtiyacı doğarsa | DESIGN §3 "Geç ateşlenen son tarih" |
 | F78 `reports_torn_at_cut_grace` loadgen `RESULT`'unda yok (tel taşıyor, katlama okumuyor) | bir ölçüm turu isterse | OPS §3 (F70) |
 
-(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında; küçük paket 4'te B44, B45, F24 kapandı; F6 kendi turunda, E9 kararla kapandı; küçük paket 5'te B33, B34, B39, B46; E8 kendi turunda, yan bulgusu B48 (shard girdi-boşta saati göçte taşınmıyordu) aynı turda kapandı; B43 kendi turunda, küçük paket 6'da B37, B47; F27 ve B36 kendi turlarında; küçük paket 7'de F1, F4; sayım turunda B32, B51; B52 kendi turunda; sayım turu 2'de B53–B57; B61 kendi turunda; küçük paket 8'de B63, B64; sayım turu 3'te B58, B59, B60, B62; B65 kendi turunda; sayım turu 4'te B66, B67, B68; B71 kendi turunda; sayım turu 5'te B72, B73, B74; sayım turu 6'da B75, B80; F25 kendi turunda; B82, B83 sayım turu 7'de; F31 ve F32 kendi turlarında; F35 turunda F33, F35, F40; F41 kendi turunda; F30, F34 ve F50 aynı turda (+ tarama); F53 kendi turunda; sayım turu 8'de F54, F55 (kararla), F56, F57; B50 ölçüm turunda; temizlik paketinde A12, F2, F58, F59; B84, F61, F63 ve F62 kendi turlarında; A8, A5, A7 ve A9 kit hattının dört turunda; B81 ve F26 g1 turunda; D11 ve B49 s1 turunda; F60, F28 ve B30 c1 turunda; F29 ve F64 m1 turunda; F52 (rUDP dışı, F75 kaldı) ve B88 t1 turunda, F51 ve B14 daraldı; B85, B86, B87 rUDP hattının ikinci turunda (B1 tur 3'e daraldı); D12 ve B90 s2 turunda; B15 ve F66 w1 turunda; F72, F65 ve F70 c2 turunda (F73 daraldı); B7 düz metin yarısı e1 turunda; B1, B91, B93, B96 ve F75 rUDP hattının üçüncü turunda; B4 ve B2 rUDP hattının ilk turunda kapandı.)
+(A6 ve F3 küçük pakette, A26 W2'de, F8, F11 ve F14 kendi turlarında kapandı; B12/B13, B19 ve B25 §B'den kendi turlarında; küçük paket 2'de B24, B26, B27, F10, F13; F9 ve B29 kendi turlarında; küçük paket 3'te B6, B16, F15, F16, F17; B31, F18, F5, B18, B23, E2, E1+F21, E6, B40, B41 ve F23 kendi turlarında; küçük paket 4'te B44, B45, F24 kapandı; F6 kendi turunda, E9 kararla kapandı; küçük paket 5'te B33, B34, B39, B46; E8 kendi turunda, yan bulgusu B48 (shard girdi-boşta saati göçte taşınmıyordu) aynı turda kapandı; B43 kendi turunda, küçük paket 6'da B37, B47; F27 ve B36 kendi turlarında; küçük paket 7'de F1, F4; sayım turunda B32, B51; B52 kendi turunda; sayım turu 2'de B53–B57; B61 kendi turunda; küçük paket 8'de B63, B64; sayım turu 3'te B58, B59, B60, B62; B65 kendi turunda; sayım turu 4'te B66, B67, B68; B71 kendi turunda; sayım turu 5'te B72, B73, B74; sayım turu 6'da B75, B80; F25 kendi turunda; B82, B83 sayım turu 7'de; F31 ve F32 kendi turlarında; F35 turunda F33, F35, F40; F41 kendi turunda; F30, F34 ve F50 aynı turda (+ tarama); F53 kendi turunda; sayım turu 8'de F54, F55 (kararla), F56, F57; B50 ölçüm turunda; temizlik paketinde A12, F2, F58, F59; B84, F61, F63 ve F62 kendi turlarında; A8, A5, A7 ve A9 kit hattının dört turunda; B81 ve F26 g1 turunda; D11 ve B49 s1 turunda; F60, F28 ve B30 c1 turunda; F29 ve F64 m1 turunda; F52 (rUDP dışı, F75 kaldı) ve B88 t1 turunda, F51 ve B14 daraldı; B85, B86, B87 rUDP hattının ikinci turunda (B1 tur 3'e daraldı); D12 ve B90 s2 turunda; B15 ve F66 w1 turunda; F72, F65 ve F70 c2 turunda (F73 daraldı); B7 düz metin yarısı e1 turunda; B1, B91, B93, B96 ve F75 rUDP hattının üçüncü turunda; B5'in çekirdeği x1 turunda; B4 ve B2 rUDP hattının ilk turunda kapandı.)
 
 ## 3. Belge bayatlıkları (tarama 2026-09-25)
 

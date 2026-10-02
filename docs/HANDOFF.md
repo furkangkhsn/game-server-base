@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1777 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1811 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -262,6 +262,13 @@ interval_sent_bytes}`. Ölçüm düzeneği `udp::tests::pace::{relay, measure}`
 (`--ignored`). Loadgen teli GSNM. B1, B91, B93, B96, F75 kapandı. Açık:
 B103 (sinyali oyuna taşı — 4 karar), B104 (varsayılanı `"pace"`'e
 çevirme), B105, B106.
+
+**x1 tamam** (CHANGELOG "x1"): rUDP güvenliğinin çekirdeği
+`crates/gsb-net/src/seal/` içinde ve testli, ama rUDP onu henüz
+çağırmıyor. Sözleşme `docs/RUDP-SECURITY.md`: 10 kullanıcı kararı, tehdit
+modeli, SEALED düzeni, göç kuralı, tur sırası. B5a bu modülü değiştirmeden
+bağlamalı; değişiklik gerekirse doküman ve testler birlikte güncellenir.
+İkinci paralel dalga (r3, c2, w1, s2, x1, e1) birleşti (2026-10-02).
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -965,6 +972,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1777 passed, 2 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1811 passed, 2 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
