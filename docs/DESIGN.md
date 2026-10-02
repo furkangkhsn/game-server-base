@@ -982,6 +982,30 @@ duran sunucu, başarısız bir koşudur; orkestratör sunucuyu istemcilerden
 istemci-başına atıf isteyen bir ölçüm (hangi istemci döküldü) — o gün
 `Error`'a toplamalı bir sebep alanı (`ServerClose` indeksi).
 
+**Loadgen'in kendi `errors`'ı sebebe göre (B88).** Kapanışlar yine
+sunucunun sayacında; ama istemcinin `errors` dediği şey artık tek sayı
+değil: `RESULT` ve `CLIENT` satırlarında her sebep kesin adıyla, sıfırken
+de (`errors=` toplamlarının hemen ardından, eklenen anahtarlar):
+`errors_not_in_room` (kod 6 — oturum odada değilken okunan oyun/RPC
+karesi), `errors_other_code` (sınıflanmayan her kod; ileri-uyumluluk
+kolu, 14 dahil), `errors_bad_snapshot` (görünümün reddettiği snapshot),
+`errors_bad_private` (reddedilen ya da RPC cevabı da taşımayan boş
+private), `errors_connect_failed` ve `errors_empty_frame` (churn).
+`errors` bunların toplamı (orkestratör `CLIENT` satırında eşitliği
+doğrular). Loadgen'in metrik teli değişmedi (anahtarlar istemcinin).
+B88'in kendisi: istemci girdiyi JOIN cevabından önce yollamaz (rUDP'de
+kayıplı oyun bandı güvenilir JOIN'i geçiyor, `NotInRoom` → `errors`, 1000
+istemcilik fırtınada 49–114); yalnız oturan istemci LEAVE yollar; JOIN'in
+(son tarihten sonra) ve LEAVE'in cevabı `PROTOCOL_WAIT` = 5 sn beklenir —
+rUDP'nin canlılık sınırı (`REL_NO_ACK_FATAL`, ≥ 4 × `MAX_RTO`, §6):
+taşıma LEAVE'i o ana dek yeniden yolluyor; eski 500 ms bir `MAX_RTO`'nun
+yarısıydı. Bekleme istemcinin KENDİ bekleme süresiyle ölçülür (100 ms'lik
+dilimler, dilim en çok kendi uzunluğu kadar sayılır): aç kalan ya da
+donan istemci cevabı soketinde dururken vazgeçmez (F35 aç bırakmasında
+sunucu 12 join/12 leave sayarken istemci `joined=5 left=3`, bir koşuda
+`joined=0` diyordu — F51). `client/wait.rs`, `client/errors.rs`,
+`client/view/run/end.rs`.
+
 ### 5.7 İstemci yapı taşı: `gsb-client` (BACKLOG B19)
 
 **Sorun.** Sunucunun istemci yarısı bir yapı taşı değildi, kopyaydı:

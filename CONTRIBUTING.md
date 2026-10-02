@@ -91,7 +91,7 @@ korunur** — bu kelimeleri string'e bile yazma.
 
 `#[ignore]` ekleme, test silme ya da testi gevşetme yok.
 
-## Gerçek saatli testler (BACKLOG F23, F25, F30, F34)
+## Gerçek saatli testler (BACKLOG F23, F25, F30, F34, F52)
 
 Yükte düşen testlerin ortak kalıbı: gerçek saatte sabit bir pencere
 ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
@@ -181,6 +181,38 @@ ve içinde zamanlayıcının kaç kez uyandığına bağlı bir sayım. Kural
   aç kalan oda dürüstçe uzun adım bildirir; smoke yalnız biçimini sınar
   (histogramın üretebileceği bir değer: kutu alt kenarı ya da tavan) —
   maliyeti elle ölçüm koşuları raporlar (F34: `step_p*_fine_us`).
+- **Sessizlik penceresi yerine çit** (F52): "bir cevap, sonra 400 ms
+  hiçbir şey" yerine aktörün önündeki her kareyi işledikten sonra
+  yolladığı bir kareye (AUTH sonucu, puansız bir `ERROR`, aktörün sonu)
+  kadar okunur — patlamanın aldığı her şey çitten öncedir. Saniyede bir
+  cevaplayan kısma yapısıyla sınanır: `span` içinde işlenen patlama en
+  çok `1 + ⌊span / 1 sn⌋` cevap alır (takılmasız koşuda tam bir); "ya
+  cevaplandı ya sayıldı" ACK'in yankıladığı tick'le kesin eşitliktir
+  (`security.rs`, `conn_counts/heartbeats.rs`).
+- **Sunucunun sözü istemcinin saatinden önce gelir** (F52): "X süre
+  içinde gitti" üst sınırı yerine sunucunun kendi sayacı `/metrics`'ten
+  okunur (`hosted/ops.rs::until_metric`: tavanın ezdiği hold
+  `gsb_room_detach_forced_total`, park `gsb_room_detached`); bir
+  sessizlik (gelmedi, kaldı) ancak yaşandığı kanıtlanan pencerede
+  okunur — iki shard'ın da numaralı girdiyi onaylaması ve en az 500 ms
+  (`war_e2e`), sunucunun parkı sayması ve ardından bir saniye.
+- **Testin kendi son tarihi yarışılan şeyse cömerttir** (F52): resume'un
+  yarıştığı çıkış sayacı 1 sn değil 5 sn (`mmo_home`); sayaç "olur mu"
+  sorusunu değil "ne zaman"ı taşıyorsa koşul olarak beklenir.
+- **Kanalın son örneği kanalın kapanışıyla** (F52): "500 ms sessizliğe
+  dek topla" yerine üreticinin son göndericisi düşene dek okunur
+  (`ws/tests/closed_door.rs`); süre yalnız asılma korumasıdır.
+- **Takılmayı elle sok** (F52): `std::time::Instant` ile çalışan bir
+  pencere (heartbeat kısması, metrik flush'ı) süreç dondurmayla nadiren
+  tam ortasından yakalanır; geçici bir `sleep` ile takılma testin içine
+  sokulur, eski ve yeni test aynı yamayla koşar.
+- **Süreç içi loadgen testi, iddiası olmayan pencereyi kapatır** (F52):
+  sunucu ve istemciler aynı süreçte; süreç pencereden uzun takılırsa
+  (swap) her oturum "boşta" kapanır. `loadgen_rpc` `--idle-timeout-secs
+  0` ile koşar; pencere iddia olduğu yerde sınanır. Loadgen istemcisinin
+  protokol beklemeleri (son tarihten sonra JOIN'in cevabı, LEAVE'in
+  cevabı) kendi bekleme süresiyle ölçülür (`client/wait.rs`: 100 ms'lik
+  dilim en çok kendi uzunluğu kadar sayılır).
 - Yeni gerçek saatli bir test yük altında denenir: 32 çekirdekte
   `for i in $(seq 30); do sh -c 'while :; do :; done' & done`, sonra
   `cargo test --workspace --no-fail-fast` birkaç kez (ve

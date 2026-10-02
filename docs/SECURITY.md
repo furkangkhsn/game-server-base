@@ -86,6 +86,22 @@ yeniden sarar). Yani cevapsız bırakılan bir heartbeat göndericisini asla
 cevapladığından dört kat hızlı heartbeat atan istemci
 beş saniye boyunca hiç kapatılmıyor, ve ack sayısı İKİ taraftan da
 doğrulanıyor (hâlâ cevaplanıyor; artık gönderim hızıyla 1:1 değil).
+İstemci bir sonraki heartbeat'inden fazla beklemez ve kendi en büyük
+gönderim boşluğunu ölçer: pencere kadar susmuş bir istemcinin
+kapatılması (donan bir koşu) sunucu hatası değil, açık mesajla
+"kanıtsız koşu"dur (BACKLOG F52).
+
+**Kısmanın testleri yapıyla (F52).** `security.rs`'nin üç
+heartbeat testi ve `conn_counts/heartbeats.rs` "bir ACK, sonra 400 ms
+sessizlik" okumaz: patlamanın ne aldığı bir ÇİTE kadar okunur (AUTH
+sonucu, kaydı olmayan JOIN'in puansız `ERROR`'u, aktörün sonu — aktör
+onları ancak önündeki her kareyi işledikten sonra yollar) ve cevaplar
+kısmanın kendi sınırına göre sayılır: cevaplanan heartbeat'ler en az bir
+aralık arayla, yani `span` içinde işlenen patlama en çok `1 + ⌊span /
+1 sn⌋` cevap alır — takılmasız koşuda tam bir. Sayaç testi her
+heartbeat'in ya cevaplandığını (ACK kendi tick'ini yankılar) ya da kendi
+fazının sayacında sayıldığını kesin eşitlikle sınar. Bir saniyelik
+takılma elle sokulunca eski testler 3/3 düştü, yenileri 3/3 geçti.
 
 **Saat tek, sayaç iki.** Saat tek çünkü kısma tek bir hız sınırlayıcıdır;
 auth başarısında BİR kez sıfırlanır (§3.3 frame bütçesini emekliye ayıran

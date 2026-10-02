@@ -1242,7 +1242,13 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
 
 ## 4. Test planı
 
-1. `healthz_reports_ok_while_ticker_runs` / liveness 503 dalı
+1. `healthz_reports_ok_while_ticker_runs` / liveness 503 dalı —
+   `healthz_answers_503_before_the_first_report` "ilk rapordan önce"yi
+   kanıtlar: toplayıcının ilk raporu kurulduktan bir periyot (1 sn)
+   sonra, kurulum `t0`'dan sonra; `t0`'dan bir periyottan kısa sürede
+   okunan cevap rapor yokken verilmiştir. Başlatıp yoklaması bir periyodu
+   aşan (aç) koşu kanıtsızdır, yinelenir; iddia kanıtlı ilk koşuda aynen
+   sınanır (BACKLOG F52, F30 kalıbı)
 2. `metrics_endpoint_exposes_known_counters` — bilinen bir sayacı
    artıran senaryo + scrape'ta görünürlük
 3. `admin_open_status_close_round_trip` — runtime oda yaşam döngüsü

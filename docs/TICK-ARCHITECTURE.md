@@ -335,8 +335,9 @@ göredir:
   böyle çevrildi: ikisi de beslemenin uykusu 45/70 ms'ye uzatılınca eski
   hâliyle düşer, yenisiyle 150 ms'de bile geçer.
 - *Test düzeneğinin sahte ucu* ölçülen kodun gerçek-zamanlı penceresinin
-  darboğazı olmamalı: loadgen istemcisi LEAVE'in cevabını sabit 500 ms
-  bekler; `client::accounting` testinin sahte WS peer'ı flood'u
+  darboğazı olmamalı: loadgen istemcisi LEAVE'in cevabını o gün sabit
+  500 ms bekliyordu (F51/B88'den beri kendi bekleme süresiyle 5 sn,
+  `client/wait.rs`); `client::accounting` testinin sahte WS peer'ı flood'u
   tamponsuz (kare başına üç okuma) okuduğu için ~200 bin karelik
   birikimi o pencerede eritemiyordu (`left = false`, yükte ~%11).
   Tamponlu okuyan peer flood'a yetişir; LEAVE gönderildiği an okunur.

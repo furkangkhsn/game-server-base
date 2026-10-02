@@ -1026,6 +1026,27 @@ Kilit: `tests/loadgen_serve.rs::a_served_server_nobody_reads_still_exits`
 (`--duration 1`, kimse bağlanmaz; önce kırmızı: 21 sn'lik asılma
 korumasına takıldı; sınırı 3600 sn yapan mutasyon da).
 
+**Testlerde idle penceresi kapalı (F52).** `loadgen_rpc.rs`'nin
+koşuları `--idle-timeout-secs 0` ile: her oturumu istemcisi bitirir
+(defterin bağlantı terimleri 0 iddia edilir), pencere yalnız yanlış
+ateşleyebilir. Süreç içi sunucu ve istemcileri aynı süreçtir; pencereden
+(30 sn) uzun süren bir süreç takılması (swap, iki tam kapı aynı anda)
+her pump'ı idle son tarihi dolmuş uyandırır — dört oturum idle diye
+kapanır, her ayrılış kaybolur: A7'nin son koşusundaki `left=0
+server_close_idle_timeout=4`. Loadgen'i 2 sn'lik pencereye karşı 3 sn
+dondurmak bunu her seferinde üretir (3/3); pencere kapalıyken 3/3
+`left=4`. Pencere iddia olduğu yerde (e2e, pump testleri) sınanır.
+Aynı turda iki gecikme iddiası da yük altında düşüyordu (aç sunucu
+12 Hz'de cevabı 800 ms'ye dek geciktirdi; tam ikilinin beş koşusunun
+üçü): `the_rooms_ledger_covers_the_end_of_the_run` oda defterini TAM
+okur (`req_ext + req_rej_conn + req_unread = rpc_sent`; 10/s'de 400 ms'yi
+aşan cevap dört bekleyen sınırına çarpar, ret iki tarafta aynı sayılır);
+`every_request_is_answered_once_at_a_sane_rate`'in "makul hız"
+iddiaları (istemci başına en çok bir uçuşta, ret yok, istek sayısı)
+koşunun kendi kanıtından okunur — en yavaş cevap istek aralığının
+(200 ms) içindeyse; değilse koşu yinelenir, üç kanıtsız koşu gecikmeyi
+söyleyerek düşer. İki defter her koşuda kesin eşitlikle sınanır.
+
 ### 8.3 Ayrılışta okunmamış istekler ve oda defterinin kapanışı (B36)
 
 §8.2'nin açık kalan boşluğu: 200'lük uzun duraklama koşusunda 62 istek

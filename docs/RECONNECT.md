@@ -630,7 +630,10 @@ oyuncu, yönlendiricinin onun kaydı için seçeceği shard'da değil, park
 edildiği shard'da devam eder; park bittiyse taze join kaydına iner.
 Kilit: `gsb-server/tests/mmo_home.rs::a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save`
 (kaydı shard 1'de, park'ı shard 2'de olan karakter shard 2'de resume
-ediyor; çıkıştan sonra shard 1'e taze join).
+ediyor; çıkıştan sonra shard 1'e taze join). Testin çıkış sayacı 5 sn:
+resume'un yarıştığı son tarih odur (kopuş, 300 ms, yeni bir
+bağlan-auth-join); 1 sn'lik sayaçla 1,2 sn'lik donmada her koşu taze
+join'e düşüyordu (BACKLOG F52).
 
 **Duran odada resume (B71).** Dağıtıcı her shard'ın cevabını bir
 toplama kanalına (`agg_tx`) aktaran küçük görevlerle bekler; cevap başına
@@ -1767,7 +1770,12 @@ gibi diğer oda anahtarlarını) almıyordu. Artık runtime oda da aynı
 geçersiz kılma `tick_hz` (OPS §2). Kilit:
 `tests/mmo_rooms.rs::a_runtime_room_gets_the_server_ceiling` (aynı
 senaryo `/rooms/open` ile açılan odada: düzeltmeden önce savaş
-penceresi boyunca, 6,03 sn tutuldu).
+penceresi boyunca, 6,03 sn tutuldu). İkisi de "tavan ezdi"yi istemcinin
+saatinden (`gone < 3,5 sn`) değil odanın kendi sayacından okur:
+çıkıştan sonra `gsb_room_detach_forced_total` (odanın shard satırlarının
+toplamı) tam 1 — aç bırakılan sunucu kopuşu ve çıkışı geç gösterir,
+tavanı geç uygulamaz; donmada 5,1 sn ile düşüyordu (BACKLOG F52).
+`gone ≥ 900 ms` (grace kısalmaz) alt sınır olarak kaldı.
 
 **§16 ile ilişki.** İki tavan bağımsızdır: girdi-boşta tavanı üyeyi
 `on_disconnect`'e verir; politikanın başlattığı hold her hold gibi
