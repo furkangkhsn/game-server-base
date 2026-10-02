@@ -194,9 +194,9 @@ gsb_transport_udp_sessions_dropped_accept_gone sum t=2 mono=true unit="" n=1 | r
   [] 1000..2000 int 38
 gsb_transport_udp_sessions_unaccepted_closed sum t=2 mono=true unit="" n=1 | Established rUDP sessions (their accept sent) whose endpoint was still queued for the accept loop when the listener closed or went away: dropped, never a connection, cumulative.
   [] 1000..2000 int 39
-gsb_transport_ws_going_away_unsent_closed sum t=2 mono=true unit="" n=1 | WebSocket teardown closes (1001 Going Away) never queued because the socket writer had already stopped on a failed socket write, cumulative.
+gsb_transport_ws_teardown_closes_unsent_closed sum t=2 mono=true unit="" n=1 | WebSocket teardown closes (the server's own close at the end of a session, whatever its code: 1001, 1008 or 1013) never queued because the socket writer had already stopped on a failed socket write, cumulative.
   [] 1000..2000 int 40
-gsb_transport_ws_going_away_unsent_stalled sum t=2 mono=true unit="" n=1 | WebSocket teardown closes (1001 Going Away) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.
+gsb_transport_ws_teardown_closes_unsent_stalled sum t=2 mono=true unit="" n=1 | WebSocket teardown closes (the server's own close at the end of a session, whatever its code: 1001, 1008 or 1013) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.
   [] 1000..2000 int 41
 gsb_transport_ws_close_frames_dropped_closed sum t=2 mono=true unit="" n=1 | WebSocket close frames (the close echo or a protocol-failure close) the reader could not queue because the control queue was closed: the socket writer had already stopped on a failed socket write, cumulative.
   [] 1000..2000 int 42

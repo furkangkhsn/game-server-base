@@ -123,5 +123,5 @@ async fn a_close_the_stall_window_abandons_is_counted() {
         .expect("the pump gives up at its window")
         .expect("the pump ends");
     let t = sample(&mut samples).await;
-    assert_eq!(t.ws_going_away_unsent_stalled, 1, "{t:?}");
+    assert_eq!(t.ws_teardown_closes_unsent_stalled, 1, "{t:?}");
 }

@@ -98,8 +98,8 @@ async fn a_closed_queue_counts_the_teardown_close() {
     let (mut w, mut samples) = writer(tx, &closing);
     w.close().await.expect("the close");
     let t = sample(&mut samples).await;
-    assert_eq!(t.ws_going_away_unsent_closed, 1, "{t:?}");
-    assert_eq!(t.ws_going_away_unsent_stalled, 0);
+    assert_eq!(t.ws_teardown_closes_unsent_closed, 1, "{t:?}");
+    assert_eq!(t.ws_teardown_closes_unsent_stalled, 0);
     drop(w);
     assert!(samples.try_recv().is_err(), "counted once");
 }
@@ -115,8 +115,8 @@ async fn a_close_abandoned_waiting_for_a_slot_is_counted() {
     assert!(waited.is_err(), "the close waits for a slot");
     drop(w);
     let t = sample(&mut samples).await;
-    assert_eq!(t.ws_going_away_unsent_stalled, 1, "{t:?}");
-    assert_eq!(t.ws_going_away_unsent_closed, 0);
+    assert_eq!(t.ws_teardown_closes_unsent_stalled, 1, "{t:?}");
+    assert_eq!(t.ws_teardown_closes_unsent_closed, 0);
 }
 
 /// The reader's close was queued first, or while the teardown close

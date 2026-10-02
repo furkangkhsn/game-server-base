@@ -221,8 +221,9 @@ mod logic;
 /// right after `team_relays_dropped_closed`.
 /// GSMZ = the GSMY layout with two more transport counters at the end of
 /// that section (the WebSocket teardown close that could not be
-/// delivered — B80: `ws_going_away_unsent_closed`,
-/// `ws_going_away_unsent_stalled`).
+/// delivered — B80: `ws_teardown_closes_unsent_closed`,
+/// `ws_teardown_closes_unsent_stalled`; named `ws_going_away_unsent_*`
+/// until F66 — same slots, only the `RESULT` keys changed).
 /// GSNA = the GSMZ layout with two more transport counters at the end of
 /// that section (the WebSocket reader's control replies a closed control
 /// queue refused — B83: `ws_close_frames_dropped_closed`,

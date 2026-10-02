@@ -216,16 +216,17 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 64] 
         "Established rUDP sessions (their accept sent) whose endpoint was still queued for the accept loop when the listener closed or went away: dropped, never a connection, cumulative.",
         |t| t.udp_sessions_unaccepted_closed,
     ),
-    // B80: the WebSocket teardown close that could not be delivered.
+    // B80: the WebSocket teardown close that could not be delivered,
+    // whatever its code (F66: `ws_going_away_unsent_*` until then).
     tr(
-        "gsb_transport_ws_going_away_unsent_closed_total",
-        "WebSocket teardown closes (1001 Going Away) never queued because the socket writer had already stopped on a failed socket write, cumulative.",
-        |t| t.ws_going_away_unsent_closed,
+        "gsb_transport_ws_teardown_closes_unsent_closed_total",
+        "WebSocket teardown closes (the server's own close at the end of a session, whatever its code: 1001, 1008 or 1013) never queued because the socket writer had already stopped on a failed socket write, cumulative.",
+        |t| t.ws_teardown_closes_unsent_closed,
     ),
     tr(
-        "gsb_transport_ws_going_away_unsent_stalled_total",
-        "WebSocket teardown closes (1001 Going Away) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.",
-        |t| t.ws_going_away_unsent_stalled,
+        "gsb_transport_ws_teardown_closes_unsent_stalled_total",
+        "WebSocket teardown closes (the server's own close at the end of a session, whatever its code: 1001, 1008 or 1013) abandoned while waiting for a slot in the socket writer's full queue: the write-stall window ran out with no byte written, cumulative.",
+        |t| t.ws_teardown_closes_unsent_stalled,
     ),
     // B83: the WebSocket reader's control replies behind a stopped writer.
     tr(

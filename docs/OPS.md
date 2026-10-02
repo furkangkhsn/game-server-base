@@ -900,10 +900,11 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   karelerin ARKASINDAN gider — her zaman amaçlanan aynı bayt (`88 02 03
   E9`), yalnız artık kaybolmuyor. (B30'dan beri hükümle biten oturumda
   aynı kapanış 1008 ya da 1013 taşır — DESIGN §5.6 "WS kapanış kodu";
-  iki sayaç kodu ne olursa olsun sunucunun bu kapanışını sayar, adlarındaki
-  "going_away" B24'ten kalma.) Teslim edilemeyen sayılır:
-  `ws_going_away_unsent_closed` — kuyruk kapalı, soket yazıcısı başarısız
-  bir soket yazmasıyla zaten durmuş; `ws_going_away_unsent_stalled` —
+  iki sayaç kodu ne olursa olsun sunucunun bu teardown kapanışını sayar.)
+  Teslim edilemeyen sayılır:
+  `ws_teardown_closes_unsent_closed` — kuyruk kapalı, soket yazıcısı
+  başarısız bir soket yazmasıyla zaten durmuş;
+  `ws_teardown_closes_unsent_stalled` —
   kapanış slot beklerken bırakıldı, pompanın tıkanma penceresi bayt
   yazılmadan doldu (pencere kapalıysa kapanış slotu sonuna dek bekler, bu
   sayaç artmaz). Okuyucunun kendi kapanışı (istemcinin kapanışına yankı,
@@ -929,6 +930,24 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   "bu oldu" der, istemcinin bir şey kaçırdığını değil. Dolu kuyruğun
   sayaçları anlam değiştirmedi (yalnız dolu). Okuyucunun `Shutdown`
   isteğinin reddi kare değildir, sayılmaz.
+- **Yeniden adlandırma: `ws_going_away_unsent_{closed,stalled}` →
+  `ws_teardown_closes_unsent_{closed,stalled}` (F66).** Sayılan şey
+  değişmedi (B80'in iki kaybı); değişen ad: B30'dan beri sunucunun
+  teardown kapanışı yalnız 1001 "Going Away" değil, hükümle biten
+  oturumda 1008 / 1013 de taşır, eski ad yalnız 1001'i söylüyordu (kural:
+  sayacın adı anlamıyla örtüşür). Prometheus'ta
+  `gsb_transport_ws_teardown_closes_unsent_{closed,stalled}_total`,
+  OTLP'de `_total`'sız, `gsb-metric scope=transport` satırında
+  `ws_teardown_closes_unsent_{closed,stalled}=`, loadgen `RESULT`'ta
+  `transport_ws_teardown_closes_unsent_{closed,stalled}=`; HELP metni
+  "whatever its code: 1001, 1008 or 1013" der. **Geçiş:** eski seriler
+  bu sürümle DURUR (takma ad yok, iki ad birlikte yayınlanmaz); bir
+  counter olduğu için seri sıfırdan başlar. Panoda / uyarıda eski adı
+  yenisiyle değiştirin; sürüm sınırını aşan bir sorgu iki seriyi `or` ile
+  birleştirir (bir süreç ikisini hiç birlikte yayınlamaz), ör.
+  `rate(gsb_transport_ws_teardown_closes_unsent_stalled_total[5m]) or
+  rate(gsb_transport_ws_going_away_unsent_stalled_total[5m])`. Loadgen
+  teli yerleşim değiştirmedi (aynı yuvalar), yalnız `RESULT` anahtarı.
 - **Taşıma kapsamı: rUDP kontrol bandının yeniden gönderimleri, sebebe
   göre (B2).** Satırın ve tablonun sonuna bir `counter`:
   `udp_control_retransmits_timeout`

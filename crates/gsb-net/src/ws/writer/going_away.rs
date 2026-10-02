@@ -17,11 +17,11 @@
 //!
 //! What still cannot be delivered is counted in the transport scope:
 //!
-//! - `ws_going_away_unsent_closed`: the queue was closed — the socket
+//! - `ws_teardown_closes_unsent_closed`: the queue was closed — the socket
 //!   writer had already stopped on a failed socket write (the only way
 //!   it stops while this sender lives, other than the peer's close
 //!   handshake below);
-//! - `ws_going_away_unsent_stalled`: the close was dropped still waiting
+//! - `ws_teardown_closes_unsent_stalled`: the close was dropped still waiting
 //!   for a slot — the pump's stall window ran out with no byte written.
 //!
 //! Neither counts when the read path queued a close of its own
@@ -117,7 +117,7 @@ impl Teardown {
             }
             Err(_) if closing.load(Ordering::SeqCst) => {}
             Err(_) => self.count(TransportCounters {
-                ws_going_away_unsent_closed: 1,
+                ws_teardown_closes_unsent_closed: 1,
                 ..Default::default()
             }),
         }
@@ -129,7 +129,7 @@ impl Teardown {
     pub(super) fn abandon(&mut self, closing: &AtomicBool) {
         if self.state == State::Waiting && !closing.load(Ordering::SeqCst) {
             self.count(TransportCounters {
-                ws_going_away_unsent_stalled: 1,
+                ws_teardown_closes_unsent_stalled: 1,
                 ..Default::default()
             });
         }
