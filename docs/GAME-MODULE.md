@@ -195,6 +195,18 @@ birbirine karışmaz:
   kapanır; yeni üyelik `on_disconnect` ile biter (B43, RECONNECT §16.4).
   Yasak listesi / yeniden katılmayı reddetmek oyunun politikasıdır (motor
   saklamaz).
+- **Üyenin yol bütçesi (BACKLOG B103, DESIGN §6 "Tıkanıklık tepkisi").**
+  Bir bağlantının yolunu taşıma ölçer (rUDP'nin hızlaması, QUIC'in
+  tıkanıklık penceresi; TCP/TLS/WS bugün hiçbir şey); oyun tick
+  bağlamından okur: `ctx.budget(player)` — üyenin yolunun bu tick
+  taşıyacağı bayt, `None` = sınırlı değil/bilinmiyor (bugünkü gibi
+  gönder) — ve tam durum `ctx.path(player)` (`gsb_core::path::PathState`:
+  evre, hız, talep, kayıp, tur, kuyruk). İçeriği inceltmek oyunun
+  kararıdır: ham mantık grup karesini sınırlı üyeden tutabilir
+  (`GameLogic::ship_snapshot`, varsayılan gönderir; çekirdek tutulanı
+  sayar), kit oyunu tam-snapshot odasında `with_snapshot_budget`
+  (`gsb_kit::budget::SnapshotBudget`) ile açar. Açmayan oyunun baytı
+  değişmez.
 - **Ayrılmanın nedeni (BACKLOG F27, RECONNECT §3.3).** Varlığın kaderi
   nedene göre değişebilir ("düşeni park et, atılanı despawn et") — bu da
   oyunun kararı; motor yalnız nedeni söyler. Aktörler politikayı

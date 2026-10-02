@@ -2528,34 +2528,124 @@ bütçesi (1472 B'de 5,9 KB/sn).
     boyu ortalamadan farklıysa (büyük FRAG / küçük RAW karışımı) —
     toplamsal düzeltme onu birkaç aralıkta emer. Tel değişmedi.
 
-*Oyuna sinyal (bu tur: gsb-net sınırında).* `gsb_net::udp::PathState`
+*Oyuna sinyal (tur 3: gsb-net sınırında).* `gsb_net::udp::PathState`
 (`Copy`, küçük): `phase` (`Open`/`Suspect`/`Paced`), `rate` (yalnız
 `Paced`'te, B/sn), `demand` (odanın son rapor aralığında oyun bandına
 verdiği, B/sn), `loss_permille`, `queue_delay`; `budget(period)` — bir
 tick'te/snapshot aralığında yolun taşıyacağı bayt. Yazıcı her kararda
 günceller (`UdpWriter::path_state`), evre/hız değişince `debug` log,
-oturum sonu `info` satırında. Çekirdeğe taşınması sonraki tur (aşağıda).
+oturum sonu `info` satırında. Çekirdeğe taşınması B103 (aşağıda).
 
-*Sonraki tur: çekirdek ve kit sinyali (TASARIM — uygulanmadı).*
-(1) **Yazıcı → bağlantı aktörü:** yeni `ConnIn::Path(PathState)`; yazıcı
-yalnız değişince (evre değişti ya da hız ≥ %10 oynadı), rapor başına en
-çok bir kez `try_send` eder; posta kutusu doluysa "kirli" bayrağı kalır,
-sonraki geçişte en yeni durum denenir — en-yenisi-kazanır, kayıp yok
-(eskisinin yerini yenisi alır; ertelenen sayılır). (2) **Aktör → oda:**
-aktör son durumu yerelde tutar, değişince odaya
-`RoomMsg::MemberPath` (aynı birleştirme kuralı). (3) **Oda:** üye
-tablosunda `path: Option<PathState>`; `TickCtx::path(member)` ve
-`budget(member, tick)`. (4) **Kit yapı taşı (opt-in):** `SnapshotBudget`
-— üye başına bayt bütçesiyle, oyunun verdiği öncelikle (mesafe, önem)
-varlıkları sıralar, bütçeye sığanı tam hızda, kalanı seyreltilmiş hızda
-yollar; oyun kullanmazsa hiçbir şey değişmez. **Paylaşılan durum
-(`Arc<AtomicU64>`) elendi:** §2 — değer sahibine taşınır; en-yenisi-
-kazanır birleştirmesi atomik hücreyle aynı maliyette kanal disiplinini
-korur. **Bakımcının kararı gerekenler:** (a) `PathState` taşımadan bağımsız
-mı olmalı (gsb-core'a taşınıp TCP/QUIC/WS de doldurabilsin — QUIC'in
-quinn istatistikleri RTT/pencere verir; TCP'nin tahmini yok)? (b) oda
-`PathState`'i mi yoksa yalnız bütçeyi mi görsün? (c) `ConnIn` varyantı mı
-ayrı bir yol kanalı mı? (d) varsayılanın çevrilmesi (aşağıda).
+**Yol sinyali çekirdekte ve kitte (B103 — 2026-10-02; bakımcı
+kararları a–d).** Taşıma ölçer, çekirdek taşır, oyun (kit) karar verir.
+
+```text
+taşıma ──ConnIn::Path──▶ bağlantı aktörü ──(üyenin action kanalı, MEMBER_PATH)──▶ oda / shard READ
+ (yalnız haber, try_send)   (en-yenisi-kazanır)                                      │
+                                                                     PathTable ──▶ TickCtx::{budget, path}
+                                                       fan-out: GameLogic::ship_snapshot ◀── kit SnapshotBudget
+```
+
+*(a) Taşımadan bağımsız `gsb_core::path::PathState`.* `phase`
+(`PathPhase::{Open, Suspect, Paced}`), `rate: Option<u32>` (B/sn, yalnız
+taşıma yolu sınırlarken — `Paced`), `demand`, `loss_permille`, `rtt`,
+`queue_delay` — evre dışındaki her alan `Option`: her taşıma ölçtüğünü
+doldurur. rUDP hepsini (faz 2, aşağıda), QUIC quinn'in kendi
+istatistiklerinden (aşağıda), TCP/TLS/WS hiçbirini — yol durumu
+göndermeyen taşımanın üyesinin yolu bilinmez (`None`: oyun bugünkü gibi
+gönderir). Akış kapılarına çekirdeğin `TCP_INFO`'su ileride bir kaynak
+olabilir; bu turun işi değil. `udp::PathState` faz 1'de dokunulmadı
+(B3 aynı anda `udp/**`'yi değiştiriyordu); faz 2'de çekirdek tipine
+dönüşür.
+
+*(b) Odanın birincil sorusu bayt bütçesi.* `TickCtx::budget(member) ->
+Option<usize>`: üyenin yolunun bu tick'te taşıyacağı bayt (`rate` ×
+odanın tick periyodu); `None` — sınırlı değil ya da bilinmiyor (üye
+değil, park, bot, ölçmeyen taşıma, yetişen yol). Tam durum da okunur:
+`TickCtx::path(member)`. `TickCtx`'e yeni alan `paths: PathView` (elle
+kurulan bağlam boş görünümü taşır — `Default`); aktörün `PathTable`'ı
+idle saati gibi tick boyunca ödünç verilir. Boş tablo tick'e bir dal
+maliyetindedir.
+
+*(c) Yol: `ConnIn::Path` ve üyenin kendi action kanalı.* Taşıma
+`ConnIn::Path(PathState)`'i yalnız HABER olduğunda gönderir (evre
+değişti, hız belirdi/kalktı ya da son TESLİM EDİLENE göre ≥ %10 oynadı —
+`PathState::moved_from`), `try_send` ile, asla beklemeden
+(`PathSignal`: dolu posta kutusu en yeni durumu borçlu tutar, daha yenisi
+onun yerini alır — en-yenisi-kazanır; durum olay değildir, yerini yenisi
+alan durum hiç haber değildi). Bağlantı aktörü durumu odaya **üyenin
+kendi action kanalında**, iç bir işaretçi olarak taşır
+(`op::base::MEMBER_PATH = 15`, telde ASLA yok; istemciden gelen 15
+bilinmeyen taban opcode'u gibi sert ihlaldir ve odaya varmaz — test
+`a_client_frame_with_the_marker_opcode_never_reaches_the_room`). Aynı
+kural: kanal doluysa (üyenin kendi girdisi önde) durum borçlu kalır ve
+aktörün okuduğu her sonraki mesajda yeniden denenir (bekleme sınırı:
+aktörün bir sonraki mesajı — girdi, heartbeat ya da yeni haber; durum
+asla girdinin arkasında kuyruklanmaz); katılım (join) sinyali sıfırlar
+— yeni oda hiçbir şey bilmez, en yeni durum ona borçludur (yeniden
+katılım dahil). Oda/shard READ'i işaretçiyi çektiği anda ayırır: üyenin
+`PathTable` satırına yazar; idle damgasına (girdi değildir), oyunun
+`ingest`'ine ve okunmamış-girdi sayaçlarına (`actions_dropped_unread`)
+asla girmez. Tablo üye oturumu bitince ya da park olunca boşalır
+(ayrılış, despawn, kopuş/park, girdi-boşta tavanı; resume yalnız park
+satırını yeniden bağlar, yeni oturum bilinmeyenle başlar); shard
+geçişinde durum üyeyle taşınır (`PlayerMigration::path` — aktör yalnız
+haber gönderdiğinden düşen durum bir sonraki değişime dek bilinmezdi).
+**Neden bu yol (elenenler):** (i) *`RoomControl::MemberPath`* —
+bağlantı aktörünün odanın kontrol kutusu yok; registry üzerinden yol
+tekil aktöre sıcak yol yükü bindirir ve shard'lı odada üyenin hangi
+shard'da olduğunu bilmez (her shard'a yayın); ortak kontrol kutusunu
+yol haberleriyle doldurmak katılımları reddettirebilirdi. (ii) *Ayrı üye
+başı yol kanalı* — her üye için her tick bir `try_recv` daha (varsayılan
+yolda bedel) ve join yanıtının/`PlayerMigration`'ın biçimini ~100 yerde
+değiştirirdi. (iii) *`Action`'a alan* — oyunlar `Action`'ı kendileri de
+kurar (bot girdisi): kırıcı değişiklik. (iv) *Paylaşılan atomik/izleme
+kanalı* — §2 (durum mesajla taşınır). Üyenin kendi kanalı: yalıtılmış
+(dolu kanal yalnız bu üyenin durumunu geciktirir), göçte zaten taşınıyor,
+oda onu zaten çekiyor — yeni yoklama yok. **Sayaç yok (bilinçli):**
+burada hiçbir şey kaybolmaz — üyelik sürdükçe oda en yeni durumu alır;
+biten üyeliğin söyleyeceği kimse yok.
+
+*Fan-out kapısı (çekirdek, opt-in): `GameLogic::ship_snapshot`.*
+Fan-out, bütçesi bilinen (`TickCtx::budget` `Some`) ve grubunun bu tick
+karesi olan her üye için mantığa sorar: `ship_snapshot(world, ctx,
+player, group, bytes, budget) -> bool`. `false` grup karesini o üyenin
+batch'inden çıkarır (private karesi yine gider) ve sayılır:
+`snapshots_withheld` (oda kapsamı). Bütçesi bilinmeyen/yetişen üyeye hiç
+sorulmaz; varsayılan kanca gönderir — açmayan oyunun baytı değişmez.
+Oda ve shard aynı yardımcıyı kullanır (`room::counters::fanout::ships_group`).
+Mantık yalnız istemcinin onsuz yapabildiğini tutmalı: bağımsız tam
+snapshot (sonraki iyileştirir), asla delta.
+
+*Kit yapı taşı: `gsb_kit::budget::SnapshotBudget`* (KIT-ARCHITECTURE §10
+"B103"): tam-snapshot odaları (açık, PVS, düz sharded) için üye başına
+kare hızı inceltmesi — sığan her tick, sığmayan kredisi yetince; en az
+16 karede bir (A10'un `Ticks16`'sı) bütçe üstü gider, sayılır
+(`snapshot_budget_forced`, mantık-sayaç dikişi).
+
+*QUIC: quinn'in istatistikleri* (`quic::path`): yazıcı bayt taşırken en
+çok 250 ms'de bir `Connection::stats()` — `rtt` (yumuşatılmış),
+`queue_delay` (5–10 sn pencereli tabana göre), aralığın kayıp/gönderilen
+paketinden `loss_permille`, aralığın UDP baytından `demand`; evre rUDP'nin
+makinesi, sinyal quinn'in `congestion_events`'i (biri şüphe, ikincisi
+`Paced`); `Paced`'te `rate` = tıkanıklık penceresi / tur, pencere talebin
+1,25 katını taşıyınca `Open`. Hız yalnız `Paced`'te söylenir: uygulama
+sınırlı pencere büyümez, açık yolda bütçe vermek oyunu yolun
+taşıyabileceğinin altında tutardı. Yeni görev yok (besleme gönderme
+yarısında), posta kutusu beklenmez.
+
+*(d) Varsayılan.* `udp_congestion = "off"` kaldı; B104 (titreşim ölçümü
+ve bu tur) çevirir.
+
+*Faz 2 (B3 birleştikten sonra): rUDP yazıcısı yayımlar.* `udp::PathState`
+çekirdek tipi olur (ya da `From` ile ona dönüşür: `rate`/`demand`/
+`loss_permille`/`queue_delay` → `Some`, `rtt` → tahminin son turu);
+yazıcı her kararından sonra (`pace_follow`, `pace_silence`) çekirdek
+`PathSignal`'ine sunar ve borçlu durumu `ConnIn::Path` olarak oturumun
+gelen kutusuna `try_send` eder (B3'ün göçünde yeni IP'de denetleyici
+sıfırlanır — RFC 9000 §9.4 — taze `Open` durumu da haber olarak gider);
+uçtan uca test: hızlanan bir rUDP oturumunun bütçesi `TickCtx`'e varır
+ve kit odası inceltir.
 
 *Varsayılan: şimdilik `"off"`.* Ölçümlerde `pace` hiçbir senaryoda
 kaybetmedi: darboğazda 2× mesaj, ~5× düşük gecikme, kontrol bandı ~10×
@@ -2563,8 +2653,9 @@ hızlı; darboğazsız koşuda aynı bayt ve zamanlama. Yine de bu tur
 varsayılan çevrilmedi: (1) ölçümler yerel (loopback + kullanıcı alanı
 darboğazı); gerçek bir ağda (netem/WAN) titreşimli yolda (Wi-Fi,
 hücresel: 30 ms üstü titreşim) sahte gecikme sinyali ölçülmedi — o yolda
-tepki gereksiz düşürmeye dönebilir; (2) oyunun sinyali (sonraki tur)
-yokken düşürme oyuncunun göremediği bir şeydir. **Öneri:** titreşim
+tepki gereksiz düşürmeye dönebilir; (2) oyunun sinyali yokken düşürme
+oyuncunun göremediği bir şeydir (B103 sinyali çekirdeğe ve kite taşıdı;
+rUDP'nin yayımı faz 2). **Öneri:** titreşim
 ölçümü temiz çıkarsa ve sinyal çekirdeğe taşındıktan sonra varsayılan
 `"pace"` olsun (yeni satır).
 

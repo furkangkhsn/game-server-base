@@ -340,6 +340,11 @@ kısıtlarıyla (`GroupKey: Eq + Hash + Clone + Debug`,
   gibi taşınır; sharded yoldaki kopyası (`sharded/room/logic.rs:166-234`)
   onunla birleştirilir. `bot.rs` ise tamamen demo'dur; kit yalnızca
   "bot beslenen park oyuncuları" listesini `Game::bot_actions`'a verir.
+- **Yol bütçesi (B103, opt-in):** taşımanın ölçtüğü üye başı bayt
+  bütçesine (`TickCtx::budget`) kit'in cevabı `gsb_kit::budget::
+  SnapshotBudget`'tır — tam-snapshot odalarında (açık, PVS, düz sharded:
+  `with_snapshot_budget`) sınırlı üyenin kare hızını yolunun taşıdığına
+  indirir; açmayan oda her kareyi gönderir. Ayrıntı §10 "B103".
 
 ### 4.5 Faz 1a: derlenen imzalar ve sapmalar
 
@@ -4795,6 +4800,99 @@ sonra öldü).
 **Doğrulama:** 1609 → **1617** test / 0 hata / 1 ignored (`otlp` ile
 1627 → 1635). `record_run`'ın sabitlenmiş kare özetleri ve demoların wire
 testleri değişmeden geçti (hiçbir oyun `LitAoiRoom` kullanmıyor).
+
+### B103 — yol bütçesi: `SnapshotBudget` (2026-10-02)
+
+**Motorun yapı taşı, varsayılan değişmedi** (`core/b103-path-signal`;
+BACKLOG B103, DESIGN §6 "Tıkanıklık tepkisi"). Taşıma yolu ölçer (rUDP
+hızlaması, QUIC tıkanıklık penceresi), çekirdek sonucu odaya üye başı
+bayt bütçesi olarak taşır (`TickCtx::budget(member)`, tam durum
+`TickCtx::path(member)`); grup karesini bir üyeye bu tick göndermemeyi
+mantık seçebilir (`GameLogic::ship_snapshot`, çekirdek sayar:
+`snapshots_withheld`). Kit'in yapı taşı o kararı verir.
+
+**Ne yapar.** Grup karesi BİR kez kodlanır ve grubun her üyesine aynı
+`Bytes` gider (encode-once); üye başına bozmadan verilebilecek tek karar
+*ne sıklıkla*dır. Sınırlı üyenin kredisi — son aldığı kareden beri
+yolunun boşalttığı bayt — kareyi karşılıyorsa kare gider, yoksa
+tutulur:
+
+- bütçeye sığan kare **her tick** (tam hız);
+- sığmayan, kredi yetince (bütçe kare boyunun üçte biriyse üç tick'te
+  bir);
+- **bayatlık sınırı:** bütçe ne kadar küçük olursa olsun en çok 15 kare
+  üst üste tutulur — 16 karede en az bir kare gider (A10'un en kaba
+  sınıfı `Ticks16` ile aynı sınır); bütçe üstü giden bu kare
+  `snapshot_budget_forced`'ta sayılır (taşıma bir kısmını düşürebilir,
+  operatör nedenini görür);
+- **private kare asla inceltilmez** (ack, RPC yanıtı, oturum yükü,
+  one-shot full): çekirdek yalnız grup karesini sorar.
+
+**Kredi kuralı.** Her teklif, üyenin son teklifinden beri geçen her oda
+ADIMI için bütçesi kadar ekler (grubu değişmediği için karesi olmayan
+adımlarda da yol boşaldı), üst sınır kare + bir adımlık bütçe (sessizlik
+sonrası tek kare, asla patlama yok). Adım odanındır: kit, global
+tick'ler arasındaki en küçük teklif aralığından adımı öğrenir (k'ncı
+tick'te adımlayan oda iki kez kredilenmez). Bayatlık sınırının gönderdiği
+kare o anki krediyi sıfırlar. Tablo shard-yerel yumuşak durumdur
+(kalıcı oyuncuya göre): 64 tick sorulmayan üye (ayrıldı, başka shard'a
+geçti, yolu açıldı) süpürülür, yeniden sorulan krediyle başlamaz.
+
+**API (oyunun yazdığı):**
+
+```rust
+OpenRoom::with_game(g).with_snapshot_budget(SnapshotBudget::new())
+SectorRoom::with_game(g, map).with_snapshot_budget(SnapshotBudget::new())
+ShardedRoom::with_game(g, part, i).with_snapshot_budget(SnapshotBudget::new())
+SnapshotBudget::with_held_max(n) // en çok n kare üst üste tutulur (vars. 15; 0 = hiç)
+SnapshotBudget::admit(player, tick, bytes, budget) -> bool // kendi mantığını yazan oyun için
+```
+
+**Neden yalnız tam-snapshot odaları.** Tutulan bir full sonraki full'la
+iyileşir; tutulan bir delta istemcinin göremediği bir boşluktur (kaçan
+kaldırma hayalet kalır) ve F11'in tetiklediği one-shot full daha büyüktür
+— bayt kazancı yok. AOI, aydınlık AOI, takım delta, sharded × spatial /
+team bu turda sunmuyor.
+
+**Kararlar ve elenenler.**
+
+1. *Kare hızı, kayıt seçimi değil.* "Önemsiz kayıtları bu üyeye
+   atlamak" üye başı kodlama ister (encode-once kalkar) ve tam-snapshot
+   istemci kuralında atlanan kayıt "kaldırıldı" demektir (titreme).
+   **Bakımcıya açık soru:** oyunun önceliğine göre kayıt inceltmesi
+   istenirse önerilen yol, (grup, bütçe kademesi) başına BİR kez
+   kodlanan indirgenmiş full (yüksek öncelikli kayıtlar bütçeye sığana
+   dek; A29'un `with_export_rank` sıralamasıyla aynı doğrusal seçim) ve
+   çekirdek kapısına "kareyi bununla değiştir" cevabı — bu turda
+   yapılmadı.
+2. *Kapı çekirdekte, karar kit'te.* Paylaşılan karenin üyeye gidip
+   gitmeyeceğini yalnız fan-out bilir; kanca varsayılanı gönderir.
+   *Elenen:* üyeyi tick tick "sessiz gruba" taşımak (`group_of` ile) —
+   grup durumu her tick çalkalanır, uyarılar tetiklenir.
+3. *Kredi tick değil adım başına, üst sınırlı.* *Elenen:* teklif başına
+   bir bütçe (sessiz grupta tek değişikliğin karesi bir sonraki
+   değişikliğe ya da keep-alive'a dek bekleyebilirdi); global tick başına
+   (yavaş oda iki kat kredilenirdi).
+4. *Shard-yerel kredi, göçte taşınmaz.* Geçiş krediyi sıfırdan başlatır;
+   gecikme en çok bir kare periyodu, bayatlık sınırı içinde. `KitMig`'e
+   alan eklemek bu kadar yumuşak durum için gereksiz.
+
+**Sayaçlar.** Çekirdek: `snapshots_withheld` (oda kapsamı, OPS §3).
+Kit (F9 mantık-sayaç dikişi, yalnız açan odada):
+`snapshot_budget_forced` (SUM) — `gsb_room_logic_snapshot_budget_forced_total`.
+
+**Testler** (sentetik bütçelerle; her kural mutasyonla kırıldı, dosya
+scratchpad'e yedeklenip geri yüklendi): `budget::tests` (8 — sığan her
+tick; üç bütçelik kare üç tick'te bir, uzun koşuda bütçeyi aşmaz;
+değişen kare boyları aynı krediyi harcar; bayatlık sınırı 16'da bir ve
+sayılır, `with_held_max(1)`/`(0)`; boşluk adımlarının kredisi tek kareyle
+sınırlı; yavaş oda adım başına kredilenir; zorla giden kare krediyi
+harcar; üyeler bağımsız, sorulmayan süpürülür), `budget::rooms` (açık,
+PVS, sharded: açmayan oda her kareyi gönderir ve sayaç koymaz, açan oda
+inceltir ve `snapshot_budget_forced` koyar). Çekirdek kapısı:
+`room::tests::withhold` (3), `shard::tests::path` (fan-out). Uçtan uca
+(hızlanan rUDP oturumunun bütçesi `TickCtx`'e varır ve kit inceltir) faz
+2'de.
 
 ## 11. Kabul kriteri
 
