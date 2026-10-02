@@ -5,6 +5,35 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## v1 — B128 rUDP oturumunun sonu `Recv::Closed`; B104 ölçüm desteği (`net/v1-closed-jitter`)
+
+- **B128 (kullanıcı kararı 2026-10-03):** rUDP oturumunun sonu artık her
+  kapıdaki gibi `gsb_client::Conn::recv` → `Recv::Closed`: bitişten önce
+  alınmış kareler boşaltılır, sonra bitiş beklemeden ve her sonraki okumada
+  yine; nedeni `UdpClient::ended()` (`UdpEnd::RelDead` / `Reset` /
+  `SealLimit`). Bitmiş oturumda gönderim `NotConnected` ile reddedilir,
+  hiçbir sayaç ikinci kez artmaz; bir boşluğun arkasında kalan alınmış
+  kareler `oob_at_end`. Bitişten sonra okumaya devam eden çağıranın işçiyi
+  döndürmemesi için `None` `consume_budget`'tan geçer. Yük üreteci bitişte
+  hemen durur ve her oturumun sonunu nedeniyle bir kez sayar
+  (`udp_ends_rel_dead`, `udp_ends_reset`, `udp_ends_seal_limit` — RESULT ve
+  CLIENT satırlarında); `errors_*` değişmedi.
+- **B104 desteği:** yük üretecine `--udp-congestion off|pace` (sunucuya;
+  orkestratörde yalnız sunucu çocuğuna); RESULT'a `connect_p50_ms`,
+  `connect_p99_ms`, `snap_per_s`, `udp_congestion`.
+  `scripts/rudp-jitter.sh`: loopback'e netem ile titreşim, kayıp ve gerçek
+  darboğaz koyup iki kipi karşılaştıran ölçüm (sudo + `tc`; yabancı qdisc
+  varsa dokunmaz, kendininkini her çıkışta kaldırır; `scripts/README.md`).
+  Kuru koşu (`RUDP_JITTER_DRY=1`) tesisatı doğruladı; gerçek koşu
+  kullanıcıda.
+
+Testler 1980 → 1991 (`otlp` ile 1998 → 2009). Ajanın mutasyonları
+yakalandı. Ebeveyn doğrulaması: tam kapılar yeşil; `end_session`'ın "ilk
+neden kazanır" korumasını kaldırmak sağ çıktı — eşdeğer (bitişten sonra
+gönderim reddedilir, alma soket okumaz: ikinci çağrı yolu yok). Betik
+ebeveynce okundu (sudo yalnız `tc qdisc add/del`; `kill -9`'da qdisc elle
+kaldırılır).
+
 ## B5b — rUDP anahtar fazı politikası ve stateless reset; kripto hattı tamam (`net/b5b-rekey-reset`)
 
 - **Rekey politikası:** her mühürlü gönderme yarısı (yazıcı s→c, istemci

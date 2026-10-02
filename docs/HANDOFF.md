@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1980 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1991 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -319,6 +319,14 @@ adresine bağlı — **yeniden başlayan sunucu aynı `bind` ile bağlanmalı.**
 döndürmez — B128). Loadgen teli GSNR. Kapandı: B5, B108; D13 kullanıcı kararıyla kapandı
 (dış inceleme yok — proje kendi kullanımımız için). Açık: B120, B121, B123,
 B124, B125–B130.
+
+**v1 tamam** (CHANGELOG "v1"): rUDP'de `Conn::recv` artık `Closed`
+döndürüyor (B128; `UdpEnd`, `ended()`, `oob_at_end`); loadgen bitişleri
+`udp_ends_*` ile nedeniyle sayıyor. B104 için ölçüm hazır, koşmak
+kullanıcıda: `scripts/rudp-jitter.sh` (sudo + `tc`; varsayılan 64 istemci
+× 30 sn × 3 koşu × 7 senaryo, ~14 dk). Sonuç `summary.txt` B104'e
+işlenmeli: titreşim satırlarında `pace` bölüm/kesme üretmiyor, darboğaz
+satırlarında üretiyorsa varsayılan `"pace"` olabilir.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -1022,6 +1030,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1980 passed, 4 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1991 passed, 4 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
