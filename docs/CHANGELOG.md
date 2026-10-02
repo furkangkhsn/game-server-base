@@ -5,6 +5,42 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## c1 — kapanış hükümleri ve nedenleri: F60, F28, B30 (`fix/c1-close-reasons`)
+
+- **F60 — oturum başına tek kayıp hüküm:** duruşta aynı oturum için iki hüküm
+  sayılabiliyordu (bağlantının sonu duruşun arkasında bir hüküm bulup saydı +
+  registry'nin spawn'lı yedeğindeki hüküm reddedilip sayıldı), istemcisi kendi
+  bitmiş oturumun reddedilen yedeği de sayılıyordu. Sayım bağlantıya taşındı:
+  registry yerinde kuyruklayamadığı ilk hükmü satırına yazar
+  (`ConnInfo::verdict_in_flight`; `channel::post_where`), duruşun bildirimi o
+  satıra `ConnIn::ShutdownOvertaking(hüküm)` olur; onu ilk okuyan bağlantı
+  duruş gibi biter (ERROR 14, tel aynı) ve adı geçen hükmü tek kayıp sayar.
+  Yedeğin reddi hiçbir yerde sayılmaz. `channel::post_or` kalktı. Önce
+  kırmızı (2 ve iki biçimde 1 saydı); 6 mutasyon yakalandı. DESIGN §9
+  "Oturum başına tek kayıp hüküm (F60)".
+- **F28 — kopmanın arkasındaki hüküm politikaya:** `ConnClosed { conn,
+  verdict }` → dispatcher `Close { verdict }` (ya da doğrudan DETACH) → yeni
+  `RoomControl::DetachBy` / `ShardMsg::DetachBy` → `DisconnectCause::
+  ConnectionClosedBy(ServerClose)` (ekleyici alt varyant; `closed`/`coarse`/
+  `verdict`). İstemcinin sonu düz `Detach`/`ConnectionClosed`. Kit'in neden
+  başı politikası hükme göre seçer; kendi ezmesi olmayan hüküm
+  `ConnectionClosed`'ınkini alır — varsayılan aynı. Bedeli: `ConnectionClosed`'ı
+  açıkça eşleyen oyun hükümlü kopuşları joker kolunda görür (`coarse()` geri
+  katlar; RECONNECT §3.3). B43 testi artık yeni üyelikte
+  `ConnectionClosedBy(IdleInput/Kicked)` bekler.
+- **B30 — WS kapanış kodu sebebe göre:** aktör kapıya `SessionEnd`'i
+  (`Client`/`Stopped`/`Verdict`) uç noktanın oneshot'uyla söyler
+  (`Endpoint::with_end_notice` → `ConnectionActor::with_end_notice`), çıkış
+  göndericisini düşürmeden önce. Duruş, istemci sonu, `room_gone`,
+  `outbound_dead` → 1001; politika hükümleri (canlılık, protokol, oda/oyun,
+  supersede) → 1008; tavanlar → 1013. ERROR karesi aynı; yalnız WS kapanış
+  kodu değişti (sözleşme değişikliği, DESIGN §5.6 "WS kapanış kodu (B24, B30)").
+
+Testler 1638 → 1659 (`otlp` ile 1656 → 1677): F60 +7, F28 +6, B30 +8.
+Golden'lar, metrik aileleri, loadgen teli değişmedi. Ebeveyn doğrulaması:
+tam kapılar ebeveynde (yük ~50'de yeşil); `superseded`'ı 1001'e taşımak
+eşleme testini düşürdü.
+
 ## s1 — D11 + B49: kapıların kaynak sınırları (`sec/s1-door-limits`)
 
 - **D11 — kaynak adres başına el sıkışma sınırı (isteğe bağlı).** Yeni

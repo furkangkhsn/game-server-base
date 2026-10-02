@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1638 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1659 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -183,6 +183,12 @@ sınırda Retry alır), ops HTTP `http_max_connections` (64) +
 loadgen teli GSNG. Açık: B89 (rUDP kapısında kaynak sınırı), D12 (düz
 TCP pre-auth), B90 (ops yönlendirmesinin süresi).
 
+**c1 tamam** (CHANGELOG "c1"; F60, F28, B30): duruşun geçtiği hüküm
+bağlantının sonunda bir kez sayılır; oda politikası kopan bağlantının hükmünü
+`ConnectionClosedBy(ServerClose)` ile görür (kit ezmesi hükme göre); WS kapısı
+kapanış kodunu oturumun sonuna göre seçer (`SessionEnd`, uç noktanın end
+notice'i). Açık: F66–F69.
+
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
 `udp::rel::{RelSend, Rto}` (RFC 6298, `[50 ms, 1 sn]`, Karn, boşta kalma
@@ -231,7 +237,7 @@ sorgularını tutuyor (`common::Cached`, arketip nesli değişince yeniden
 kurulum — kayıt sırası, dolayısıyla bayt aynı); registry `metrics_dropped`
 ve `bytes_out` tam kilitli; registry'nin bağlantıya hükmünün spawn'lı
 yedeği duruştan sonra reddedilirse sayılıyor (`registry/actor/tell.rs`,
-`channel::post_or`). Açık: F60.
+`channel::post_or`; F60'ta sayım bağlantıya taşındı — `ShutdownOvertaking`, `post_or` yerine `post_where`).
 
 **B50 tamam** (CHANGELOG "B50", RPC-CONTROL-PLANE §8.2 "B50"): pinsiz
 orkestre tabanları varsayılan worker'larla yeniden ölçüldü, eskiler "tek
@@ -885,6 +891,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1638 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1659 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
