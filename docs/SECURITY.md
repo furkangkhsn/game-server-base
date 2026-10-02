@@ -432,7 +432,7 @@ gibi; varsayılan yüzey değişmedi.
 | 5 | **QUIC: kanıtlanmamış adres ayrı sayılır, sınırda Retry alır.** quinn'in `Incoming`'i adresini Retry jetonuyla kanıtlayana dek sahte kaynaklı olabilir; saldırgan kurbanın adresiyle sahte Initial'lar yollayıp kurbanın sayısını doldurabilirdi. Kanıtlanmamış kaynak aynı adresin kanıtlanmışından ayrı sayılır; sınırdaki kanıtlanmamış bağlantı reddedilmez, durumsuz Retry alır (yuva yok; `handshakes_retried_per_source`); gerçek sahibi yanıtlayıp kanıtlanmış döner, sahte kaynak dönemez. Kanıtlanmış ve hâlâ sınırda olan reddedilir (`refuse`) | Hedefli ret saldırısı kapanır; gerçek bir kaynak QUIC'te sınırı en çok iki kez tutar (bir kanıtsız, bir kanıtlı). Retry yalnız sınır yazılıp aşılınca: dürüst istemci için bir gidiş-dönüş, tel değişmez |
 | 6 | **Kilitsiz:** tablo kapının kabul görevinde (yuvaları alan tek görev). Yuva başka yerde bırakılır (el sıkışma görevi, accept döngüsü, kapanışın boşaltması): `Drop`'u kaynağı kabul görevinin kuyruğuna yollar, görev her karardan önce boşaltır | B31'in yuvaları atomik; kaynak tablosu tek sahipli görev-yerel durum (`gsb_net::transport::intake` `source`) |
 | 7 | **Sınırlı bellek:** tablo girdisi yalnız kaynak yuva tuttukça yaşar (son yuvayla gider); her yuva kapının sınırından biri — tabloda en çok kapı sınırı kadar girdi, bırakma kuyruğunda en çok o kadar anahtar. Sahte kaynaklı QUIC seli de tabloyu bu sınırın ötesine büyütemez | TCP kaynağı üç yollu el sıkışmadan sonra sahte olamaz; QUIC'inki olabilir — ama her girdi bir yuva |
-| 8 | Düz TCP ve rUDP kapsam dışı | Düz TCP'nin el sıkışma evresi yok (bağlantı hemen pre-auth oturum); o evrenin kaynak başına sınırı registry'de — §4.3.2 (D12). rUDP el sıkışması durumsuz çerez, yuva tutmaz; registry'ye kaydedilmiş rUDP oturumları §4.3.2'nin sınırına girer, demux'ın kayıttan önceki oturum tablosunun kaynak başına sınırı rUDP sertleştirme turunun işi (BACKLOG B89) |
+| 8 | Düz TCP kapsam dışı; rUDP'de aynı anahtar bekleyen oturumu sınırlar | Düz TCP'nin el sıkışma evresi yok (bağlantı hemen pre-auth oturum); o evrenin kaynak başına sınırı registry'de — §4.3.2 (D12). rUDP el sıkışması durumsuz çerez, yuva tutmaz; durum doğrulanan proof'la başlar — orada, aynı anahtarla, demux'ın kayıttan önceki oturumları sınırlanır (§4.3.3, B89); kaydedilmiş rUDP oturumları §4.3.2'nin sınırına girer |
 
 **Boyutlama.** Sınır, aynı adresin arkasından aynı gidiş-dönüş
 penceresinde (pratikte aynı saniyede) bağlanan oyuncu sayısına payla
@@ -477,6 +477,7 @@ tutabileceği bağlantıyı sınırlar. **Varsayılan: yazılmaz = sınır yok.*
 | 6 | **AUTH başarısı ya da kapanış yeri geri verir; başarısız AUTH vermez** | Başarısız AUTH oturumu açık ve unauthed bırakır (ERROR 10/13); havuzun kuralıyla aynı. Sel ihlal bütçesiyle kapanır, kapanış yeri verir |
 | 7 | **Ret: havuzun reddiyle aynı yol** — ERROR 9 + kapanış, satır yok; yeni `ServerClose::UnauthSourceCap` (`unauth_source_cap`), WS'te 1013. Kaynak sınırı havuzdan önce bakılır | Hem kaynağı hem havuzu dolu doğum kaynağın fazlasıdır; havuz etiketini sel kirletmez. Dönem başına tek `warn` (sonraki kayıtla sıfırlanır), ret başına `debug` |
 | 8 | **Kilitsiz, tek sahip:** registry aktörü (havuzun sahibi) | Bekleme yok, yeni await yok |
+| 9 | **Göçte satırın kaynağı izler (B113):** aktörün `ConnPeerChanged`'i satırın kaynağını taşır; unauthed satır, yeni kaynak sınırdaysa eski kaynakta sayılmaya devam eder (`unauth_source_moves_kept`) | §4.3.3 #6–7: kimse ölü yolda kalmaz, göç sınırı delmez. Kontrol O(bağlantı) tarama — havuzunki gibi, göç hızında (nadir; A41) |
 
 **Boyutlama.** El sıkışma sınırı gibi (aynı adresin arkasından aynı
 anda bağlanan oyuncu + pay), ama oturum AUTH bitene dek tutar — ondan
@@ -492,6 +493,48 @@ reddi ayrılır), `source::tests` (kural), `gsb-server/tests/unauth_per_source.r
 kapısında 127.0.0.1 sınırda ERROR 9 + EOF, 127.0.0.2 hizmet alır, AUTH
 ve kapanış yer verir, ERROR 13'lük başarısız AUTH vermez, üç ret
 `server_closes{reason="unauth_source_cap"}`'te, başka sebep 0).
+
+### 4.3.3 rUDP kapısı: kaynak başına bekleyen oturum (B89) ve göçte kaynak (B113)
+
+rUDP'nin çerez el sıkışması durumsuzdur (§4.2): challenge'a kadar hiçbir
+şey tutulmaz, §4.3.1'in yuvası yoktur. Durum doğrulanan proof'la başlar —
+oturum, posta kutuları, uç nokta; B5a'dan sonra el sıkışma başına DH de
+(RUDP-SECURITY §4, B110: ~180 µs). Sınır orada. **Varsayılan: yazılmaz =
+sınır yok** — kapı bayt bayt eskisi.
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **D11'in anahtarı** (`max_handshakes_per_source`), kardeş anahtar değil | Anlam aynı: bir kaynağın bir kapıda ilk durumundan accept döngüsünün uç noktayı almasına dek tuttuğu. WS/TLS/QUIC'te o durum el sıkışma yuvası, rUDP'de demux'ın kurduğu ama accept döngüsünün almadığı **bekleyen oturum**. Sonra iki kapıda da D12 sayar (§4.3.2) — ayrı anahtar aynı evreye ikinci bir sayı olurdu |
+| 2 | **Bakış çerezden sonra, kuruluştan (ve B5a'nın DH'sinden) önce** | Yol dışı sahteci çerezi geçemez: sayılan ya da reddedilen her kaynak dönüş yolunu kanıtlamıştır. Kurbanın adresiyle sahte proof, süresi geçmiş proof ya da challenge isteği yer tutmaz (QUIC'in kanıtsız/kanıtlı ayrımına gerek kalmaz — §4.3.1 #5). Reddedilen proof hiçbir şey kurmaz: DH yok, oturum yok |
+| 3 | **Sınır üstü: proof sessizce düşer, sayılır** (`udp_proofs_refused_per_source`); kaynak başına dönem başına tek `warn`, ret başına `debug` | Kabul yok, tel değişmez; istemci proof'u yeniden gönderir (5 sn'lik el sıkışma süresi içinde) ve yer açılınca girer. Sayaç proof datagram'ını sayar (her yeniden gönderim bir), el sıkışmayı değil — adı bu |
+| 4 | **Kilitsiz, tek sahip, sınırlı:** tablo demux görevinde; yer kuyruğa giren uç noktada (`Pending`) yaşar, düşünce oturumun anahtarını demux'a kuyrukla geri yollar (accept döngüsü aldı / dinleyicinin kuyruğuyla düştü / dolu kanalda söküldü); demux her karardan önce toplar | §4.3.1 #6'nın biçimi. Girdi yalnız yer tutuldukça yaşar; yerler kuyruktaki uç noktalardadır: tablo ve geri dönüş kuyruğu uç nokta kanalının sınırını (1024 + bekleyen accept başına bir) aşamaz, kaynaklar ne olursa olsun |
+| 5 | **Sınır kuruluşları keser, oturumları değil, DH hızını hiç** | Accept döngüsü uç noktayı hemen alır: tek kaynak art arda sınırsız oturum kurabilir (D12 ve `max_connections` onları sayar); sınır yalnız aynı anda bekleyenleri ve uç nokta kanalını (tek kaynağın onu doldurup başkalarının oturumlarını `udp_sessions_dropped_accept_full`'a düşürmesini) keser. Tek kaynağın **saniyedeki** DH'sini sınırlamaz: o B5a'nın küresel bütçesi (RUDP-SECURITY §12) |
+| 6 | **Göç kaynağı taşır (B113):** doğrulanan göç bağlantı aktörüne de bildirilir (`ConnIn::PeerChanged`; yazıcıyla birlikte ya da hiç), aktör `peer`'ini günceller ve registry'ye söyler; registry satırın kaynağını, demux bekleyen oturumun yerini taşır | Önceden göçten sonra D12 sayımı ve aktörün `peer`'i ilk adreste kalıyordu: eski kaynak boşuna dolu, yeni kaynak hiç saymıyordu |
+| 7 | **Yeni kaynak sınırdaysa sayım eski kaynakta kalır, sayılır; göç yine olur** (`unauth_source_moves_kept`, `udp_pending_source_moves_kept`) | Göçü reddetmek NAT'ı yeniden bağlanan ya da dolu bir CGNAT'a geçen dürüst oyuncuyu ölü yolda bırakırdı (demux registry'nin sayımını da bilemez — beklemez). Sınıra bakmadan taşımak sınırı delerdi: A'dan doldur, B'ye taşı, A boşalır, yeniden doldur — B sınırsız. Yerinde bırakmak: her sayım oturumun kanıtladığı bir kaynakta, hiçbir kaynak sınırın üstünde değil, havuz `U` hâlâ `U`/sınır kaynakla dolar. Authed satır hiçbir sayımda değil, serbestçe taşınır |
+
+**Boyutlama.** §4.3.1'inki: aynı adresin arkasından aynı anda bağlanan
+oyuncu + pay. Bekleyen pencere mikro-milisaniyedir; dürüst bir patlamada
+sınıra takılan proof bir yeniden gönderim gecikir.
+`udp_proofs_refused_per_source` saldırı yokken artıyorsa sınır büyütülür.
+
+Kilit: `gsb-net` `udp::demux::tests::per_source` (sınırdaki kaynağın
+proof'u oturumsuz, kabulsüz, sayılı; başka kaynak — 127.0.0.2 — hizmet
+alır; alınan uç nokta yeri geri verir ve yeniden gönderim girer; challenge
+isteği ve sahte/eski proof yer tutmaz; alınan, kabulsüz düşen ve dolu
+kanalda sökülen oturum yeri geri verir, tablo boşalır; yazılmamış/`0`
+sınırsız), `udp::demux::tests::migrate::source` (göç aktöre de söylenir,
+kareden sonra; dolu aktör kutusu göçü yazıcıyla birlikte erteler;
+bekleyen yer yeni kaynağa taşınır, dolu kaynağa taşınmaz),
+`udp::tests::migrate` (gerçek soket: başka kaynağa — 127.0.0.2 — NAT
+yeniden bağlanması aktöre yeni adresi söyler), `gsb-core`
+`conn::actor::peer::tests` (aktör `peer`'i günceller, registry'ye sırayla
+söyler), `tests/unauth_per_source.rs` `moved` (sayım yeni kaynağa
+taşınır; dolu kaynağa taşınmaz ve sayılır; authed satır serbest),
+`gsb-server` `boot::backlog_tests` (anahtar rUDP kapısına ulaşır),
+`tests/handshakes_per_source.rs` `rudp` (sınır 1'de tek kaynaktan art
+arda 8 ve aynı anda 8 oturum — hepsi girer), `tests/unauth_per_source.rs`
+`migrate` (uçtan uca: 127.0.0.1'den 127.0.0.2'ye NAT ile göçen unauthed
+rUDP oturumu 127.0.0.1'in yerini boşaltır, 127.0.0.2'ninkini doldurur).
 
 ### 4.4 Dinleme kuyruğu: accept'ten önceki çekirdek sınırı (B84)
 
@@ -556,7 +599,8 @@ bayt bayt eskisidir. Kriptodan (B5a) önce açmanın bedeli açıktır:
 **Kalan yüzey (bilinçli):** CID ağlar arası sabittir — pasif bir
 gözlemci iki ağdaki oturumu ilişkilendirebilir (gizlilik; çözüm CID
 rotasyonu, RUDP-SECURITY §10, B5b). Göçte registry'nin kaynak başına
-sayımı (§4.3.2) ve aktörün `peer`'i ilk adreste kalır — B89.
+sayımı (§4.3.2) ve aktörün `peer`'i artık yeni adrese taşınır (B113,
+§4.3.3 #6–7).
 
 Kilit: `udp::demux::tests::{grant, migrate}`, `udp::tests::migrate`
 (gerçek soket: NAT yeniden bağlanması, `rebind`, uyumluluk matrisi,

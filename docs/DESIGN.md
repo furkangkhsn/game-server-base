@@ -1815,6 +1815,30 @@ aynı boyutta → amplifikasyon oranı ≤ 1; sahte proof, key bilmeden
 üretilemez. Kabul (5 B) yalnız doğrulanan proof'a gider: oran 5/18,
 sahte proof'a hiçbir şey.
 
+**Kaynak başına bekleyen oturum sınırı (B89 — u89, 2026-10-02;
+opt-in).** Çerez alışverişi durum tutmaz; durum doğrulanan proof'la
+başlar (B5a'dan sonra DH de orada). `max_handshakes_per_source` (D11'in
+anahtarı, aynı anlam: bir kaynağın bir kapıda ilk durumundan accept
+döngüsünün uç noktayı almasına dek tuttuğu) rUDP kapısında bir kaynağın
+**bekleyen** oturumlarını sınırlar — demux'ın kurduğu, accept döngüsünün
+henüz almadığı. Varsayılan yok (kapı bayt bayt eskisi). Sınırdaki
+kaynağın doğrulanan proof'u hiçbir şey kurmaz, kabul almaz, sayılır
+(`udp_proofs_refused_per_source`); istemci proof'u yeniden yollar, yer
+açılınca girer. Bakış çerezden **sonra**: yol dışı sahteci çerezi
+geçemez, dolayısıyla yalnız dönüş yolu olan kaynak sayılır; kurbanın
+adresiyle sahte proof ya da challenge isteği yer tutmaz. Sayım demux
+görevinde (`udp::demux::source`, kilitsiz): yer, kuyruğa giren uç
+noktanın taşıdığı `Pending`'de durur, bıraktığında (accept döngüsü
+aldı, dinleyicinin kuyruğuyla düştü, dolu kanalda söküldü) oturumun
+anahtarını demux'a bir kuyrukla geri yollar; demux her karardan önce
+toplar. Girdi yalnız bir yer tutuldukça yaşar: tablo ve kuyruk uç nokta
+kanalının sınırını (1024 + bekleyen accept başına bir) aşamaz.
+`ConnOpened` alımdan sonra gider: oturumu sonra D12 sayar, ikisi aynı
+anda asla. Accept döngüsü uç noktayı hemen aldığı için kaynak sınırı
+ancak bir an tutar — sınır oturumları değil, eşzamanlı kuruluşları
+keser; DH'nin **hızını** sınırlamaz (o B5a'nın bütçesi, RUDP-SECURITY
+§4/§12).
+
 **Cookie rotasyonu (yakalanan proof'un son kullanma tarihi):** key tek
 başına yetmiyordu. `F` yalnız (key, nonce, peer)'in fonksiyonu olduğu
 sürece telden yakalanan bir proof **proses ömrü boyunca** geçerli
@@ -2838,9 +2862,11 @@ konumunun eşitliği derleme zamanı `assert`'leridir (`udp/mod.rs`).
   taşır: adres indeksi yeni adrese geçer, yazıcıya çıkış kanalından
   `UDP_PATH` (op 14, tele çıkmaz) bildirimi gider — piggyback ACK gibi:
   yazıcının tek beklenen kaynağı aynı kalır, kilit yok. Bildirimden önce
-  kuyruğa giren kareler eski adrese, sonrakiler yeni adrese. Yazıcının
-  kanalı doluysa taşıma yapılmaz (sayılır), doğrulama bekler, bir sonraki
-  challenge turu yeniden dener.
+  kuyruğa giren kareler eski adrese, sonrakiler yeni adrese. Bağlantı
+  aktörüne de gelen kutusundan `ConnIn::PeerChanged` gider (B113,
+  aşağıda): ikisi birlikte ya da hiçbiri — demux önce iki kanalda da yer
+  ayırır (`try_reserve`). Kanallardan biri doluysa taşıma yapılmaz
+  (sayılır), doğrulama bekler, bir sonraki challenge turu yeniden dener.
 - **Eski adres göç bitene dek çalışır.** Göçten sonra eski adres
   kimsenin değildir; oradan etiketli bir artık datagram CID ile yine
   oturumundur ve yeni bir aday sayılır.
@@ -2925,7 +2951,7 @@ datagram bütçesi kapı genelinde tek değerdir, yola göre keşfedilmez.
 `udp_path_validations_superseded`, `udp_path_validations_open_at_end`,
 `udp_migrations`, `udp_migrations_port_only`. (Brifteki
 `udp_paths_validated` ayrı bir sayaç değil: eşleşen yanıt ya taşır
-(`udp_migrations`) ya yazıcıya ulaşamaz (`udp_path_changes_not_forwarded`,
+(`udp_migrations`) ya yazıcıya (B113'ten beri: ya da aktöre) ulaşamaz (`udp_path_changes_not_forwarded`,
 doğrulama bekler) — iki ad, iki anlam, B32'nin kuralı.) Yazıcının
 oturum log'unda `path_changes`, `path_resets`.
 
@@ -2988,10 +3014,35 @@ saymamak, bildirimi oturum karesi saymak, port-only'yi hep saymak,
 `rebind`'in dürtmesini kaldırmak, caps baytını yanlış konumdan okumak,
 sunucunun `udp_migration`'ı kapıya iletmemesi (`rudp_resume`).
 
-*B89 ve B5a'ya kalanlar.* B89: kaynak başına el sıkışma/oturum sınırı
-göçte sayımı taşımalı — bugün registry'nin kaynak başına sayımı
-(D12) bağlantının ilk adresinde kalır, göç onu güncellemez; aktörün
-`peer`'i de ilk adres kalır (yalnız log/ihlal sinyali). B5a: CID'yi
+*Göçte kaynak (B113 — u89, 2026-10-02).* Göç artık oturumun kaynağını
+taşır; üç yerde:
+- **Aktör:** `ConnIn::PeerChanged { peer }` (enum'un sonunda) `peer`'i
+  günceller (kapanış sinyalleri yeni adresi adlandırır) ve registry'ye
+  `RegistryMsg::ConnPeerChanged { conn, source }` yollar — `Authed`'in
+  kullandığı gönderimle, ikisi sırasını korur. Bildirim kareleri de
+  taşıyan gelen kutusundan geçer: göçten önceki kareler önce işlenir.
+- **Registry (D12):** satırın kaynağı yeni kaynağa geçer; unauthed
+  satırın kaynak başına sayımı onunla taşınır. **Yeni kaynak sınırını
+  zaten tutuyorsa** sayım eski kaynakta kalır ve sayılır
+  (`unauth_source_moves_kept`); taşıma (taşımanınki) geri alınmaz.
+  Authed satır hiçbir sayımda değil, sadece izler.
+- **Demux (B89):** oturum hâlâ bekleyense (kurulmuş, accept döngüsü
+  almamış) sınırdaki yeri aynı kuralla taşınır
+  (`udp_pending_source_moves_kept`).
+
+*Neden "taşı ya da yerinde bırak", "reddet" ya da "serbest bırak"
+değil.* Göçü reddetmek (eski yolda kalmak) NAT'ı yeniden bağlanan ya da
+dolu bir CGNAT'a geçen dürüst oyuncuyu ölü yolda bırakırdı — demux
+registry'nin sayımını bilmez de (bilmek için bekleme gerekirdi; demux
+beklemez). Sayımı sınıra bakmadan taşımak sınırı delerdi: iki adresli
+saldırgan oturumları A'dan doldurup B'ye taşır, A boşalır, yeniden
+doldurur — B sınırsız büyür. "Yerinde bırak" ikisini de önler: her
+sayım oturumun kanıtladığı (dönüş yolu olan) bir kaynakta durur, hiçbir
+kaynak sınırı aşmaz, havuz `U` hâlâ `U`/sınır kaynakla dolar; dürüst
+oyuncu göçer ve AUTH'la sayımdan çıkar. Unauthed pencere bir AUTH
+gidiş-dönüşüdür; bu durum nadirdir, ama sayılır.
+
+*B5a'ya kalanlar.* B5a: CID'yi
 msg2'nin şifreli yükünde ver; etiketli düz metin yerine SEALED c→s
 (CID aynı konumda); göç kuralının üç koşulu (`Opener::open` Ok +
 `newest` + yol doğrulanmış), PATH_* şifreli iç tür olur; "en yeni aday"

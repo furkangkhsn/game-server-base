@@ -335,7 +335,10 @@ WS, TLS, QUIC; düz anahtarlardan türeyen kapı ya da `[[listeners]]`'ın
 her girdisi — bir kaynak adrese (IPv4 adresi, IPv6 /64) verdiği en çok
 uçuştaki el sıkışma yuvası. Kapının kendi sınırı (`max_unauth_conns`,
 SECURITY §4.3) değişmez; bu ondan tek kaynağın alabileceği pay. Düz TCP
-(el sıkışma evresi yok) ve rUDP (durumsuz çerez) anahtarı görmez.
+(el sıkışma evresi yok) anahtarı görmez. rUDP kapısında (B89) çerez
+alışverişi yuva tutmaz; orada anahtar bir kaynağın **bekleyen**
+oturumlarını sınırlar — doğrulanan proof'la kurulmuş, accept döngüsünün
+henüz almadığı (SECURITY §4.3.3).
 
 ```toml
 max_handshakes_per_source = 16   # vars. yok = sınır yok; 0 = yok
@@ -350,9 +353,13 @@ max_handshakes_per_source = 16   # vars. yok = sınır yok; 0 = yok
 - **Sınır üstü:** WS/TLS'te soket el sıkışmasız kapanır; QUIC'te
   kanıtlanmış adres `refuse`, kanıtlanmamış adres durumsuz Retry alır
   (sahte kaynaklı Initial'larla kurbanın sayısını doldurmak kurbanı
-  reddettiremez — SECURITY §4.3.1 #5). Sayaçlar §3 "Taşıma kapsamı:
-  el sıkışan kapıların kaynak başına sınırı"; kaynak başına dönem
-  başına tek `warn` kaynağı adlandırır.
+  reddettiremez — SECURITY §4.3.1 #5). rUDP'de doğrulanan proof hiçbir
+  şey kurmaz, kabul almaz (çerezden sonra bakılır: sahte kaynak yer
+  tutamaz); istemci yeniden yollar, yer açılınca girer —
+  `udp_proofs_refused_per_source`. Sayaçlar §3 "Taşıma kapsamı:
+  el sıkışan kapıların kaynak başına sınırı" ve "rUDP kapısının kaynak
+  başına sınırı"; kaynak başına dönem başına tek `warn` kaynağı
+  adlandırır.
 - **Boyutlama:** aynı adresin arkasından aynı saniyede bağlanabilecek
   oyuncu sayısı + pay: ev/küçük ofis 8–16, LAN partisi ya da büyük
   CGNAT havuzunun arkasındaki bölge 32–64. `handshakes_refused_per_source`
@@ -379,7 +386,9 @@ max_unauth_conns_per_source = 16   # vars. yok = sınır yok; 0 = yok
 - **Ne sayılır:** registry'nin bağlantı tablosunda hâlâ unauthed olan,
   aynı kaynaktan satırlar. AUTH başarısı ya da kapanış yeri geri verir;
   başarısız AUTH vermez (oturum hâlâ unauthed — ERROR 10/13'le açık
-  kalır).
+  kalır). rUDP göçünde (B113, `udp_migration`) satırın kaynağı yeni
+  adrese taşınır; yeni kaynak sınırdaysa sayım eski kaynakta kalır
+  (göç yine olur) — `unauth_source_moves_kept` (§3).
 - **Sınır üstü:** doğumda ret, havuzun kendi reddi gibi — `ERROR 9`
   (`source at its per-source unauthenticated capacity`), registry
   satırı yok; WS'te kapanış kodu 1013. Sayaç: `server_closes`'ın kendi
@@ -1195,7 +1204,8 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `udp_path_address_in_use` (başka oturumun adresi olduğu için reddedilen
   aday), `udp_path_responses_unmatched` (bekleyen doğrulamaya uymayan
   PATH_RESPONSE, düştü), `udp_path_changes_not_forwarded` (eşleşen ama
-  yazıcı kanalı dolu/kapalı olduğu için taşınamayan — doğrulama bekler),
+  yazıcının ya da — B113'ten beri — bağlantı aktörünün kanalı dolu/kapalı
+  olduğu için taşınamayan — doğrulama bekler),
   `udp_path_validations_timed_out` (3 sn'de yanıt gelmedi, oturum eski
   yolda), `udp_path_validations_superseded` (daha yeni bir aday
   adres geldi), `udp_path_validations_open_at_end` (oturum biterken hâlâ
@@ -1207,6 +1217,32 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `timed_out` sıçraması sahte kaynak denemesi ya da kaybolan istemci
   işaretidir. Demux'ın duruş satırında `migrations`, `cid_unknown`;
   yazıcının oturum satırında `path_changes`, `path_resets`.
+- **Taşıma kapsamı: rUDP kapısının kaynak başına sınırı ve göçte kaynak
+  (B89, B113 — u89).** Satırın ve tablonun sonuna iki `counter`;
+  `RESULT`'ta `transport_<ad>=`; loadgen telinin taşıma bölümü iki
+  sayaç uzar (sihir birleştirmede atanır). `udp_proofs_refused_per_source`
+  (`gsb_transport_udp_proofs_refused_per_source_total`) — kaynağı
+  `max_handshakes_per_source` kadar bekleyen oturum (kurulmuş, accept
+  döngüsünün almadığı) tutarken gelen doğrulanmış proof'lar: oturum yok,
+  kabul yok; istemci yeniden yollar, her kopya bir sayılır (el sıkışma
+  değil proof datagram'ı). `udp_pending_source_moves_kept`
+  (`gsb_transport_udp_pending_source_moves_kept_total`) — beklerken
+  sınırdaki bir kaynağa göçen oturumlar: göç oldu, yeri eski kaynakta
+  kaldı. Sınır yazılmamışsa ikisi de hep 0. Demux'ın duruş satırında
+  `proofs_refused_per_source`. `udp_path_changes_not_forwarded`'ın
+  HELP'i bilerek değişti: eşleşen yanıtın bildirimleri artık yazıcıya
+  **ve** bağlantı aktörüne gider (ikisi ya da hiçbiri) — kanallarından
+  biri dolu/kapalıysa sayılır, doğrulama bekler.
+- **Registry kapsamı: göçte tutulan kaynak sayımı (B113 — u89).**
+  Registry satırının (`gsb-metric scope=registry`) sonuna
+  `unauth_source_moves_kept=`, Prometheus'ta
+  `gsb_registry_unauth_source_moves_kept_total` (registry tablosunun
+  sonunda, `gsb_registry_detach_despawns_lost_total`'dan sonra; OTLP'de
+  aynı ad `_total`'sız): unauthed iken başka bir kaynağa göçen ve o
+  kaynak `max_unauth_conns_per_source`'u tuttuğu için sayımı eski
+  kaynakta kalan bağlantılar. Göç oldu; kayıp değil, karar sayacı.
+  Loadgen telinin registry bölümü `detach_despawns_lost`'tan sonra bir
+  `u64` uzar (sihir birleştirmede).
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

@@ -78,7 +78,7 @@
 | Tekrar oynatma | Mümkün | Mümkün | Replay penceresi → `seal_replayed` / `seal_too_old` |
 | Oturum kaçırma | Adres sahteciliğiyle kısmen | **CID taşıyıcı jetondur:** CID'yi koklayan, düz metin PATH_CHALLENGE'ı kendi adresinden yanıtlayıp s→c akışını kendine çeker | Challenge şifreli, yanıtlanamaz; eski yolda beklenir |
 | Yansıtma / amplifikasyon | Çerez + oran ≤ 1 | + 3x bütçe + yol doğrulaması | Aynı. Accept (77 B) proof'tan (~67 B) büyük, ama yalnız çerezle kanıtlanmış adrese gider |
-| DH seli (CPU) | — | — | DH yalnız çerez doğrulandıktan **sonra**; B89 kaynak başına + global bütçe |
+| DH seli (CPU) | — | — | DH yalnız çerez doğrulandıktan ve kaynak başına bekleyen oturum sınırından (B89, yapıldı) **sonra**; küresel DH bütçesi B5a'da (§4) |
 | Sahte sunucu | Mümkün | Mümkün | İstemci sunucu açık anahtarını sabitler; NK msg2'yi yalnız gerçek sunucu üretebilir |
 | Sunucu yeniden başlarsa | İstemci 5 sn REL sınırını bekler | Aynı | Stateless reset jetonuyla hemen biter (B5b) |
 | Pasif bağlanabilirlik (gizlilik) | Adres | CID ağlar arası sabit | Aynı. Çözüm CID rotasyonu (§10, sonra) |
@@ -111,7 +111,39 @@ SEALED REL AUTH(bilet)              ──▶        AUTH artık şifreli kanal�
   - Sunucu el sıkışma başına 3 skaler çarpım yapar: `es`, efemeral üretimi,
     `ee`. snow statik açık anahtarı her responder kurulumunda yeniden
     türettiği için +1 eder.
-  - Bunlar B89 bütçesinin konusu ve B5a'da ölçülecek.
+  - **Ölçüldü (B110, u89; `seal::tests::cost`, yok sayılan zamanlama
+    sondası, release):** Ryzen 9 7950X, **yüklü** makine (yük ortalaması
+    ~36 / 32 iş parçacığı), 2000'lik üç koşu: responder'ın bütün
+    `Msg1::cookie_verified`'ı **175–186 µs**, istemcinin msg1'i 85–90 µs,
+    bir X25519 (anahtar çifti üretimi, OS entropi okuması dahil) 55–58
+    µs; oran 3,1–3,2 (üretimin entropi okuması payı yüzünden 4'ün
+    altında). Çekirdek-saniye başına **~5,4–5,7 bin el sıkışma**. Sessiz
+    makinede daha düşük beklenir; B5a sessizde yeniden ölçer.
+  - **Sonuç:** demux tek görev; DH orada koşarsa her el sıkışma bütün
+    oturumların gelen trafiğini ~180 µs durdurur, saniyede ~5,5 bin
+    doğrulanmış proof demux'ı doyurur. B89'un kaynak başına sınırı
+    eşzamanlı kuruluşları keser, **hızı** kesmez (SECURITY §4.3.3 #5).
+    Statik anahtarın yeniden türetilmesi (+1 çarpım) el sıkışmanın ~%25'i:
+    `clatter` ya da kendi NK'mız onu geri alır (B110 açık kalır, B5a'nın
+    ölçümüne bağlı).
+  - **B5a'nın DH bütçesi (tasarım; u89'da kodlanmadı — DH olmadan
+    korunacak bir maliyet yok, ayarı DH'nin nerede koşacağına bağlı):**
+    1. Küresel jeton kovası, demux'ta, çerez ve kaynak sınırından
+       sonra, DH'den önce: `udp_handshakes_per_sec` (sunucu anahtarı;
+       vars. demux'ın bir çekirdeğinin ~%20'si — ölçülen değerle ~1000/s;
+       `0` = sınırsız). Kova boşken doğrulanan proof hiçbir şey kurmaz,
+       kabul almaz, kendi adıyla sayılır (`udp_proofs_refused_budget`);
+       istemci yeniden gönderir (5 sn içinde). Durum: iki sayı (jeton,
+       son dolum anı), saat okuması proof başına.
+    2. Kovanın payı: küresel kova demux'ı korur, adaleti değil — tek
+       (dönüş yolu olan) kaynak art arda proof'la kovayı tüketebilir ve
+       dürüst kaynakların el sıkışması yeniden gönderime kalır. B89'un
+       sınırı eşzamanlılığı keser, hızı kesmez; D12 kaydı reddeder ama
+       DH'den sonra. Kaynak başına oran (küçük kova; tablo yalnız son
+       kaynaklar için, sınırlı) B5a ölçümüne bağlı ikinci adım.
+    3. Seçenek (ölçüm gösterirse): DH'yi demux'tan sınırlı bir işçi
+       havuzuna taşımak (kuyruk = bütçe), demux yalnız sıraya koyar.
+       Kuyruk doluysa aynı ret yolu.
 - **Prologue = `"gsb-rudp-seal/1\0"` + bağlam.** B5a bağlam olarak HELLO
   nonce'u ve çerezi verir. Böylece Noise dökümü o çerez alışverişine
   bağlanır: başka bir çerezle yakalanmış msg1 tutmaz. Bağlam uyuşmazlığı
@@ -320,8 +352,10 @@ adresini yalnız şu üçü birden doğruysa değiştirir:
 - Göç kuralına 1. ve 2. koşulu ekle (`Opener::open` Ok + `newest`):
   "en yeni aday" kuralı numarasızdan sayaç sırasına geçer.
 - `udp_migration` varsayılanını aç (karar 5).
-- B89 önce gelir: kaynak başına sayımın göçte taşınması (bugün
-  registry'nin D12 sayımı ve aktörün `peer`'i ilk adreste kalır).
+- B89/B113 yapıldı (u89): kaynak başına bekleyen oturum sınırı ve göçte
+  kaynağın taşınması (aktörün `peer`'i, registry'nin D12 sayımı, demux'ın
+  bekleyen yeri; dolu kaynağa sayım taşınmaz). B5a göçün üç koşulunu
+  ekleyince bildirim yolu aynı kalır.
 
 ## 8. Stateless reset
 
@@ -404,8 +438,8 @@ Kripto bağlandıktan sonra (B5a) **mühürlü kip üretim varsayılanıdır**
 |---|---|
 | **x1 (bu tur)** | **Yapıldı:** `gsb_net::seal` çekirdeği (el sıkışma sarmalayıcısı, `Sealer`/`Opener`, replay penceresi, anahtar fazı, reset jetonu, SEALED başlık kodlaması) + bu doküman. **Bağlanmadı:** rUDP'nin hiçbir yolu bu modülü çağırmaz |
 | **B3** | **Yapıldı (2026-10-02):** kriptosuz CID ve göç (opt-in `udp_migration`): proof'a caps baytı, accept'te CID, etiketli c→s datagramı, PATH_CHALLENGE/RESPONSE, 3x bütçe, oturumlara iç anahtar + `addr→key` / `cid→key` indeksleri, writer'a `UDP_PATH` (`PathChanged`), `UdpClient::rebind()`, 15 sayaç; kind haritası kesin (§5). Ayrıntı §7, DESIGN §6 "Bağlantı göçü" |
-| **B89** | Kaynak adres başına el sıkışma oranı ve oturum sınırı; göçte sayımın taşınması; DH'den önce global el sıkışma bütçesi. Kriptodan **önce** gelir: DH ve AEAD maliyetini o korur |
-| **B5a** | **Bu modülü bağlar:** msg1 proof'a, msg2 accept'e; SEALED kayıt; sunucu statik anahtarı config'den; `Sealer` writer'a, `Opener` demux'a; `Refusal` adları sayaçlara; göç kuralının üç koşulu; PATH_* şifreli iç kind; mühürlü kip varsayılan, düz metin dev/LAN anahtarı; demux'ta çözme CPU'sunun ölçümü (100k'da) |
+| **B89** | **Yapıldı (u89, 2026-10-02):** kaynak başına bekleyen oturum sınırı (`max_handshakes_per_source`, D11'in anahtarı; çerezden sonra, DH'den önce; `udp_proofs_refused_per_source`), göçte kaynağın taşınması (B113: aktörün `peer`'i, registry'nin D12 sayımı, demux'ın bekleyen yeri; dolu kaynağa taşınmaz — `unauth_source_moves_kept`, `udp_pending_source_moves_kept`), B110 ölçümü (§4). **B5a'ya devredildi:** DH'den önce küresel el sıkışma bütçesi (§4 tasarımı) — kaynak başına sınır hızı kesmez. SECURITY §4.3.3 |
+| **B5a** | **Bu modülü bağlar:** DH'den önce küresel el sıkışma bütçesi (§4; B89'dan); msg1 proof'a, msg2 accept'e; SEALED kayıt; sunucu statik anahtarı config'den; `Sealer` writer'a, `Opener` demux'a; `Refusal` adları sayaçlara; göç kuralının üç koşulu; PATH_* şifreli iç kind; mühürlü kip varsayılan, düz metin dev/LAN anahtarı; demux'ta çözme CPU'sunun ölçümü (100k'da) |
 | **B5b** | Anahtar fazı politikası (ne zaman rekey; ACK → `note_peer_ack` eşlemesi), stateless reset (config anahtarı, reset datagramı, istemci kontrolü), opsiyonel CID rotasyonu / adres doğrulama jetonu |
 | **B7** | Şifreli resume e2e: reset ya da göç başarısızlığından sonra yeni el sıkışma + RECONNECT'in resume yolu, rUDP üstünde uçtan uca |
 
