@@ -135,6 +135,12 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   — değiştirilemez), rUDP REL bandının canlılık sınırı
   (`REL_NO_ACK_FATAL`, yazıcı), odanın girdi-boşta tavanı (tick saati),
   park süresi, el sıkışma son tarihleri (BACKLOG c2 satırları).
+  Ölçüm (t1'in düzeneği: süreç içi loadgen, 4 istemci, 2 sn pencere,
+  2,5 sn'de 3 sn SIGSTOP): rUDP önce 3/3 `left=0
+  server_close_idle_timeout=4`, sonra 3/3 `left=4`, 0 kapanış (2 koşuda
+  4 yeniden başlatma, birinde datagram'lar süpürmeden önce okundu: 0);
+  TCP iki kural da kapalıyken 3/3 4 kapanış, yalnız bakış açıkken 3'te 1
+  kapanış, ikisi açıkken 3/3 0 kapanış (3–4 yeniden başlatma).
 - **Oda başına 1 görev:** room actor. Tick'ler **tek global ticker görevinden**
   gelir (`tokio::sync::broadcast`): oda actor'ünün *tek* await'i
   `tick_rx.recv()`; tick gövdesi tamamen senkron. Oda hizi global hızın tam
