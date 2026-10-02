@@ -1291,8 +1291,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   biri dolu/kapalıysa sayılır, doğrulama bekler.
 - **Taşıma kapsamı: rUDP mühürlü kapı (B5a).** Satırın ve tablonun
   sonuna 16 `counter`; `RESULT`'ta `transport_<ad>=`; loadgen telinin
-  taşıma bölümü 16 sayaç uzar (**tel düzeni değişti — sihir numarasını
-  sıradaki tur atar**). Düz metin kapıda hepsi 0 (yazıcının ikisi hariç:
+  taşıma bölümü 16 sayaç uzar (**GSNQ**). Düz metin kapıda hepsi 0 (yazıcının ikisi hariç:
   yine 0). Ret adları `seal::Refusal::name()`'in kararlı adları — her
   datagram tek ad:
   - El sıkışma (sıra çerez → msg1 biçimi → kaynak sınırı → bütçe → DH):

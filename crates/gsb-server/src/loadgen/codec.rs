@@ -286,7 +286,10 @@ mod logic;
 /// `udp_proofs_refused_per_source`, `udp_pending_source_moves_kept`) and
 /// one more registry `u64` right after `detach_despawns_lost` (B113:
 /// `unauth_source_moves_kept`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E50;
+/// GSNQ = the GSNP layout with sixteen more transport counters at the
+/// end of that section (B5a's sealed rUDP door: `udp_proofs_refused_budget`
+/// .. `udp_path_challenges_not_queued`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E51;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
