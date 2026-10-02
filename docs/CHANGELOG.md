@@ -5,6 +5,44 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## rUDP sertleştirme 3 — tıkanıklık tepkisi (B1), B91, B93, B96, F75 (`net/r3-congestion`)
+
+rUDP sertleştirme paketinin (E3) üçüncü turu: tur 2'nin sinyallerine tepki.
+
+- **Tıkanıklık tepkisi (opt-in, kullanıcı kararı):** `udp_congestion =
+  "off" | "pace"` (varsayılan `"off"` — bugünkü yazıcı). `"pace"`'te
+  raporlayan oturum, sondalarında üst üste iki sinyal (≥2 datagram ve ≥%10
+  kayıp, ya da pencereli en küçük turun 30 ms üstünde tur) görünce yolunun
+  TESLİM ettiği hız × 0,85'e göre hızlanır; toplamsal artış, talebin 1,25
+  katında yeniden açılır; boşalan kuyrukta hız tutulur. Hızlama kuyruğu en
+  çok hız × 50 ms tutar (en yeni hep), en eskiler BÜTÜN düşer (FRAG hep ya
+  hiç) ve sayılır; kontrol bandı asla hızlanmaz/düşmez (baytları kovadan
+  düşülür). Raporlamayan istemci asla hızlanmaz — bayt bayt aynı (test).
+  Tel değişmedi. Kod: `udp::congestion`, `udp::writer::pace`.
+- **Oyuna sinyal (gsb-net sınırında):** `gsb_net::udp::PathState` (`phase`,
+  `rate`, `demand`, `loss_permille`, `queue_delay`, `budget()`); çekirdeğe
+  ve kit'e taşınması sonraki tur (B103; DESIGN §6 "Tıkanıklık tepkisi").
+- **B91:** cevapsız halkadan sonra sonda aralığı her tahliyede ikiye
+  katlanır (en çok 8×), ilk cevap sıfırlar. **B93:**
+  `GameEstimate::window_min_rtt` (iki 5 sn'lik kova); aralığın baytları
+  (`interval_sent_bytes`). Hızlanan/şüpheli oturum 250 ms'de sondalanır.
+- **Ölçüm** (kullanıcı alanı darboğaz): derin tamponda (60 KB/sn, 500 ms)
+  mesaj 9,0 → 18,5/sn, oyun yaşı p50 527 → 96 ms, kontrol 518 → 41 ms,
+  yarım FRAG 268 → 25; 4 oturum paylaşımlı darboğazda Jain 0,274 → 0,993;
+  darboğazsızda iki mod aynı. Ölçüm testi `udp::tests::pace::measure`
+  `--ignored` ile elle koşar (sayımda 2. ignored).
+- **Sayaçlar:** `udp_game_frames_{queued,dropped,unsent}_paced`,
+  `udp_game_paced_{episodes,rate_cuts}`; loadgen teli **GSNM**.
+- **B96:** kapanan kapının çekirdek izleyicisini kestiği koşul bekleyen
+  testle sabit. **F75:** rUDP'nin sessizliğe dek toplayan ve 200 ms–1 sn'lik
+  olumlu okumaları koşula/işaretleyiciye çevrildi; yükte düşen
+  `handshake::rtt` testi artık temiz örneğin kendi zamanlayıcısını sınar.
+
+Testler 1753 → 1777 (`otlp` ile 1771 → 1795; ignored 1 → 2). Mutasyonlar
+39'da 38 öldü; sağ kalan: REL yeniden gönderiminin kovadan düşülmemesi
+(B106). Ebeveyn doğrulaması: tam kapılar yeşil; çıkış payını (×1,25)
+kaldırmak testi düşürdü.
+
 ## e1 — rUDP üstünde resume uçtan uca kilitlendi (B7, düz metin) (`test/e1-rudp-resume`)
 
 - `gsb-server/tests/rudp_resume.rs` (7 test, gerçek sunucu): LEAVE'siz

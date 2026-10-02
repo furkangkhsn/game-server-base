@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1753 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1777 test yeşil (2 ignored: doctest + elle koşan tıkanıklık ölçümü), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -252,6 +252,16 @@ Loadgen teli GSNL. Açık: B99–B102, F77, F78.
 + `rudp_resume/{rig,player,flows,grace}.rs`, RECONNECT §5 sonu. B3/B5
 turları bu yedi testi yeşil tutmalı; B3 kendi beklentisini `flows.rs`'teki
 kapı-başı beklentinin (`Door::drop_close`) yanına ekler.
+
+**rUDP sertleştirme 3 tamam** (CHANGELOG "rUDP sertleştirme 3", DESIGN §6
+"Tıkanıklık tepkisi"): `udp::congestion` (`Control`, `PaceQueue`,
+`PathState`, `UdpCongestion`), `udp::writer::pace` (`wake()` = min(rto,
+tick, hızlama)); `udp_congestion` (sunucu `UdpCongestionKind`, vars.
+`"off"`), 5 `udp_game_*paced*` sayacı, `GameEstimate::{window_min_rtt,
+interval_sent_bytes}`. Ölçüm düzeneği `udp::tests::pace::{relay, measure}`
+(`--ignored`). Loadgen teli GSNM. B1, B91, B93, B96, F75 kapandı. Açık:
+B103 (sinyali oyuna taşı — 4 karar), B104 (varsayılanı `"pace"`'e
+çevirme), B105, B106.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -955,6 +965,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1753 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1777 passed, 2 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
