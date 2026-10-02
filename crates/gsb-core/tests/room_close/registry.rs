@@ -213,6 +213,7 @@ async fn a_close_request_after_the_transport_died_releases_the_row() {
     let entity = join(&tx, 1, "ana").await.expect("joined");
     tx.send(RegistryMsg::ConnClosed {
         conn: ConnectionId(1),
+        verdict: None,
     })
     .await
     .expect("sent");

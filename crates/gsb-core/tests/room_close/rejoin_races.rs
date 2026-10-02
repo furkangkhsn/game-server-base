@@ -181,9 +181,10 @@ async fn a_kick_lands_after_a_fresh_rejoin() {
 
 /// Which cause each membership's end reached the policy with (BACKLOG
 /// F27): the first the room's own verdict (`IdleInput` / `Kicked`), the
-/// NEW one the connection's close — `ConnectionClosed`, since the room
+/// NEW one the connection's close — a closed connection, since the room
 /// holding it did not judge it (the verdict landed from the earlier
-/// membership).
+/// membership), and since F28 one that names that verdict:
+/// `ConnectionClosedBy(IdleInput / Kicked)`.
 #[tokio::test(start_paused = true)]
 async fn the_rejoined_membership_ends_as_a_closed_connection() {
     for (kick, first) in [
@@ -214,7 +215,7 @@ async fn the_rejoined_membership_ends_as_a_closed_connection() {
                 got,
                 vec![
                     (PlayerId(1), first),
-                    (PlayerId(2), DisconnectCause::ConnectionClosed)
+                    (PlayerId(2), DisconnectCause::ConnectionClosedBy(verdict))
                 ],
                 "kick={kick} sharded={sharded}"
             );

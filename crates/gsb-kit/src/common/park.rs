@@ -38,7 +38,10 @@ mod tests;
 /// `grace`/`to` are the ROOM-WIDE rule. `by_cause` (BACKLOG F27, empty
 /// unless the game opted in with `with_disconnect_policy_for`) replaces
 /// it, whole, for the ends of a membership the core reports with that
-/// [`DisconnectCause`] — "kicked → despawn, dropped → park".
+/// [`DisconnectCause`] — "kicked → despawn, dropped → park". A closed
+/// connection's verdict (F28) can be selected on its own
+/// (`ConnectionClosedBy(ServerClose::ViolationBudget)` → despawn); one
+/// without an override of its own falls back to `ConnectionClosed`'s.
 #[derive(Debug, Clone)]
 pub(crate) struct ParkPolicy {
     pub grace: Option<Duration>,
@@ -65,13 +68,17 @@ impl ParkPolicy {
     }
 
     /// The `(grace, to)` an end with `cause` gets: its override, else the
-    /// room-wide rule (also for `None` — a caller that did not say why —
-    /// and for a cause the core learns later). At most one entry per
-    /// cause the core has, so the scan is a few comparisons, once per
-    /// end of a membership.
+    /// override of the cause it refines (BACKLOG F28: a
+    /// `ConnectionClosedBy(verdict)` with no override of its own takes
+    /// `ConnectionClosed`'s — what every closed connection got before the
+    /// core told the verdict apart), else the room-wide rule (also for
+    /// `None` — a caller that did not say why — and for a cause the core
+    /// learns later). A handful of entries, so the scans are a few
+    /// comparisons, once per end of a membership.
     fn rule(&self, cause: Option<DisconnectCause>) -> (Option<Duration>, ExpireTo) {
+        let find = |cause: DisconnectCause| self.by_cause.iter().find(|(c, ..)| *c == cause);
         cause
-            .and_then(|cause| self.by_cause.iter().find(|(c, ..)| *c == cause))
+            .and_then(|cause| find(cause).or_else(|| find(cause.coarse())))
             .map_or((self.grace, self.to), |&(_, grace, to)| (grace, to))
     }
 }

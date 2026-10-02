@@ -738,6 +738,7 @@ async fn resume_counts_as_authed() {
         .expect("first session joins");
     tx.send(RegistryMsg::ConnClosed {
         conn: ConnectionId(1),
+        verdict: None,
     })
     .await
     .expect("registry gone");

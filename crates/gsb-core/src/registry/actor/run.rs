@@ -97,7 +97,9 @@ where
                         }
                     }
                 }
-                RegistryMsg::ConnClosed { conn } => self.on_conn_closed(conn).await,
+                RegistryMsg::ConnClosed { conn, verdict } => {
+                    self.on_conn_closed(conn, verdict).await
+                }
                 RegistryMsg::SpawnDone {
                     conn,
                     room,

@@ -121,6 +121,15 @@ pub enum ShardMsg<S, B> {
         entity: EntityId,
         identity: String,
     },
+    /// [`Self::Detach`] of a connection a SERVER verdict closed (BACKLOG
+    /// F28, mirroring `RoomControl::DetachBy`): the owning shard asks the
+    /// policy with `DisconnectCause::ConnectionClosedBy(verdict)`.
+    DetachBy {
+        conn: ConnectionId,
+        entity: EntityId,
+        identity: String,
+        verdict: crate::conn::ServerClose,
+    },
     /// An identified join whose park ledger may hold this identity — the
     /// implicit resume attempt of §14.3, BROADCAST to every shard (§6):
     /// only the shard whose ledger holds it accepts (`Ok(Some(..))`);

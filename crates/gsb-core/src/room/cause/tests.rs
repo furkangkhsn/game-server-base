@@ -5,6 +5,8 @@
 use crate::id::{ConnectionId, PlayerId};
 use crate::room::{Action, Admission, Detach, DisconnectCause, ExpireTo, GameLogic, TickCtx};
 
+mod refine;
+
 /// Overrides `on_disconnect` only, and logs what it was asked.
 struct OldHook {
     asked: Vec<(PlayerId, String)>,

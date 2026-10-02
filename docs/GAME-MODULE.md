@@ -200,9 +200,10 @@ birbirine karışmaz:
   oyunun kararı; motor yalnız nedeni söyler. Aktörler politikayı
   `GameLogic::on_disconnect_with(world, player, identity, cause)` ile
   sorar; `cause` motorun ayırt ettiğidir: `ConnectionClosed` (bağlantı
-  kapandı — neden kapandığı odaya gelmez; B43'te yeni üyelik de böyle
-  biter), `IdleInput` (tavan, iki `afk_action`'da da), `Kicked` (oyunun
-  atması). Sağlanan metodun varsayılanı eski `on_disconnect`'i çağırır:
+  kapandı, sunucu hükmü yok — eş gitti), `ConnectionClosedBy(ServerClose)`
+  (bağlantıyı bir sunucu hükmü kapattı: idle timeout, write stall, ihlal
+  bütçesi, …; B43'te yeni üyelik de böyle biter — F28), `IdleInput`
+  (tavan, iki `afk_action`'da da), `Kicked` (oyunun atması). Sağlanan metodun varsayılanı eski `on_disconnect`'i çağırır:
   nedenden habersiz oyun bayt bayt aynı çalışır. Enum `#[non_exhaustive]`
   (eşleşen oyun joker kol tutar). Kit oyunu çekirdek kodu yazmaz:
   `with_disconnect_policy_for(DisconnectCause::Kicked,

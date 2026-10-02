@@ -217,10 +217,15 @@ impl super::ConnectionActor {
         // connection's end).
         self.maybe_flush_metrics(true);
 
-        // Cleanup: tell the registry so the player entity is despawned.
+        // Cleanup: tell the registry so the player entity is despawned —
+        // with the verdict that ended the session, for the room's policy
+        // (F28; `None` when the client ended it, or the server's stop).
         let _ = self
             .registry
-            .send(RegistryMsg::ConnClosed { conn: self.conn })
+            .send(RegistryMsg::ConnClosed {
+                conn: self.conn,
+                verdict: self.server_close,
+            })
             .await;
     }
 

@@ -96,7 +96,7 @@ fn registry(
                     }
                     Seen::Shutdown
                 }
-                RegistryMsg::ConnClosed { conn } => Seen::Closed(conn),
+                RegistryMsg::ConnClosed { conn, .. } => Seen::Closed(conn),
                 _ => continue,
             };
             let _ = log.send(event);
@@ -121,7 +121,10 @@ pub(super) fn server() -> (
 ) {
     let (reg_tx, reg_rx) = channel::<RegistryMsg>(1);
     reg_tx
-        .try_send(RegistryMsg::ConnClosed { conn: BUSY })
+        .try_send(RegistryMsg::ConnClosed {
+            conn: BUSY,
+            verdict: None,
+        })
         .expect("the mailbox has its one slot");
     let (go, go_rx) = oneshot::channel();
     let seen = registry(reg_rx, go_rx);

@@ -104,14 +104,23 @@ okumasıdır.
 
 | Çağrı noktası (oda ve shard aktöründe aynı) | `DisconnectCause` |
 |---|---|
-| `RoomControl::Detach` / `ShardMsg::Detach` — registry'nin `ConnClosed` yolu (dispatcher'ın `Close`'u ya da doğrudan DETACH) | `ConnectionClosed` |
+| `RoomControl::Detach` / `ShardMsg::Detach` — registry'nin `ConnClosed` yolu (dispatcher'ın `Close`'u ya da doğrudan DETACH), istemcinin kendi sonu | `ConnectionClosed` |
+| `RoomControl::DetachBy` / `ShardMsg::DetachBy` — aynı yol, bağlantıyı bir SUNUCU hükmü kapattı (F28) | `ConnectionClosedBy(ServerClose)` |
 | girdi-boşta tavanı (faz 0d), `afk_action` `leave_room` da `disconnect` da | `IdleInput` |
 | oyunun atması (`TickCtx::kick` — oda faz 3b / shard faz 3c ya da tick sonu) | `Kicked` |
 
 ```rust
 // gsb_core::room
 #[non_exhaustive]
-pub enum DisconnectCause { ConnectionClosed, IdleInput, Kicked }
+pub enum DisconnectCause {
+    ConnectionClosed, IdleInput, Kicked,
+    ConnectionClosedBy(ServerClose), // F28: ConnectionClosed'ı inceltir
+}
+impl DisconnectCause {
+    pub const fn closed(verdict: Option<ServerClose>) -> Self; // None → ConnectionClosed
+    pub const fn coarse(self) -> Self;     // ConnectionClosedBy(_) → ConnectionClosed
+    pub const fn verdict(self) -> Option<ServerClose>;
+}
 
 // GameLogic — oda ve shard'ın ORTAK üst-trait'i (ShardLogic onu miras alır)
 fn on_disconnect_with(&mut self, world: &mut W, player: PlayerId,
@@ -131,26 +140,52 @@ fn on_disconnect_with(&mut self, world: &mut W, player: PlayerId,
   Mantığı saran bir sarmalayıcı (kit'in sharded spatial/team
   kompozitleri) `on_disconnect_with`'i de iletmelidir; iletmezse
   varsayılan iç mantığın NEDENSİZ `on_disconnect`'ine düşer.
-- **`ConnectionClosed` neyi kapsar.** Oda bağlantının NEDEN kapandığını
-  öğrenmez — registry'nin `ConnClosed`'u neden taşımaz: eş gitti, bir
-  taşıma koruması kapattı (idle timeout, write stall, ölü rUDP bandı,
-  ihlal bütçesi, reddedilen akış), ya da bağlantıyı başka bir üyeliği
-  için yargılayan bir sunucu hükmü düştü (aşağıda B43). Aynı kimliğin
-  yeni oturumunun CANLI eskisini devralması da bu nedenle gelir (F32,
-  §5 "Kopuşu geçen yeniden bağlanma"): eski oturumun ayrılması resume'dan
-  hemen önce, politikaya sorularak işler — eskiden registry bir LEAVE
-  yollardı (`on_leave`), politika hiç sorulmazdı. Politikaya hiç
-  ulaşmayan tek son odanın kapanışıdır (`on_shutdown`).
-- **B43'ün yeni üyeliği `ConnectionClosed` ile biter** (§16.4): tavanın
-  ya da atmanın hükmü, bağlantı yeniden katıldıktan sonra düşerse yeni
-  üyeliği bağlantının kapanışı bitirir. O üyeliği tutan oda onu
-  yargılamadı — hüküm önceki üyelikten (belki başka odadan) geldi —
-  yani bu oda için gerçek, bağlantının kapanmasıdır. "Atma her yerde
-  atmadır" diyen oyun yasak listesini kendisi tutar (§16.3: motor
-  saklamaz).
-- **`#[non_exhaustive]`** (DESIGN §5 ekleyici evrim): motor ileride daha
-  çok ucu ayırt edebilir (ör. `ConnectionClosed`'ın arkasındaki hüküm);
-  eşleşen mantık joker kol tutar, kırılmaz.
+- **`ConnectionClosed` / `ConnectionClosedBy` neyi kapsar (F28).**
+  F27'de oda bağlantının NEDEN kapandığını öğrenmiyordu. Artık hüküm
+  yolda taşınır: bağlantı aktörünün sonu `RegistryMsg::ConnClosed {
+  conn, verdict }`'e `server_closes`'a yazdığı hükmü koyar (istemcinin
+  kendi sonunda ve sunucunun duruşunda `None` — duruş hüküm değildir),
+  registry onu dispatcher'ın `RoomOp::Close { verdict }`'üne (ya da
+  dispatcher'sız doğrudan DETACH'a, B61) verir, dispatcher tuttuğu
+  üyeliği `RoomControl::DetachBy` / `ShardMsg::DetachBy { .., verdict }`
+  ile bırakır (hüküm yoksa eskisi gibi `Detach`); oda/shard politikayı
+  `ConnectionClosedBy(verdict)` ile sorar: taşıma korumaları
+  (`IdleTimeout`, `WriteStall`, `RelDead`, `OutboundDead`), reddedilen
+  akış (`StreamRejected`), ihlal bütçesi (`ViolationBudget`), ya da
+  bağlantıyı başka bir üyeliği için yargılayan hüküm (aşağıda B43).
+  `ConnectionClosed` artık "sunucu hükmü yok" demektir: eş gitti (EOF,
+  RST, WS kapanışı, başarısız yazım). Motorun hükmü bilemediği iki yer
+  de onu verir: aynı kimliğin yeni oturumunun CANLI eskisini devralması
+  (F32, §5 "Kopuşu geçen yeniden bağlanma" — eski oturumun ayrılması
+  resume'dan hemen önce, hiçbir hüküm bilinmeden politikaya sorulur;
+  eskiden registry bir LEAVE yollardı, politika hiç sorulmazdı) ve
+  op kuyruğu `Close`'u alamayacak kadar dolu dispatcher'ın kuyruk
+  kapanışıyla bitmesi (§3.4, B61 — nadir; hüküm o yolda düşer: kayıp
+  değil, yalnız daha az ayrıntı). Politikaya hiç ulaşmayan tek son
+  odanın kapanışıdır (`on_shutdown`).
+- **B43'ün yeni üyeliği `ConnectionClosedBy(hüküm)` ile biter** (§16.4):
+  tavanın ya da atmanın hükmü, bağlantı yeniden katıldıktan sonra
+  düşerse yeni üyeliği bağlantının kapanışı bitirir. O üyeliği tutan oda
+  onu yargılamadı — hüküm önceki üyelikten (belki başka odadan) geldi —
+  yani bu oda için gerçek, bağlantının kapanmasıdır; F28'den beri
+  hangi hükümle kapandığını da görür: `ConnectionClosedBy(Kicked)` /
+  `ConnectionClosedBy(IdleInput)` (bu odanın kendi `Kicked` /
+  `IdleInput`'undan ayrı). "Atma her yerde atmadır" diyen oyun bunu
+  okuyabilir; yasak listesini yine kendisi tutar (§16.3: motor saklamaz).
+- **Uyumluluk — neden alt varyant (F28).** `#[non_exhaustive]` (DESIGN
+  §5 ekleyici evrim) kapıyı açık tutuyordu; hüküm ekleyici gelir. Alan
+  (`ConnectionClosed { verdict }`) seçilmedi: birim varyantı yapı
+  varyantına çevirmek her `DisconnectCause::ConnectionClosed` desenini
+  ve değerini DERLEMEDE kırardı (kit'in `with_disconnect_policy_for(
+  ConnectionClosed, ..)` çağrıları dahil). Alt varyant derlemeyi kırmaz;
+  bedeli anlamsal: `ConnectionClosed`'ı "her kapanan bağlantı" diye
+  açıkça eşleyen bir mantık hükümlü kapanışları artık joker kolunda
+  görür — `cause.coarse()` ile katlar. Kit'in neden-başı politikası tam
+  bunu yapar (aşağıda); çekirdeğin varsayılanı nedeni hiç okumaz:
+  varsayılan davranış değişmedi. Mesajlar da ekleyici: `Detach` aynı
+  biçimde kaldı (elle kurulan testler ve demolar değişmedi), hüküm yeni
+  `DetachBy` varyantında; yalnız `ConnClosed` bir alan kazandı (onu
+  bağlantı aktörü ve çekirdek testleri kurar).
 
 **Kit (yapı taşı, opt-in).** Kit odalarının kopma politikası oda
 geneli kalır (`with_disconnect_policy`); `with_disconnect_policy_for(
@@ -159,7 +194,12 @@ despawn, düşen → park" çekirdek kodu yazmadan:
 `.with_disconnect_policy_for(DisconnectCause::Kicked,
 Some(Duration::ZERO), ExpireTo::Despawn)`. Yedi kit odası da nedeni
 yönlendirir (KIT-ARCHITECTURE §4.3 "F27"). Varsayılan değişmedi: ezme
-yoksa her neden oda geneli kuralı alır.
+yoksa her neden oda geneli kuralı alır. F28 ile ezme hükme göre de
+seçilir — `with_disconnect_policy_for(ConnectionClosedBy(ServerClose::
+ViolationBudget), Some(Duration::ZERO), ExpireTo::Despawn)`: "hileci
+despawn, düşen park"; kendi ezmesi olmayan hüküm `ConnectionClosed`'ın
+ezmesini alır (F28 öncesi her kapanan bağlantının aldığı), o da yoksa
+oda geneli kuralı.
 
 **Elenen alternatifler.**
 
@@ -176,9 +216,9 @@ yoksa her neden oda geneli kuralı alır.
 3. *Neden başına ayrı kancalar* (`on_kick`, `on_idle`): aynı karar için
    üç kanca; her sarmalayıcı üçünü iletir.
 4. *`ConnClosed`'a bağlantının hükmünü (`ServerClose`) taşıyıp
-   `ConnectionClosed`'ı alt nedenlere bölmek:* registry mesajı,
-   dispatcher ve `RoomControl`/`ShardMsg::Detach` değişirdi; bilinen
-   tüketici yok. `#[non_exhaustive]` kapıyı açık tutar.
+   `ConnectionClosed`'ı alt nedenlere bölmek:* F27'de elendi (bilinen
+   tüketici yoktu); F28'de yapıldı (yukarıda) — oyun kopmanın türüne göre
+   farklı kader isteyebilsin diye.
 5. *B43'te yeni üyeliğe `Kicked` demek:* hükmü registry üzerinden yeni
    üyeliğin odasına taşımayı gerektirir ve o oda yargılamadığı bir
    kararı uygulamış olur (yukarıda).
@@ -200,6 +240,25 @@ shard aktörü + canlı registry, ve tek dünya oda aktörü) atılan
 despawn olur (müttefik görmez, slot döner, aynı kimlik yeni varlık
 alır), düşen park edilir (müttefik görür, aynı kimlik resume eder).
 
+F28 testleri: `tests/room_close/close_cause.rs` — gerçek bağlantı
+aktörü her hükümle biter (idle timeout, write stall, ölü rUDP bandı,
+ölü çıkış yolu, reddedilen akış, gerçek ihlal bütçesi: dört tanımsız
+temel-bant opcode'u), politika `ConnectionClosedBy(hüküm)` görür;
+istemcinin sonu düz `ConnectionClosed`; tek oda ve iki shard.
+`rejoin_races.rs`'in B43 testi yeni üyelikte `ConnectionClosedBy(
+IdleInput / Kicked)` bekler (eski beklenti `ConnectionClosed` idi — F28
+sözleşme değişikliği). `registry::actor::conns::tests::verdict` —
+dispatcher'ı gitmiş bağlantının doğrudan DETACH'ı da hükmü taşır.
+`room/cause/tests/refine.rs` — `closed`/`coarse`/`verdict`. Kit:
+`common/park/tests/closed_by.rs` — yedi oda: varsayılan, hükmün kendi
+ezmesi, `ConnectionClosed` ezmesine düşüş, ikisi birden. Önce kırmızı:
+`DisconnectCause::closed`'u hükmü yok sayacak hale getirmek (= F28
+öncesi davranış) üç çekirdek testini ve dispatcher'sız testi düşürür;
+kit'te eski arama (katlamasız) yeni testi düşürür. Mutasyonlar: aktörün
+`ConnClosed`'a hükmü koymaması, dispatcher'ın `Close`'un hükmünü
+atması, oda / shard `on_detach`'in hükmü yok sayması, doğrudan DETACH'ın
+hükmü düşürmesi, kit'te katlamayı önce denemek — hepsi öldü.
+
 ### 3.4 Transport ölümünün yolu ve düşen `Close` (BACKLOG B61)
 
 Bağlantı kapanınca (`ConnClosed`) registry kaderi kendisi seçmez, yalnız
@@ -210,7 +269,11 @@ son hangi üyelikte kaldıysa onu `RoomControl::Detach` / yayın
 `ShardMsg::Detach` ile odaya bildirir ve `DetachDone` raporlar. Dağıtıcı
 yoksa registry tablodaki üyeliği `send_detach_direct` ile (spawn'lu
 gönderim) bildirir. İki yolda da oyunun `on_disconnect`'i bir kez,
-`DisconnectCause::ConnectionClosed` ile çalışır (§3.3).
+`DisconnectCause::ConnectionClosed` ile — bağlantıyı bir sunucu hükmü
+kapattıysa `ConnectionClosedBy(hüküm)` ile (F28: `RoomOp::Close {
+verdict }`, `send_detach_direct(.., verdict)`) — çalışır (§3.3). Dolu
+kuyrukta `Close` kuyruğa girmediği için dispatcher hükmü bilmez ve düz
+`ConnectionClosed` ile bırakır.
 
 **Sızıntı (B61).** `Close` kuyruğa girmezse (16'lık kuyruk dolu ya da
 görev gitmiş; B57'den beri `close_ops_dropped` sayar) dağıtıcı eskiden
@@ -1531,8 +1594,10 @@ dispatcher'ın `Close`'u (ya da doğrudan DETACH) → oyunun
 `on_disconnect`'i bir kez → despawn'da `DetachDespawned` satırı ve slotu
 bırakır, park'ta §4'ün olağan satırı kalır. Kararı yine oyunun politikası
 verir (kit varsayılanı kimlikli oturumu park eder, §16.3 "Kit'in
-varsayılan kaderi"); politikanın gördüğü neden `ConnectionClosed`'dır —
-yeni üyeliği tutan oda onu yargılamadı (F27, §3.3).
+varsayılan kaderi"); politikanın gördüğü neden kapanan bağlantıdır —
+yeni üyeliği tutan oda onu yargılamadı (F27, §3.3) — ve F28'den beri
+hükmü adıyla taşır: `ConnectionClosedBy(Kicked)` /
+`ConnectionClosedBy(IdleInput)`.
 
 Oda ve shard tarafı DEĞİŞMEDİ (kuyruk, `try_send`, Full/Closed kuralı,
 B41 sınaması); tel aynı (`ERROR 9` + kapanış, E6/E8'in baytları);

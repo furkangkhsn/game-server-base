@@ -83,6 +83,7 @@ async fn destroy_reaches_shards_whose_mailboxes_are_full() {
     for c in 1..=MEMBERS {
         let msg = RegistryMsg::ConnClosed {
             conn: ConnectionId(c),
+            verdict: None,
         };
         rig.tx.send(msg).await.expect("registry gone");
     }

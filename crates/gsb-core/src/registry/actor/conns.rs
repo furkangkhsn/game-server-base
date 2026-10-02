@@ -94,7 +94,11 @@ where
         self.emit_metrics();
     }
 
-    pub(super) async fn on_conn_closed(&mut self, conn: ConnectionId) {
+    pub(super) async fn on_conn_closed(
+        &mut self,
+        conn: ConnectionId,
+        verdict: Option<ServerClose>,
+    ) {
         // The connection actor is gone for good. The entity's
         // fate is no longer decided HERE (the old code removed
         // the affiliation and sent a despawn-causing leave):
@@ -119,7 +123,7 @@ where
             // slot cannot outlive the connection. (With no row, a
             // gone dispatcher leaves nothing to detach from here.)
             if let Some((_, op_tx)) = self.conn_ops.remove(&conn)
-                && self.route_close(conn, op_tx, None)
+                && self.route_close(conn, op_tx, None, verdict)
             {
                 self.emit_metrics();
             }
@@ -135,11 +139,11 @@ where
                 // The dispatcher serializes the detach behind
                 // any in-flight join and reports `DetachDone`.
                 // Refused: counted (B57), sampled below.
-                self.route_close(conn, op_tx, room.zip(entity));
+                self.route_close(conn, op_tx, room.zip(entity), verdict);
             }
             None => {
                 if let (Some(room), Some(entity)) = (room, entity) {
-                    self.send_detach_direct(conn, room, entity);
+                    self.send_detach_direct(conn, room, entity, verdict);
                     // Sharded room: NO member decrement — the
                     // parked entity still holds its slot (§4).
                 }
@@ -184,8 +188,9 @@ where
         conn: ConnectionId,
         op_tx: mpsc::Sender<RoomOp<St, Sp>>,
         affiliation: Option<(RoomId, EntityId)>,
+        verdict: Option<ServerClose>,
     ) -> bool {
-        let Err(refused) = op_tx.try_send(RoomOp::Close) else {
+        let Err(refused) = op_tx.try_send(RoomOp::Close { verdict }) else {
             return false;
         };
         self.reg_close_ops_dropped += 1;
@@ -196,7 +201,7 @@ where
             TrySendError::Closed(_) => {
                 warn!(%conn, "close op dispatcher gone; detaching directly");
                 if let Some((room, entity)) = affiliation {
-                    self.send_detach_direct(conn, room, entity);
+                    self.send_detach_direct(conn, room, entity, verdict);
                 }
             }
         }

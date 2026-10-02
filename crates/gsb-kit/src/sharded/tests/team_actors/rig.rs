@@ -188,7 +188,10 @@ impl Rig {
     pub(super) async fn close(&mut self, client: usize) {
         let conn = self.clients[client].conn;
         self.reg
-            .send(RegistryMsg::ConnClosed { conn })
+            .send(RegistryMsg::ConnClosed {
+                conn,
+                verdict: None,
+            })
             .await
             .expect("registry");
     }

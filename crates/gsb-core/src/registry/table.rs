@@ -84,8 +84,13 @@ pub(crate) enum RoomOp<St, Sp> {
     /// saw the join create), then report [`RegistryMsg::LeaveDone`].
     Leave { room: RoomId },
     /// Drain the queue (processing whatever is left, including a final
-    /// leave), report [`RegistryMsg::OpsClosed`], exit.
-    Close,
+    /// leave), report [`RegistryMsg::OpsClosed`], exit. `verdict`: what
+    /// closed the connection (the `ConnClosed`'s), carried to the detach
+    /// of the membership the dispatcher still holds (BACKLOG F28); `None`
+    /// for a client's end and for the server's stop.
+    Close {
+        verdict: Option<crate::conn::ServerClose>,
+    },
 }
 
 /// The folded outcome of one dispatched join/resume round trip (see

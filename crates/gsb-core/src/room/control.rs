@@ -112,6 +112,20 @@ pub enum RoomControl {
         entity: EntityId,
         identity: String,
     },
+    /// [`Self::Detach`] of a connection a SERVER verdict closed (BACKLOG
+    /// F28): the policy is asked with
+    /// [`DisconnectCause::ConnectionClosedBy`]`(verdict)` — the idle
+    /// timeout, write stall, dead rUDP band, violation budget, a newer
+    /// session's takeover, another membership's kick, … that the
+    /// connection booked. A separate variant so that a hand-built
+    /// `Detach` (the client's own end, as before) keeps its shape; the
+    /// registry sends `Detach` when the client ended the session.
+    DetachBy {
+        conn: ConnectionId,
+        entity: EntityId,
+        identity: String,
+        verdict: crate::conn::ServerClose,
+    },
     /// An identified join whose ledger may hold this identity: the
     /// implicit resume attempt (§14.3 — there is NO new wire opcode; a
     /// ticket-pinned connection's ordinary `JOIN_ROOM_REQ` IS the resume

@@ -30,7 +30,7 @@ where
         //    in-flight joins), then drop the senders so they
         //    exit after draining.
         for (_, op_tx) in self.conn_ops.values() {
-            let _ = op_tx.try_send(RoomOp::Close);
+            let _ = op_tx.try_send(RoomOp::Close { verdict: None });
         }
         self.conn_ops.clear();
         // 2. Notify every registered connection — naming the verdict

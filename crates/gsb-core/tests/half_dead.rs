@@ -131,7 +131,7 @@ async fn closed_out_channel_tears_the_session_down() {
         )
         .expect("registry channel open");
     assert!(
-        matches!(msg, RegistryMsg::ConnClosed { conn } if conn == ConnectionId(1)),
+        matches!(msg, RegistryMsg::ConnClosed { conn, .. } if conn == ConnectionId(1)),
         "the teardown cascade's first hop is ConnClosed for this connection, got {msg:?}"
     );
 

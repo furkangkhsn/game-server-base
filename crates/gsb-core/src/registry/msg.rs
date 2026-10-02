@@ -93,8 +93,16 @@ pub enum RegistryMsg {
         inbox: Mailbox<ConnIn>,
     },
     /// A connection went away for good; the registry removes its entry and
-    /// makes sure its room-side entity is cleaned up.
-    ConnClosed { conn: ConnectionId },
+    /// makes sure its room-side entity is cleaned up. `verdict`: the
+    /// server verdict that ended the session (what it booked in
+    /// `server_closes`), `None` when the client ended it — or the
+    /// server's stop, which is no verdict. Relayed to the room's policy
+    /// with the detach (`DisconnectCause::ConnectionClosedBy`, BACKLOG
+    /// F28).
+    ConnClosed {
+        conn: ConnectionId,
+        verdict: Option<crate::conn::ServerClose>,
+    },
     /// A connection authenticated successfully (either auth path): it
     /// leaves the unauthenticated pool its [`Self::ConnOpened`] entered
     /// (docs/SECURITY.md §4). Sent by the connection actor itself, right

@@ -53,6 +53,9 @@ where
         tokio::spawn(async move {
             // (room, entity, handle, the join's epoch, the resume key)
             let mut in_room: Option<InRoom<St, Sp>> = seed;
+            // What closed the connection (its `Close`'s, F28): none when
+            // the queue closed without one (B61) or the client ended it.
+            let mut verdict = None;
             while let Some(op) = op_rx.recv().await {
                 match op {
                     RoomOp::Join {
@@ -159,7 +162,10 @@ where
                                 .await;
                         }
                     }
-                    RoomOp::Close => break,
+                    RoomOp::Close { verdict: v } => {
+                        verdict = v;
+                        break;
+                    }
                 }
             }
             // The end of this connection's room ops: its `Close`, or its
@@ -170,7 +176,7 @@ where
             // the membership they left: transport death DETACHes it, not
             // leaves it — the ROOM's policy decides despawn-vs-hold (§3).
             if let Some((r, entity, handle, _ep, identity)) = in_room.take() {
-                Self::send_room_detach(conn, entity, identity, handle).await;
+                Self::send_room_detach(conn, entity, identity, verdict, handle).await;
                 // The affiliation is KEPT (parked slot held, §4):
                 // DetachDone marks the entry instead of clearing it.
                 let _ = registry

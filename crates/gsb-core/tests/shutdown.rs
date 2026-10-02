@@ -167,6 +167,7 @@ async fn disconnect_all_without_ticks(rig: &mut Rig) {
     for c in 1..=MEMBERS {
         let msg = RegistryMsg::ConnClosed {
             conn: ConnectionId(c),
+            verdict: None,
         };
         rig.tx.send(msg).await.expect("registry gone");
     }

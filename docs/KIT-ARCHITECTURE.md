@@ -260,7 +260,15 @@ aynı nedene ikinci çağrı birincinin yerine geçer; oda geneli kurucular
 (`common::park_on_disconnect`'e `Some(cause)`), iki kompozit iletir;
 nedensiz `on_disconnect` (artık çekirdek çağırmaz, doğrudan çağıran
 testler için) oda geneli kuralı verir. Bilinmeyen (ileride eklenen) bir
-neden de oda geneli kuralı alır. Varsayılan değişmedi: ezme yoksa her
+neden de oda geneli kuralı alır. *F28:* çekirdek kapanan bağlantının
+arkasındaki hükmü de söyler (`ConnectionClosedBy(ServerClose)`,
+RECONNECT §3.3); ezme hükme göre seçilebilir
+(`with_disconnect_policy_for(ConnectionClosedBy(ServerClose::ViolationBudget),
+Some(Duration::ZERO), ExpireTo::Despawn)`). Arama sırası: nedenin kendi
+ezmesi, yoksa incelttiği nedenin (`cause.coarse()` →
+`ConnectionClosed`) ezmesi, yoksa oda geneli kural — F28 öncesi
+`ConnectionClosed` ezmesi kuran oyun her kapanan bağlantıda aynı cevabı
+almaya devam eder. Test: `common/park/tests/closed_by.rs` (yedi oda). Varsayılan değişmedi: ezme yoksa her
 neden aynı kuralı alır. Elenen: `Game`'e nedeni alan bir politika
 kancası (`Game::disconnect_policy(world, entity, cause)`) — kuruluşta
 sabit bir tablo yeter, oyun başına kanca kendi durumunu gerektirmedikçe

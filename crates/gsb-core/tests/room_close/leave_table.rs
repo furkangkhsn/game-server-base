@@ -120,6 +120,7 @@ async fn a_parked_leave_request_moves_the_membership_to_the_park_row() {
     assert_eq!(status(&tx, RoomId(1)).await, members(0), "the park let go");
     tx.send(RegistryMsg::ConnClosed {
         conn: ConnectionId(1),
+        verdict: None,
     })
     .await
     .expect("sent");
@@ -138,6 +139,7 @@ async fn a_parked_leave_request_after_the_transport_died_rekeys_the_row() {
     let entity = join(&tx, 1, "ana").await;
     tx.send(RegistryMsg::ConnClosed {
         conn: ConnectionId(1),
+        verdict: None,
     })
     .await
     .expect("sent");

@@ -6,6 +6,7 @@ use std::hash::Hash;
 
 use tracing::debug;
 
+use crate::conn::ServerClose;
 use crate::id::{ConnectionId, EntityId, RoomId};
 use crate::registry::*;
 use crate::room::RoomControl;
@@ -112,6 +113,7 @@ where
         conn: ConnectionId,
         room: RoomId,
         entity: EntityId,
+        verdict: Option<ServerClose>,
     ) {
         let Some(identity) = self.conns.get(&conn).map(|i| i.identity.clone()) else {
             return;
@@ -119,30 +121,9 @@ where
         let Some(handle) = self.room_handle(room) else {
             return;
         };
-        tokio::spawn(async move {
-            match handle {
-                RoomHandle::Single(control) => {
-                    let _ = control
-                        .send(RoomControl::Detach {
-                            conn,
-                            entity,
-                            identity,
-                        })
-                        .await;
-                }
-                RoomHandle::Sharded(mailboxes) => {
-                    for tx in &mailboxes {
-                        let _ = tx
-                            .send(ShardMsg::Detach {
-                                conn,
-                                entity,
-                                identity: identity.clone(),
-                            })
-                            .await;
-                    }
-                }
-            }
-        });
+        tokio::spawn(Self::send_room_detach(
+            conn, entity, identity, verdict, handle,
+        ));
     }
 
     /// Send a leave for a dispatcher-held room affiliation: to the single
@@ -195,27 +176,45 @@ where
         conn: ConnectionId,
         entity: EntityId,
         identity: String,
+        verdict: Option<ServerClose>,
         handle: RoomHandle<St, Sp>,
     ) {
+        // The client's end keeps the plain `Detach`; a server verdict
+        // rides `DetachBy` to the policy (F28).
         match handle {
             RoomHandle::Single(control) => {
-                let _ = control
-                    .send(RoomControl::Detach {
+                let msg = match verdict {
+                    None => RoomControl::Detach {
                         conn,
                         entity,
                         identity,
-                    })
-                    .await;
+                    },
+                    Some(verdict) => RoomControl::DetachBy {
+                        conn,
+                        entity,
+                        identity,
+                        verdict,
+                    },
+                };
+                let _ = control.send(msg).await;
             }
             RoomHandle::Sharded(mailboxes) => {
                 for tx in &mailboxes {
-                    let _ = tx
-                        .send(ShardMsg::Detach {
+                    let identity = identity.clone();
+                    let msg = match verdict {
+                        None => ShardMsg::Detach {
                             conn,
                             entity,
-                            identity: identity.clone(),
-                        })
-                        .await;
+                            identity,
+                        },
+                        Some(verdict) => ShardMsg::DetachBy {
+                            conn,
+                            entity,
+                            identity,
+                            verdict,
+                        },
+                    };
+                    let _ = tx.send(msg).await;
                 }
             }
         }

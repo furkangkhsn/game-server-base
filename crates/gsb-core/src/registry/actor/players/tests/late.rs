@@ -12,7 +12,7 @@ use crate::registry::RoomOp;
 /// `OpsClosed` is queued on the registry's inbox, not yet handled.
 async fn ended_in_slot(reg: &mut Reg) -> u64 {
     let op_tx = reg.install_conn_ops(CONN, None);
-    assert!(op_tx.try_send(RoomOp::Close).is_ok());
+    assert!(op_tx.try_send(RoomOp::Close { verdict: None }).is_ok());
     tokio::time::timeout(WAIT, op_tx.closed())
         .await
         .expect("the dispatcher ended");

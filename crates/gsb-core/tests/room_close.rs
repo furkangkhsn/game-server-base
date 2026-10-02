@@ -27,6 +27,10 @@
 //!   fresh rejoin overtakes still closes the connection (BACKLOG B43) —
 //!   for the idle ceiling and for the game's kick; the new membership
 //!   reaches the policy as a closed connection (BACKLOG F27).
+//! - `close_cause.rs`: why the connection closed reaches the policy
+//!   (BACKLOG F28) — each server verdict as
+//!   `DisconnectCause::ConnectionClosedBy`, the client's end as the
+//!   plain `ConnectionClosed`, one room and two shards alike.
 //! - `close_op.rs`: a closing connection whose dispatcher queue refused
 //!   the close op (BACKLOG B61) still ends its last membership once, as
 //!   a closed connection — no member, row or slot is left behind.
@@ -55,6 +59,8 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "room_close/afk.rs"]
 mod afk;
+#[path = "room_close/close_cause.rs"]
+mod close_cause;
 #[path = "room_close/close_op.rs"]
 mod close_op;
 #[path = "room_close/close_races.rs"]

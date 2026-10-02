@@ -19,6 +19,8 @@ use crate::room::{DisconnectCause, ExpireTo, ResumeFound, RoomConn, live_session
 use crate::shard::actor::ShardActor;
 use crate::shard::*;
 
+mod detach;
+
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
 where
     W: Send + 'static,
@@ -115,24 +117,16 @@ where
                 entity,
                 identity,
             } => {
-                // The registry's close broadcast: exactly the owning shard
-                // runs the policy; the binding + entity guards make the
-                // others no-ops (the same shape as a broadcast `Leave`).
-                if let Some(&player) = self.binding.get(&conn)
-                    && self.conns.get(&player).map(|c| c.entity) == Some(entity)
-                    // A row that is ALREADY parked has had its policy run
-                    // once; a second Detach for it is a duplicate (the
-                    // room actor's guard, mirrored).
-                    && !self.conns.get(&player).is_some_and(|c| c.detached)
-                {
-                    self.detach_player(
-                        player,
-                        conn,
-                        &identity,
-                        true,
-                        DisconnectCause::ConnectionClosed,
-                    );
-                }
+                self.on_detach(conn, entity, &identity, None);
+                true
+            }
+            ShardMsg::DetachBy {
+                conn,
+                entity,
+                identity,
+                verdict,
+            } => {
+                self.on_detach(conn, entity, &identity, Some(verdict));
                 true
             }
             ShardMsg::Resume {

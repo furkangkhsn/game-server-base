@@ -98,9 +98,12 @@ fn latest(metrics: &mut mpsc::Receiver<MetricsEvent>) -> RegistrySample {
 }
 
 async fn close_conn(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) {
-    tx.send(RegistryMsg::ConnClosed { conn })
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::ConnClosed {
+        conn,
+        verdict: None,
+    })
+    .await
+    .expect("registry gone");
 }
 
 async fn despawn(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) {

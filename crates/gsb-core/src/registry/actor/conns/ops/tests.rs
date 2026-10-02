@@ -61,7 +61,7 @@ async fn a_leave_for_another_room_keeps_the_membership() {
     // (nothing to the room, no `LeaveDone`) — and forgets nothing, so
     // the close behind it still detaches the membership.
     assert!(ops.try_send(RoomOp::Leave { room: OTHER }).is_ok());
-    assert!(ops.try_send(RoomOp::Close).is_ok());
+    assert!(ops.try_send(RoomOp::Close { verdict: None }).is_ok());
 
     match reports.recv().await {
         Some(RegistryMsg::DetachDone { conn, room }) => assert_eq!((conn, room), (CONN, ROOM)),

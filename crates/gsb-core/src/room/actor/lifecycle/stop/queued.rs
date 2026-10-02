@@ -32,7 +32,8 @@ where
                         self.m.stop.leaves_unprocessed += 1;
                     }
                 }
-                RoomControl::Detach { conn, entity, .. } => {
+                RoomControl::Detach { conn, entity, .. }
+                | RoomControl::DetachBy { conn, entity, .. } => {
                     if self.member(conn, entity) == Some(false) {
                         self.m.stop.detaches_unprocessed += 1;
                     }

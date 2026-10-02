@@ -20,6 +20,7 @@ use crate::team::TeamRoom;
 use crate::testing::{Fixture, InCombat, Position, Vetoing, fixture_map};
 
 mod cause;
+mod closed_by;
 
 type G = Vetoing<Fixture>;
 

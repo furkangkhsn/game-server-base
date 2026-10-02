@@ -20,6 +20,8 @@ use crate::room::{
 use crate::shard::BorderRecord;
 use crate::ticker::Ticker;
 
+mod verdict;
+
 const WAIT: Duration = Duration::from_secs(5);
 
 type Causes = mpsc::UnboundedSender<(PlayerId, DisconnectCause)>;
@@ -114,7 +116,7 @@ async fn a_gone_dispatcher_s_close_detaches_from_the_table() {
     let (serial, live) = reg.conn_ops.remove(&conn).expect("a dispatcher");
     let (dead, _) = mpsc::channel(1);
     reg.conn_ops.insert(conn, (serial, dead));
-    reg.on_conn_closed(conn).await;
+    reg.on_conn_closed(conn, None).await;
     assert_eq!(reg.reg_close_ops_dropped, 1, "refused, still counted");
 
     let ended = tokio::time::timeout(WAIT, causes.recv())

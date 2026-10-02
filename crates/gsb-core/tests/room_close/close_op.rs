@@ -97,9 +97,12 @@ async fn refused_close_still_ends_the_membership(sharded: bool) {
     for _ in 0..BURST {
         replies.push(join(&tx, conn, &mut outs).await);
     }
-    tx.send(RegistryMsg::ConnClosed { conn })
-        .await
-        .expect("registry alive");
+    tx.send(RegistryMsg::ConnClosed {
+        conn,
+        verdict: None,
+    })
+    .await
+    .expect("registry alive");
     let mut refused = 0;
     for r in replies {
         let answer = tokio::time::timeout(WAIT, r).await.expect("in time");

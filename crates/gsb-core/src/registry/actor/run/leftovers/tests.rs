@@ -126,7 +126,13 @@ async fn what_waits_behind_the_shutdown_is_counted_by_kind() {
         },
     );
     let c1 = ConnectionId(1);
-    queue(&tx, RegistryMsg::ConnClosed { conn: c1 });
+    queue(
+        &tx,
+        RegistryMsg::ConnClosed {
+            conn: c1,
+            verdict: None,
+        },
+    );
     queue(&tx, RegistryMsg::DespawnPlayer { conn: c1 });
     queue(
         &tx,

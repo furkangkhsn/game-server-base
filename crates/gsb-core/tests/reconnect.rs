@@ -1523,9 +1523,12 @@ async fn double_session_supersedes_the_parked_one() {
 mod takeover;
 
 async fn close_conn(tx: &Mailbox<RegistryMsg>, conn: ConnectionId) {
-    tx.send(RegistryMsg::ConnClosed { conn })
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::ConnClosed {
+        conn,
+        verdict: None,
+    })
+    .await
+    .expect("registry gone");
 }
 
 // =====================================================================

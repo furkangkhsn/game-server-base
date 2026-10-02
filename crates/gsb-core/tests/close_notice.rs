@@ -100,7 +100,7 @@ impl Rig {
             .expect("no panic");
         let closed = self.reg_rx.try_recv().expect("the registry was told");
         assert!(
-            matches!(closed, RegistryMsg::ConnClosed { conn } if conn == ConnectionId(5)),
+            matches!(closed, RegistryMsg::ConnClosed { conn, .. } if conn == ConnectionId(5)),
             "{closed:?}"
         );
     }

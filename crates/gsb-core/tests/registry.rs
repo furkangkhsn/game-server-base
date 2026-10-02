@@ -261,11 +261,24 @@ async fn join_leave_rejoin_sequence() {
     wait_count(&mut out_rx_obs, 3).await;
 
     // ConnClosed removes the entries entirely (no notification path remains).
-    tx.send(RegistryMsg::ConnClosed { conn: c1 }).await.unwrap();
-    tx.send(RegistryMsg::ConnClosed { conn: c2 }).await.unwrap();
-    tx.send(RegistryMsg::ConnClosed { conn: c_obs })
-        .await
-        .unwrap();
+    tx.send(RegistryMsg::ConnClosed {
+        conn: c1,
+        verdict: None,
+    })
+    .await
+    .unwrap();
+    tx.send(RegistryMsg::ConnClosed {
+        conn: c2,
+        verdict: None,
+    })
+    .await
+    .unwrap();
+    tx.send(RegistryMsg::ConnClosed {
+        conn: c_obs,
+        verdict: None,
+    })
+    .await
+    .unwrap();
 
     // Shutdown must finish everything: registry handle resolves.
     tx.send(RegistryMsg::Shutdown).await.unwrap();
@@ -466,6 +479,7 @@ async fn conn_opened_rejected_at_connection_capacity() {
     // recorded connection is a clean no-op, and shutdown proceeds.
     tx.send(RegistryMsg::ConnClosed {
         conn: ConnectionId(2),
+        verdict: None,
     })
     .await
     .unwrap();

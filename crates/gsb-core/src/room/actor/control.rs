@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 
 use crate::room::actor::RoomActor;
 
+mod detach;
 mod join;
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
@@ -165,26 +166,16 @@ where
                 entity,
                 identity,
             } => {
-                // Transport death (registry `ConnClosed` route): the POLICY
-                // is the logic's (§3 — the registry only reports the fact).
-                // Same stale guard as `Leave`: binding first, then the
-                // entity this player currently owns.
-                if let Some(&player) = self.binding.get(&conn)
-                    && self.conns.get(&player).map(|c| c.entity) == Some(entity)
-                    // A row that is ALREADY parked has had its policy run
-                    // once; a second Detach for it is a duplicate (the
-                    // transport of an idle-expired member dying later is
-                    // exactly that shape) and must not re-ask the policy.
-                    && !self.conns.get(&player).is_some_and(|c| c.detached)
-                {
-                    self.detach_player(
-                        player,
-                        conn,
-                        &identity,
-                        true,
-                        DisconnectCause::ConnectionClosed,
-                    );
-                }
+                self.on_detach(conn, entity, &identity, None);
+                true
+            }
+            RoomControl::DetachBy {
+                conn,
+                entity,
+                identity,
+                verdict,
+            } => {
+                self.on_detach(conn, entity, &identity, Some(verdict));
                 true
             }
             RoomControl::Resume {

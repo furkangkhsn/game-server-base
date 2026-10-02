@@ -60,7 +60,7 @@ where
                         self.m.stop.leaves_unprocessed += 1;
                     }
                 }
-                ShardMsg::Detach { conn, entity, .. } => {
+                ShardMsg::Detach { conn, entity, .. } | ShardMsg::DetachBy { conn, entity, .. } => {
                     if self.member(conn, entity) == Some(false) {
                         self.m.stop.detaches_unprocessed += 1;
                     }

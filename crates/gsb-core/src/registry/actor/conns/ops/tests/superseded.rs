@@ -51,7 +51,7 @@ async fn detached(reports: &mut Inbox<RegistryMsg>) {
 async fn a_detach_the_room_took_is_left_to_its_stop_count() {
     let (control, mut room) = channel::<RoomControl>(8);
     let (ops, mut reports, mut events) = seated(RoomHandle::Single(control));
-    assert!(ops.try_send(RoomOp::Close).is_ok());
+    assert!(ops.try_send(RoomOp::Close { verdict: None }).is_ok());
     detached(&mut reports).await;
     assert!(matches!(
         room.try_recv(),
@@ -71,7 +71,7 @@ async fn a_detach_the_stopped_room_refused_is_counted_nowhere() {
     let (control, room) = channel::<RoomControl>(8);
     drop(room);
     let (ops, mut reports, mut events) = seated(RoomHandle::Single(control));
-    assert!(ops.try_send(RoomOp::Close).is_ok());
+    assert!(ops.try_send(RoomOp::Close { verdict: None }).is_ok());
     detached(&mut reports).await;
     assert!(events.try_recv().is_err(), "superseded by the stop");
 }
