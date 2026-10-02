@@ -186,13 +186,22 @@ pub(super) async fn run_accept(
     }
 }
 
+/// What every rUDP door shares besides the config: the cookie key (the
+/// operator's, or `None` = drawn at bind) and the record layer (B5a).
+#[derive(Default)]
+pub(crate) struct UdpKeys {
+    pub(crate) cookie: Option<[u8; 16]>,
+    pub(crate) security: gsb_net::udp::UdpSecurity,
+}
+
 /// An rUDP door's configuration from the server's.
 pub(super) fn udp_config(
     cfg: &Config,
     idle_timeout: Option<std::time::Duration>,
-    cookie_key: Option<[u8; 16]>,
+    keys: &UdpKeys,
     metrics: gsb_net::TransportMetrics,
 ) -> UdpTransportConfig {
+    let sealed = matches!(keys.security, gsb_net::udp::UdpSecurity::Sealed(_));
     UdpTransportConfig {
         // The demux pre-creates the mailboxes at handshake: same
         // capacities as the TCP path (cfg.conn_inbox/conn_out are the
@@ -201,14 +210,18 @@ pub(super) fn udp_config(
         outbox_capacity: cfg.conn_out,
         max_datagram_bytes: cfg.udp_max_datagram_bytes,
         idle_timeout,
-        cookie_key,
+        cookie_key: keys.cookie,
         metrics,
         buffers: udp_buffers(cfg),
         congestion: cfg.udp_congestion.into(),
-        migration: cfg.udp_migration,
+        // Unset: on for a sealed door, off for a plaintext one (B112,
+        // decision 5 — only crypto makes the CID more than a bearer token).
+        migration: cfg.udp_migration.unwrap_or(sealed),
         // The cap on pending sessions per source (B89): D11's key.
         max_handshakes_per_source: cfg.max_handshakes_per_source.map(|n| n as usize),
-        ..UdpTransportConfig::default()
+        security: keys.security.clone(),
+        // The sealed door's DH budget (B119; `0` = none).
+        handshakes_per_sec: cfg.udp_handshakes_per_sec,
     }
 }
 
@@ -231,7 +244,7 @@ pub(super) async fn bind_listener(
     spec: &ListenerSpec,
     cfg: &Config,
     idle_timeout: Option<std::time::Duration>,
-    cookie_key: Option<[u8; 16]>,
+    udp: &UdpKeys,
     handshake_bound: usize,
     metrics: gsb_net::TransportMetrics,
 ) -> Result<(Arc<dyn gsb_net::transport::Listener>, SocketAddr), ServerError> {
@@ -257,7 +270,7 @@ pub(super) async fn bind_listener(
             },
         }),
         ListenerSpec::Udp { .. } => Arc::new(UdpTransport {
-            config: udp_config(cfg, idle_timeout, cookie_key, metrics),
+            config: udp_config(cfg, idle_timeout, udp, metrics),
         }),
         ListenerSpec::Quic {
             cert_pem, key_pem, ..

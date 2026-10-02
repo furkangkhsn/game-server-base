@@ -244,6 +244,17 @@ struct Args {
     /// re-sent (`hs_retries`) and connect p99 grows. Linux caps it at
     /// `net.core.rmem_max`.
     udp_recv_buffer: Option<u32>,
+    /// The rUDP record layer (`--udp-security sealed|plaintext`, default
+    /// sealed — the server's own default, BACKLOG B5a): the in-process /
+    /// served server's `udp_security`, with an ephemeral static key it
+    /// draws at start when sealed, and what the clients speak. Its clients
+    /// pin the public half (in process: the server handle's; served: the
+    /// `SERVING` line's `udp_key=`; external: `--udp-server-key`).
+    udp_security: gsb_server::UdpSecurityKind,
+    /// The external sealed server's public key the rUDP clients pin
+    /// (`--udp-server-key HEX`, 64 hex characters; `--addr` runs only —
+    /// the orchestrator passes its served child's).
+    udp_server_key: Option<[u8; 32]>,
     /// The GLOBAL id of the client that floods (`--flood-id K`): after
     /// joining it writes MOVE_TO frames in a tight loop (as fast as the
     /// socket accepts) until the deadline — the input-flood behaviour
@@ -424,6 +435,14 @@ Server options (in-process server, --serve, or the orchestrator's server):
                                        clients than this overflows it and
                                        the overflowed ones retry after 1 s:
                                        give it >= N, or use --stagger-ms
+  --udp-security sealed|plaintext     the rUDP record layer (default sealed,
+                                       the server's default: the in-process
+                                       or served server draws an ephemeral
+                                       static key and its clients pin it;
+                                       plaintext = the dev/LAN door)
+  --udp-server-key HEX                the external sealed server's public
+                                       key (64 hex; with --addr and
+                                       --transport udp)
   --udp-recv-buffer N                 receive buffer (SO_RCVBUF, bytes) of
                                        the server's UDP door (default: the
                                        server config default, untouched;

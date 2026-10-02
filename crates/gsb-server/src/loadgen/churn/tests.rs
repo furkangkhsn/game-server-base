@@ -87,6 +87,7 @@ async fn session(window: Duration) -> (ClientReport, Option<Tally>) {
         deadline: Instant::now() + window,
         flood: false,
         kind: crate::Transport::Tcp,
+        udp_key: None,
         capture: None,
         stall: None,
         rpc: None,

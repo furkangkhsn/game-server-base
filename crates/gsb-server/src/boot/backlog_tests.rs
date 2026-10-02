@@ -52,7 +52,15 @@ async fn door(
     cfg: &Config,
 ) -> Result<(std::sync::Arc<dyn gsb_net::Listener>, SocketAddr), ServerError> {
     let bound = gsb_net::transport::DEFAULT_MAX_PENDING_HANDSHAKES;
-    bind_listener(spec, cfg, None, None, bound, None).await
+    bind_listener(
+        spec,
+        cfg,
+        None,
+        &super::accept::UdpKeys::default(),
+        bound,
+        None,
+    )
+    .await
 }
 
 /// A backlog of one on the plain TCP door and on the ops socket: a
@@ -166,17 +174,40 @@ async fn every_udp_door_hands_its_buffers_to_the_builder() {
 }
 
 /// The rUDP door's own keys reach its transport: the per-source cap on
-/// pending sessions (B89, `max_handshakes_per_source`) and migration —
-/// and unset, neither is on.
+/// pending sessions (B89, `max_handshakes_per_source`), migration and the
+/// DH budget. Unset, the cap is off, the budget is 1000/s, and migration
+/// follows the record layer (B112): on for a sealed door, off for a
+/// plaintext one — an explicit value wins either way.
 #[test]
 fn the_rudp_door_gets_its_per_source_cap_and_migration() {
+    use super::accept::{UdpKeys, udp_config};
+    let plain = UdpKeys::default();
+    let sealed = UdpKeys {
+        cookie: None,
+        security: gsb_net::udp::UdpSecurity::Sealed(std::sync::Arc::new(
+            gsb_net::seal::StaticKey::generate().unwrap(),
+        )),
+    };
     let on = Config {
         max_handshakes_per_source: Some(3),
-        udp_migration: true,
+        udp_migration: Some(true),
+        udp_handshakes_per_sec: Some(0),
         ..Default::default()
     };
-    let c = super::accept::udp_config(&on, None, None, None);
+    let c = udp_config(&on, None, &plain, None);
     assert_eq!((c.max_handshakes_per_source, c.migration), (Some(3), true));
-    let c = super::accept::udp_config(&Config::default(), None, None, None);
+    assert_eq!(c.handshakes_per_sec, Some(0));
+    let def = Config::default();
+    let c = udp_config(&def, None, &plain, None);
     assert_eq!((c.max_handshakes_per_source, c.migration), (None, false));
+    assert_eq!(c.handshakes_per_sec, Some(1000));
+    assert!(
+        udp_config(&def, None, &sealed, None).migration,
+        "sealed: on"
+    );
+    let off = Config {
+        udp_migration: Some(false),
+        ..Default::default()
+    };
+    assert!(!udp_config(&off, None, &sealed, None).migration);
 }

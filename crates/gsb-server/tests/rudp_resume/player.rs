@@ -28,13 +28,20 @@ pub struct Player {
 
 impl Player {
     /// Open a connection through `door` (rUDP: a fresh ephemeral local
-    /// port and a full cookie handshake).
-    pub async fn connect(door: Door, addr: std::net::SocketAddr) -> Self {
+    /// port and a full cookie handshake — sealed when the door is, pinning
+    /// `key`).
+    pub async fn connect(door: Door, addr: std::net::SocketAddr, key: Option<[u8; 32]>) -> Self {
         let conn = match door {
             Door::Tcp => gsb_client::connect::tcp(addr).await.expect("tcp connect"),
-            Door::Udp | Door::Migrating => gsb_client::connect::udp(addr)
-                .await
-                .expect("rUDP handshake"),
+            _ => {
+                assert_eq!(key.is_some(), door.sealed(), "a sealed door has a key");
+                let conn = gsb_client::connect::udp(addr, key)
+                    .await
+                    .expect("rUDP handshake");
+                let c = conn.udp_client().expect("an rUDP connection");
+                assert_eq!(c.sealed(), door.sealed(), "the session's record layer");
+                conn
+            }
         };
         Self {
             conn,

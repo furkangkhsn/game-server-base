@@ -17,14 +17,14 @@ pub(crate) async fn run(args: Args) {
 
     // The in-process handle stays with the main task: it must be stopped
     // only AFTER the clients are done, so it cannot be spawned early.
-    let (addr, inproc, rep_rx, server) = match &args.addr {
+    let (addr, inproc, rep_rx, server, udp_key) = match &args.addr {
         Some(addr) => {
             let a: SocketAddr = addr.parse().expect("valid --addr HOST:PORT");
             eprintln!(
                 "mode: external server at {a} (transport={}; client-side numbers only)",
                 args.transport
             );
-            (a, false, None, None)
+            (a, false, None, None, args.udp_server_key)
         }
         None => {
             let s = start_inprocess(
@@ -47,6 +47,7 @@ pub(crate) async fn run(args: Args) {
                     mmo_crystallize: args.mmo_crystallize,
                     listen_backlog: args.listen_backlog,
                     udp_recv_buffer: args.udp_recv_buffer,
+                    udp_security: args.udp_security,
                 },
             )
             .await
@@ -64,7 +65,8 @@ pub(crate) async fn run(args: Args) {
                 "mode: in-process server at {addr} (transport={}; clients share CPU with server)",
                 args.transport
             );
-            (addr, true, Some(s.rep_rx), Some(s.handle))
+            let udp_key = s.handle.udp_public_key;
+            (addr, true, Some(s.rep_rx), Some(s.handle), udp_key)
         }
     };
 
@@ -121,6 +123,7 @@ pub(crate) async fn run(args: Args) {
         deadline,
         flood: false,
         kind: args.transport,
+        udp_key,
         capture: None,
         stall: args.stall_ms.map(|ms| Stall {
             pause: Duration::from_millis(ms),

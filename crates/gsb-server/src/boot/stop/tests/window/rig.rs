@@ -173,6 +173,7 @@ pub(super) fn server() -> (
         addr,
         addrs: vec![addr],
         http_addr: None,
+        udp_public_key: None,
         match_results: channel(1).1,
     };
     (handle, door, go, seen)

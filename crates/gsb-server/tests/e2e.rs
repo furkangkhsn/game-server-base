@@ -83,7 +83,7 @@ impl Client {
     async fn connect(kind: Kind, addr: std::net::SocketAddr) -> std::io::Result<Self> {
         let conn = match kind {
             Kind::Tcp => gsb_client::connect::tcp(addr).await?,
-            Kind::Udp => gsb_client::connect::udp(addr).await?,
+            Kind::Udp => gsb_client::connect::udp(addr, common::rudp_pin()).await?,
             Kind::Tls(pki) => {
                 let tcp = TcpStream::connect(addr).await?;
                 let dns: rustls::pki_types::ServerName<'static> =
@@ -210,7 +210,10 @@ fn cfg_on(
         ..Default::default()
     };
     match &kind {
-        Kind::Udp => cfg.transport = gsb_server::TransportKind::Udp,
+        Kind::Udp => {
+            cfg.transport = gsb_server::TransportKind::Udp;
+            common::seal_rudp(&mut cfg);
+        }
         Kind::Tcp | Kind::Tls(_) => cfg.transport = gsb_server::TransportKind::Tcp,
     }
     if let Kind::Tls(pki) = &kind {

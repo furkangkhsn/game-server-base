@@ -184,18 +184,54 @@ udp_max_datagram_bytes = 1472
 # in with with_snapshot_budget). Server-wide.
 #udp_congestion = "pace"
 
-# rUDP only: connection migration. false (the default): an rUDP session
-# is its client's address — a client whose address changes (a NAT
-# rebinding, a Wi-Fi <-> cellular handover) comes back as a new session
-# and resumes. true: the server grants each client that asks (the
-# default client does) a random connection id, and a session whose
-# client speaks from a new address MOVES there after path validation (a
-# challenge the new address must answer): no new handshake, no resume.
-# Opt-in until the rUDP record layer is encrypted: today the id travels
-# in the clear, so whoever can sniff the client's traffic could answer
-# the challenge and steer the session's server -> client stream to
-# itself. Server-wide.
-#udp_migration = true
+# rUDP only: the record layer (BACKLOG B5a, docs/RUDP-SECURITY.md).
+# "sealed" (the default — production): Noise NK_25519_ChaChaPoly_BLAKE2s
+# rides the cookie handshake (no extra round trip) and every session
+# datagram, both ways, is sealed (ChaCha20-Poly1305, a replay window, key
+# phases) under the server's static X25519 key below — which a sealed door
+# REQUIRES: without it the server refuses to start (never a silent
+# plaintext fallback). Clients pin the key's PUBLIC half (the platform
+# hands it out with the ticket); the server logs it at bind
+# (public_key=...). "plaintext": the rUDP door before B5a — nothing is
+# encrypted or authenticated; dev/LAN only, warned at startup. A
+# plaintext client at a sealed door is refused at the handshake
+# (udp_proofs_refused_plaintext); a sealed client refuses a plaintext
+# door. Server-wide.
+#udp_security = "plaintext"
+
+# rUDP only: the sealed door's static X25519 PRIVATE key, as 64 hex
+# characters (32 bytes; any 32 random bytes are a valid key:
+# `openssl rand -hex 32`). Inline, or — preferred, so the key stays out of
+# this file — in a file holding the same 64 hex characters
+# (udp_static_key_file; surrounding whitespace ignored). Setting both
+# refuses startup; neither, on a sealed door, refuses startup. The key is
+# never logged; errors name the problem (missing, a length, a position,
+# the file's path), never a character of it. Losing it means every client
+# must be handed a new public key; a leaked one lets its holder pose as
+# the server (past sessions stay safe: every session has its own
+# ephemeral keys).
+#udp_static_key = "<64 hex characters>"
+#udp_static_key_file = "/etc/gsb/rudp-static.key"
+
+# rUDP only: the sealed door's handshake budget — Noise handshakes (each
+# ~180 µs of the door's single demux task, measured) started per second:
+# a token bucket after the cookie check and the per-source cap, before
+# the Diffie-Hellman, holding 50 ms of the rate. A verified proof over it
+# creates nothing and is counted (udp_proofs_refused_budget); the client
+# re-sends it within 200 ms. Default 1000 (~18 % of a core, a
+# 1000-player join storm admitted in about a second); 0 = no budget.
+#udp_handshakes_per_sec = 1000
+
+# rUDP only: connection migration — a session whose client speaks from a
+# new address (a NAT rebinding, a Wi-Fi <-> cellular handover) MOVES there
+# after path validation (a challenge the new address must answer): no new
+# handshake, no resume. Unset (the default): ON for a sealed door (only an
+# authenticated record that is the newest starts a validation, and the
+# challenge is sealed) and OFF for a plaintext one (there the connection
+# id travels in the clear: whoever sniffs the client's traffic could
+# answer the challenge and steer the server -> client stream to itself).
+# false: an address change is a new session and a resume. Server-wide.
+#udp_migration = false
 
 # Global tick rate (ticks per second). One ticker task feeds all rooms over
 # a broadcast channel. A room may run slower, at any rate that divides this

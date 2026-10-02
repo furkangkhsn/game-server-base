@@ -28,6 +28,25 @@ pub(super) fn check(args: &mut Args, game_flags: &[String]) -> Result<(), CliErr
             )));
         }
     }
+    // The pinned key of an EXTERNAL sealed rUDP server: the in-process
+    // and served servers draw their own (their clients learn it there).
+    refuse_unless(
+        args.udp_server_key.is_none()
+            || (args.addr.is_some()
+                && args.transport == crate::Transport::Udp
+                && args.udp_security == gsb_server::UdpSecurityKind::Sealed),
+        "--udp-server-key pins an external sealed rUDP server: with --addr and \
+         --transport udp, not with --udp-security plaintext",
+    )?;
+    refuse_unless(
+        !(args.addr.is_some()
+            && args.transport == crate::Transport::Udp
+            && args.udp_security == gsb_server::UdpSecurityKind::Sealed
+            && args.udp_server_key.is_none()),
+        "--transport udp against an external server is sealed by default: give its \
+         public key (--udp-server-key HEX, logged at its bind as public_key=), or \
+         --udp-security plaintext for a plaintext door",
+    )?;
     let written: Vec<&str> = game_flags.iter().map(String::as_str).collect();
     crate::bot::check_game_flags(args.game, &written).map_err(CliError)?;
     // The capture records what THIS process's plain clients receive: an

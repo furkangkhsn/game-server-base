@@ -132,6 +132,11 @@ pub struct ServerHandle {
     /// The actual bound address of the HTTP ops surface; `None` when the
     /// surface is disabled (`http_listen` empty — the default).
     pub http_addr: Option<SocketAddr>,
+    /// The public half of the rUDP doors' static key when they are
+    /// sealed (B5a): what a client pins (`UdpClientConfig::server_key`;
+    /// the platform hands it out with the ticket). `None`: no rUDP door,
+    /// or `udp_security = "plaintext"`.
+    pub udp_public_key: Option<[u8; 32]>,
     /// The match-result sink (the control plane's result seam, see
     /// `gsb_core::room::RoomLogic::match_result`): the room's result
     /// arrives here on shutdown. The reference adapter is the

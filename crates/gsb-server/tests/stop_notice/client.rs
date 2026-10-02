@@ -44,7 +44,7 @@ pub async fn connect(door: ListenerTransport, pki: &common::TlsPki, addr: Socket
                 .await
                 .expect("TLS handshake")
         }
-        ListenerTransport::Udp => gsb_client::connect::udp(addr)
+        ListenerTransport::Udp => gsb_client::connect::udp(addr, common::rudp_pin())
             .await
             .expect("rUDP handshake"),
         ListenerTransport::Quic => {

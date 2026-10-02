@@ -337,6 +337,23 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         // The rUDP door's per-source cap and migration's source (B89, B113).
         "transport_udp_proofs_refused_per_source",
         "transport_udp_pending_source_moves_kept",
+        // The sealed rUDP door: handshake, records, migration (B5a).
+        "transport_udp_proofs_refused_budget",
+        "transport_udp_proofs_refused_plaintext",
+        "transport_udp_handshakes_malformed",
+        "transport_udp_handshakes_failed_decrypt",
+        "transport_udp_handshakes_failed_internal",
+        "transport_udp_datagrams_unsealed",
+        "transport_seal_integrity_limit",
+        "transport_seal_malformed",
+        "transport_seal_too_old",
+        "transport_seal_replayed",
+        "transport_seal_wrong_phase",
+        "transport_seal_forged",
+        "transport_udp_sessions_ended_seal_limit",
+        "transport_udp_path_candidates_not_newest",
+        "transport_udp_acks_not_queued",
+        "transport_udp_path_challenges_not_queued",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",
@@ -425,6 +442,68 @@ fn loadgen_smoke_separate_processes() {
     // The metric queue crossed the BINARY socket (the report data, not
     // stdout): presence + zero-RPC-traffic invariants.
     assert_metric_queue(&kv, result_line);
+}
+
+/// A sealed rUDP run (B5a), in process and orchestrated: the in-process
+/// server draws its key and its clients pin the handle's public half; the
+/// served child reports its key on the `SERVING` line and the client
+/// children pin it (`--udp-server-key`). Every client joins over the
+/// sealed door, and nothing is refused or forged.
+#[test]
+fn a_sealed_rudp_run_connects_in_process_and_orchestrated() {
+    for argv in [
+        &[
+            "3",
+            "--duration",
+            "3",
+            "--move-ms",
+            "100",
+            "--transport",
+            "udp",
+        ][..],
+        &[
+            "--orchestrate",
+            "4",
+            "--procs",
+            "2",
+            "--duration",
+            "3",
+            "--move-ms",
+            "100",
+            "--transport",
+            "udp",
+        ][..],
+    ] {
+        let run = loadgen_rate::run(argv);
+        let out = &run.out;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{argv:?} exited with {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let result_line = stdout
+            .lines()
+            .find(|l| l.starts_with("RESULT "))
+            .expect("RESULT line in output");
+        let kv: std::collections::HashMap<&str, &str> = result_line
+            .split_whitespace()
+            .skip(1)
+            .filter_map(|kv| kv.split_once('='))
+            .collect();
+        let n = argv.iter().find(|a| a.parse::<u32>().is_ok()).unwrap();
+        assert_eq!(kv.get("connected"), Some(n), "{result_line}");
+        assert_eq!(kv.get("joined"), Some(n), "{result_line}");
+        for k in [
+            "transport_udp_proofs_refused_plaintext",
+            "transport_udp_handshakes_failed_decrypt",
+            "transport_seal_forged",
+            "transport_udp_datagrams_unsealed",
+        ] {
+            assert_eq!(kv.get(k), Some(&"0"), "{k}: {result_line}");
+        }
+    }
 }
 
 /// Smoke test for the churn profile (`--churn-secs`, RECONNECT §14.5):

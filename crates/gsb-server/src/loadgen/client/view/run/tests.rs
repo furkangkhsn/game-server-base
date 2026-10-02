@@ -53,6 +53,7 @@ async fn a_stream_eof_ends_the_client() {
         deadline: Instant::now() + never,
         flood: false,
         kind: crate::Transport::Tcp,
+        udp_key: None,
         capture: None,
         stall: None,
         rpc: None,

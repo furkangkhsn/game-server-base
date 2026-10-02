@@ -21,10 +21,16 @@ pub const GUARD: Duration = Duration::from_secs(30);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Door {
     Tcp,
+    /// rUDP, sealed (the server's default since B5a), migration off.
     Udp,
     /// rUDP with `udp_migration` on (B3): a session survives its
-    /// client's address change.
+    /// client's address change. Sealed.
     Migrating,
+    /// [`Door::Udp`] on a plaintext door (`udp_security = "plaintext"`):
+    /// the same flows on the record layer's absence (B7's plaintext half).
+    PlainUdp,
+    /// [`Door::Migrating`] on a plaintext door.
+    PlainMigrating,
 }
 
 impl Door {
@@ -35,8 +41,18 @@ impl Door {
     pub fn drop_close(self) -> Option<ServerClose> {
         match self {
             Door::Tcp => None,
-            Door::Udp | Door::Migrating => Some(ServerClose::IdleTimeout),
+            _ => Some(ServerClose::IdleTimeout),
         }
+    }
+
+    /// Whether the door is sealed (B5a).
+    pub fn sealed(self) -> bool {
+        matches!(self, Door::Udp | Door::Migrating)
+    }
+
+    /// Whether the door follows an address change (B3).
+    pub fn migrating(self) -> bool {
+        matches!(self, Door::Migrating | Door::PlainMigrating)
     }
 }
 
@@ -60,9 +76,17 @@ pub fn config(door: Door, shape: Shape, grace_secs: f64) -> gsb_server::Config {
         room_count: 1,
         transport: match door {
             Door::Tcp => gsb_server::TransportKind::Tcp,
-            Door::Udp | Door::Migrating => gsb_server::TransportKind::Udp,
+            _ => gsb_server::TransportKind::Udp,
         },
-        udp_migration: door == Door::Migrating,
+        udp_migration: Some(door.migrating()),
+        udp_security: match door.sealed() {
+            true => gsb_server::UdpSecurityKind::Sealed,
+            false => gsb_server::UdpSecurityKind::Plaintext,
+        },
+        // A key of the run's own (its clients pin `Rig::key`).
+        udp_static_key: door
+            .sealed()
+            .then(|| gsb_server::ephemeral_udp_key().expect("entropy").0),
         topology: Some(match shape {
             Shape::Single => gsb_server::Topology::Single,
             Shape::Sharded => gsb_server::Topology::Sharded,
@@ -149,6 +173,11 @@ impl Rig {
 
     pub fn addr(&self) -> std::net::SocketAddr {
         self.handle.addr
+    }
+
+    /// The sealed door's public key, which its clients pin (B5a).
+    pub fn key(&self) -> Option<[u8; 32]> {
+        self.handle.udp_public_key
     }
 
     /// Fold the next report into [`Self::seen`].

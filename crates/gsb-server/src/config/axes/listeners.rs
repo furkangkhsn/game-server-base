@@ -402,18 +402,56 @@ pub struct Config {
     /// never paced. Every rUDP door, whichever grammar declared it; not
     /// a `[[listeners]]` key. See `gsb_net::udp` ("congestion").
     pub udp_congestion: UdpCongestionKind,
-    /// rUDP **connection migration** (BACKLOG B3): `true` grants a
-    /// connection id to every client that asks (the default `UdpClient`
-    /// does), so a session survives the client's address change — a NAT
-    /// rebinding, a Wi-Fi ↔ cellular handover — after path validation:
-    /// no new handshake, no resume. `false` (the default): no id is
-    /// granted, an address change is a new session and a resume, and the
-    /// door is byte for byte what it was. Opt-in because before the rUDP
-    /// record layer (B5a) the id is a bearer token: an on-path sniffer
-    /// that reads it can steer the session's server → client stream to
-    /// itself (`docs/RUDP-SECURITY.md` §3, §7). Every rUDP door; not a
-    /// `[[listeners]]` key. See `gsb_net::udp` (module `path`).
-    pub udp_migration: bool,
+    /// rUDP **connection migration** (BACKLOG B3): on, a session survives
+    /// the client's address change — a NAT rebinding, a Wi-Fi ↔ cellular
+    /// handover — after path validation: no new handshake, no resume.
+    /// Off, an address change is a new session and a resume. Unset (the
+    /// default) = **on for a sealed door** (B5a/B112, decision 5: only an
+    /// authenticated, newest record starts a validation and the challenge
+    /// is sealed) and **off for a plaintext door** (there the connection
+    /// id is a bearer token: an on-path sniffer that reads it can steer
+    /// the session's server → client stream to itself —
+    /// `docs/RUDP-SECURITY.md` §3, §7; a plaintext door with it off is
+    /// byte for byte what it was). Every rUDP door; not a `[[listeners]]`
+    /// key. See `gsb_net::udp` (modules `path`, `sealed`).
+    pub udp_migration: Option<bool>,
+    /// rUDP **record layer** (BACKLOG B5a, `docs/RUDP-SECURITY.md`):
+    /// `"sealed"` (the default — production) runs Noise
+    /// `NK_25519_ChaChaPoly_BLAKE2s` inside the cookie handshake (0 extra
+    /// round trips) and seals every session datagram both ways under the
+    /// server's static key, which clients pin (the platform hands its
+    /// public half out with the ticket); a sealed door REQUIRES
+    /// [`Self::udp_static_key`] or [`Self::udp_static_key_file`] — without
+    /// one the server refuses to start (never a silent plaintext
+    /// fallback). `"plaintext"`: the door before B5a, for dev/LAN only
+    /// (one startup warning). A plaintext client at a sealed door is
+    /// refused at the handshake (`udp_proofs_refused_plaintext`), a
+    /// sealed client at a plaintext door refuses it — the one deliberate
+    /// compatibility break of the rUDP line (`docs/DESIGN.md` §5). Every
+    /// rUDP door; not a `[[listeners]]` key.
+    pub udp_security: UdpSecurityKind,
+    /// The sealed rUDP doors' **static X25519 private key** as 64 hex
+    /// characters (32 bytes; any 32 random bytes are a valid key —
+    /// `openssl rand -hex 32`). The server logs only the PUBLIC half (at
+    /// bind, `public_key=`), which is what clients pin. Prefer
+    /// [`Self::udp_static_key_file`] in production (the key stays out of
+    /// the config file); setting both refuses startup.
+    pub udp_static_key: Option<String>,
+    /// A file holding the static key ([`Self::udp_static_key`]'s 64 hex
+    /// characters; surrounding whitespace ignored). Read at startup; a
+    /// missing, unreadable or malformed file refuses startup (the error
+    /// names the file, never its content).
+    pub udp_static_key_file: Option<String>,
+    /// The sealed rUDP doors' **handshake budget** (BACKLOG B119): Noise
+    /// handshakes (each ~180 µs of one core of the door's one demux task,
+    /// B110) the door starts per second — a token bucket after the
+    /// cookie and the per-source cap, before the Diffie-Hellman, holding
+    /// 50 ms of the rate. A verified proof over it creates nothing and is
+    /// counted (`udp_proofs_refused_budget`); the client re-sends it
+    /// (≤ 200 ms later). Default 1000/s (~18 % of a demux core, a
+    /// 1000-player join storm in about a second); `0` = no budget. Per
+    /// door; every rUDP door gets the same value.
+    pub udp_handshakes_per_sec: Option<u32>,
     /// Path to the server certificate chain, PEM (leaf first). Empty (the
     /// default) = plaintext TCP, byte-identical behavior to before the TLS
     /// turn. Set together with [`Self::tls_key`] it serves TCP over rustls
@@ -714,7 +752,11 @@ impl Default for Config {
             udp_max_datagram_bytes: gsb_net::udp::DEFAULT_MAX_DATAGRAM_BYTES,
             udp_cookie_key: None,
             udp_congestion: UdpCongestionKind::Off,
-            udp_migration: false,
+            udp_migration: None,
+            udp_security: UdpSecurityKind::Sealed,
+            udp_static_key: None,
+            udp_static_key_file: None,
+            udp_handshakes_per_sec: Some(gsb_net::udp::DEFAULT_HANDSHAKES_PER_SEC),
             tls_cert: String::new(),
             tls_key: String::new(),
             listeners: None,

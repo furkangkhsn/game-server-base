@@ -161,6 +161,7 @@ async fn session(flood: bool, window: Duration) -> (ClientReport, Tally) {
         deadline: Instant::now() + window,
         flood,
         kind: crate::Transport::Ws,
+        udp_key: None,
         capture: None,
         stall: None,
         rpc: None,

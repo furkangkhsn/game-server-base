@@ -37,7 +37,15 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // transport-agnostic). On rUDP `connect` is the cookie handshake, so
     // `connect_ms` measures the handshake latency.
     let t0 = Instant::now();
-    let mut wire = match connect_wire(p.kind, p.addr, &p.tls, p.stall.map(|_| STALL_RCVBUF)).await {
+    let mut wire = match connect_wire(
+        p.kind,
+        p.addr,
+        &p.tls,
+        p.stall.map(|_| STALL_RCVBUF),
+        p.udp_key,
+    )
+    .await
+    {
         Ok(w) => w,
         Err(e) => {
             eprintln!("client {id}: connect failed: {e}");

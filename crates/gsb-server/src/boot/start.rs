@@ -229,6 +229,17 @@ async fn start_inner(
     } else {
         None
     };
+    // The record layer (B5a): sealed under the configured static key, or
+    // the explicit plaintext switch. Global for the cookie key's reason:
+    // one identity per server, which every client pins. A missing or
+    // malformed key refuses startup here, before anything binds.
+    let udp = super::accept::UdpKeys {
+        cookie: cookie_key,
+        security: match has_udp {
+            true => udp_security(&cfg)?,
+            false => gsb_net::udp::UdpSecurity::Plaintext,
+        },
+    };
 
     // Bind EVERY listener before spawning any accept task. The TLS pick
     // rides the Tcp-shaped spec: TLS is a socket-level upgrade of the SAME
@@ -246,16 +257,7 @@ async fn start_inner(
         // The transport's own losses go to the same collector (B58), on
         // the channel its final report does not wait for (F35).
         let metrics = Some(transport_tx.clone());
-        match bind_listener(
-            spec,
-            &cfg,
-            idle_timeout,
-            cookie_key,
-            handshake_bound,
-            metrics,
-        )
-        .await
-        {
+        match bind_listener(spec, &cfg, idle_timeout, &udp, handshake_bound, metrics).await {
             Ok((listener, addr)) => {
                 listeners.push(listener);
                 addrs.push(addr);
@@ -308,6 +310,7 @@ async fn start_inner(
         addr: addrs[0],
         addrs,
         http_addr,
+        udp_public_key: udp.security.public_key(),
         match_results: result_rx,
     })
 }

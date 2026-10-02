@@ -33,7 +33,7 @@ const PLAYERS: usize = 120;
 /// Connect, authenticate as `name`, join room 1; returns the client, its
 /// wire id, and the game frames that arrived before the join result.
 async fn join(addr: SocketAddr, name: String) -> (Conn, u64, Vec<(u16, Vec<u8>)>) {
-    let mut c = gsb_client::connect::udp(addr)
+    let mut c = gsb_client::connect::udp(addr, common::rudp_pin())
         .await
         .expect("rUDP handshake");
     let mut early = Vec::new();
@@ -60,6 +60,7 @@ async fn an_mmo_sized_full_reaches_the_kit_client_view_over_rudp() {
         room_count: 1,
         game: "mmo".into(),
         transport: gsb_server::TransportKind::Udp,
+        udp_static_key: Some(common::rudp_key().0.clone()),
         ..Default::default()
     };
     let handle =

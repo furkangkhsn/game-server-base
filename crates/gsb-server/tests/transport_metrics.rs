@@ -1,7 +1,9 @@
 //! The rUDP door's own losses reach the server's metrics report (BACKLOG
 //! B58): the composition root gives the demux the collector's channel.
 //! Two datagrams of an unknown kind, the second past the demux's flush
-//! interval: both counted as malformed in the report.
+//! interval: both counted as malformed in the report. A plaintext door
+//! (`udp_security = "plaintext"`): on a sealed one the same bytes are
+//! `udp_datagrams_unsealed` (B5a) — the demux's unit tests count those.
 
 use std::time::Duration;
 
@@ -18,6 +20,7 @@ async fn the_rudp_doors_drops_reach_the_report() {
             tls_cert: None,
             tls_key: None,
         }]),
+        udp_security: gsb_server::UdpSecurityKind::Plaintext,
         ..Default::default()
     };
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();

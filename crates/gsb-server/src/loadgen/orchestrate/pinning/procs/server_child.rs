@@ -52,7 +52,7 @@ pub(crate) async fn await_serving<R: AsyncBufRead + Unpin>(
     reader: &mut R,
     bound: Duration,
     mut forward: impl FnMut(&[u8]),
-) -> Result<(SocketAddr, SocketAddr), ReportError> {
+) -> Result<(SocketAddr, SocketAddr, Option<[u8; 32]>), ReportError> {
     let read = async {
         let mut line = Vec::new();
         loop {
@@ -71,7 +71,8 @@ pub(crate) async fn await_serving<R: AsyncBufRead + Unpin>(
                 Some(Serving {
                     addr,
                     metrics: Some(metrics),
-                }) => Ok((addr, metrics)),
+                    udp_key,
+                }) => Ok((addr, metrics, udp_key)),
                 _ => Err(ReportError::Malformed(text.trim_end().to_string())),
             };
         }
@@ -107,6 +108,8 @@ pub(crate) struct ServerChild {
     pub(crate) addr: SocketAddr,
     /// The metric stream the orchestrator reads (as reported).
     pub(crate) metrics: SocketAddr,
+    /// The sealed rUDP door's public key (as reported; B5a).
+    pub(crate) udp_key: Option<[u8; 32]>,
     /// Passes the child's later stdout on; ends at the child's exit.
     pub(crate) stdout_forward: JoinHandle<()>,
 }
@@ -128,11 +131,12 @@ pub(crate) async fn start_server_child(
     let pid = child.id().expect("freshly spawned child has a pid");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
     match await_serving(&mut reader, bound, print_raw).await {
-        Ok((addr, metrics)) => Ok(ServerChild {
+        Ok((addr, metrics, udp_key)) => Ok(ServerChild {
             child,
             pid,
             addr,
             metrics,
+            udp_key,
             stdout_forward: tokio::spawn(forward_stdout(reader)),
         }),
         Err(why) => {

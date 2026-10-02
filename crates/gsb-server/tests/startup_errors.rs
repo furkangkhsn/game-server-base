@@ -137,3 +137,26 @@ fn the_load_generator_reports_an_in_process_refusal() {
     run.lacks("panicked");
     run.lacks("ShardedCrossInterest");
 }
+
+/// B5a: a sealed rUDP door (the default `udp_security`) without its
+/// static key refuses startup — never a silent plaintext fallback — and
+/// says how to fix it; a malformed key refuses without echoing a
+/// character of it.
+#[test]
+fn a_sealed_rudp_door_without_its_key_refuses_startup() {
+    let run = server_with_config(
+        "udp-no-key",
+        "bind = \"127.0.0.1:0\"\ntransport = \"udp\"\n",
+    );
+    run.refused_with(&[
+        "gsb-server: rUDP static key: missing",
+        "udp_static_key",
+        "udp_security = \"plaintext\"",
+    ]);
+    let run = server_with_config(
+        "udp-bad-key",
+        "bind = \"127.0.0.1:0\"\ntransport = \"udp\"\nudp_static_key = \"5ec7e75ec7e7\"\n",
+    );
+    run.refused_with(&["gsb-server: rUDP static key: malformed"]);
+    run.lacks("5ec7e7");
+}

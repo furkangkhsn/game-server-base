@@ -12,7 +12,10 @@ const SERVING: &str = "SERVING addr=127.0.0.1:41873 metrics=127.0.0.1:41874\n";
 async fn read(
     input: &[u8],
     bound: Duration,
-) -> (Result<(SocketAddr, SocketAddr), ReportError>, Vec<u8>) {
+) -> (
+    Result<(SocketAddr, SocketAddr, Option<[u8; 32]>), ReportError>,
+    Vec<u8>,
+) {
     let mut forwarded = Vec::new();
     let mut reader = BufReader::new(input);
     let got = await_serving(&mut reader, bound, |l| forwarded.extend_from_slice(l)).await;
@@ -25,7 +28,8 @@ async fn read(
 async fn the_report_names_the_addresses_and_earlier_lines_pass_on() {
     let input = format!("a log line\nanother\n{SERVING}after\n");
     let (got, forwarded) = read(input.as_bytes(), Duration::from_secs(5)).await;
-    let (addr, metrics) = got.expect("the report");
+    let (addr, metrics, udp_key) = got.expect("the report");
+    assert_eq!(udp_key, None, "a line without the key reads as none");
     assert_eq!(addr, "127.0.0.1:41873".parse().unwrap());
     assert_eq!(metrics, "127.0.0.1:41874".parse().unwrap());
     assert_eq!(forwarded, b"a log line\nanother\n");

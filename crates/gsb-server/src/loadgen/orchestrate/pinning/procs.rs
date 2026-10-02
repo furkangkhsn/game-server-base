@@ -282,6 +282,7 @@ pub(crate) async fn orchestrate(args: Args) {
         pid: server_pid,
         addr: server_addr,
         metrics: metrics_addr,
+        udp_key,
         stdout_forward,
     } = match start_server_child(
         &exe,
@@ -317,7 +318,7 @@ pub(crate) async fn orchestrate(args: Args) {
             .as_ref()
             .and_then(|m| m.1.get(p as usize))
             .map(|m| m.len().max(1));
-        let cargs = client_args(&args, count, offset, server_addr, cores);
+        let cargs = client_args(&args, count, offset, server_addr, udp_key, cores);
         // The client process prints its per-client records (env-gated).
         let env = [("GSB_LOADGEN_CLIENT_LINES".to_string(), "1".to_string())];
         let mut child = spawn_pinned(

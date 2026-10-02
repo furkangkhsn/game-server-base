@@ -63,6 +63,7 @@ pub(crate) async fn serve(args: Args) {
             mmo_crystallize: args.mmo_crystallize,
             listen_backlog: args.listen_backlog,
             udp_recv_buffer: args.udp_recv_buffer,
+            udp_security: args.udp_security,
         },
     );
     // Every door is bound before the SERVING line goes out (BACKLOG
@@ -102,6 +103,7 @@ pub(crate) async fn serve(args: Args) {
     };
     let serving = Serving {
         addr: handle.addr,
+        udp_key: handle.udp_public_key,
         metrics: metrics
             .as_ref()
             .map(|l| l.local_addr().expect("a bound listener has an address")),

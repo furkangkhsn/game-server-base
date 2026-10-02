@@ -54,9 +54,10 @@ pub(crate) async fn connect_wire(
     addr: SocketAddr,
     tls: &Option<TlsOpts>,
     rcvbuf: Option<u32>,
+    udp_key: Option<[u8; 32]>,
 ) -> std::io::Result<Conn> {
     Ok(match kind {
-        crate::Transport::Udp => gsb_client::connect::udp(addr).await?,
+        crate::Transport::Udp => gsb_client::connect::udp(addr, udp_key).await?,
         crate::Transport::Ws => {
             let stream = tcp_connect(addr, rcvbuf).await?;
             gsb_client::connect::ws_stream(stream, &addr.to_string()).await?

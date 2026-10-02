@@ -15,7 +15,7 @@ pub const LONG_GRACE: f64 = 60.0;
 /// A player joined as `name` and seen in game (its entity in the
 /// world, its own input moving it).
 pub async fn in_game(rig: &Rig, door: Door, name: &str) -> Player {
-    let mut p = Player::connect(door, rig.addr()).await;
+    let mut p = Player::connect(door, rig.addr(), rig.key()).await;
     p.join(name).await;
     p.moves().await;
     p
@@ -34,7 +34,7 @@ pub fn vanish(old: Player) -> (Option<std::net::UdpSocket>, Option<std::net::Soc
 
 /// A new connection from a new local address.
 pub async fn reconnect(rig: &Rig, door: Door, old: Option<std::net::SocketAddr>) -> Player {
-    let p = Player::connect(door, rig.addr()).await;
+    let p = Player::connect(door, rig.addr(), rig.key()).await;
     if let (Some(old), Some(new)) = (old, p.udp_local()) {
         assert_ne!(old.port(), new.port(), "the reconnect is from a new port");
     }
@@ -177,7 +177,7 @@ pub async fn takeover(door: Door) {
     let mut first = in_game(&rig, door, "twin").await;
     let entity = first.entity;
 
-    let mut second = Player::connect(door, rig.addr()).await;
+    let mut second = Player::connect(door, rig.addr(), rig.key()).await;
     if let (Some(a), Some(b)) = (first.udp_local(), second.udp_local()) {
         assert_ne!(a, b, "two live sockets, two 4-tuples");
     }

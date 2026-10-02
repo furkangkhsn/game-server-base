@@ -84,6 +84,9 @@ rustls-pemfile = { workspace = true }
 # stalled reader never backs the fan-out up). Already in the lock
 # through tokio.
 socket2 = { version = "0.6", features = ["all"] }
+# The sealed rUDP door's static key is wiped from memory once parsed
+# (BACKLOG B5a); already in the lock through gsb-net.
+zeroize = { version = "1", default-features = false }
 
 [dev-dependencies]
 # Test certificates are minted at runtime (docs/SECURITY.md §2 decision 5):

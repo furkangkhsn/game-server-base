@@ -45,6 +45,17 @@ fn cfg() -> gsb_server::Config {
         room_count: 1,
         transport: gsb_server::TransportKind::Udp,
         idle_timeout_secs: 0.0,
+        // Sealed (the default), under a key of the test's own; its
+        // clients pin the handle's public half (`pinned`).
+        udp_static_key: Some(gsb_server::ephemeral_udp_key().expect("entropy").0),
+        ..Default::default()
+    }
+}
+
+/// A client config pinning `handle`'s sealed rUDP key.
+fn pinned(handle: &gsb_server::ServerHandle) -> gsb_net::udp::UdpClientConfig {
+    gsb_net::udp::UdpClientConfig {
+        server_key: handle.udp_public_key,
         ..Default::default()
     }
 }
@@ -135,7 +146,7 @@ async fn peers_that_stop_acking_lose_their_sessions_and_the_teardown_runs() {
         .expect("server starts");
 
     // A: authenticates and joins room 1 (its close routes a DETACH).
-    let mut a = gsb_net::udp::UdpClient::connect(handle.addr)
+    let mut a = gsb_net::udp::UdpClient::connect_with(handle.addr, pinned(&handle))
         .await
         .expect("A handshake");
     send(&mut a, gsb_protocol::op::base::AUTH_REQ, auth_of("rel-a")).await;
@@ -148,7 +159,7 @@ async fn peers_that_stop_acking_lose_their_sessions_and_the_teardown_runs() {
     read_until(&mut a, gsb_protocol::op::base::JOIN_ROOM_RESULT).await;
 
     // B: authenticates only (nothing to park — its row is released).
-    let mut b = gsb_net::udp::UdpClient::connect(handle.addr)
+    let mut b = gsb_net::udp::UdpClient::connect_with(handle.addr, pinned(&handle))
         .await
         .expect("B handshake");
     send(&mut b, gsb_protocol::op::base::AUTH_REQ, auth_of("rel-b")).await;

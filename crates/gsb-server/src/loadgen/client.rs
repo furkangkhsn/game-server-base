@@ -142,6 +142,9 @@ pub(crate) struct ClientParams {
     /// The client's transport (TCP, rUDP or WebSocket; see
     /// `connect_wire`).
     pub(crate) kind: crate::Transport,
+    /// The sealed rUDP server's public key the client pins (`None`: a
+    /// plaintext rUDP door, or another transport).
+    pub(crate) udp_key: Option<[u8; 32]>,
     /// `--capture`: this client's capture file and the game's name
     /// (`None` = not captured — every client of a run without the flag).
     pub(crate) capture: Option<(std::path::PathBuf, &'static str)>,

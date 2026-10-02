@@ -5,7 +5,7 @@
 use std::io;
 use std::net::SocketAddr;
 
-use gsb_net::udp::UdpClient;
+use gsb_net::udp::{UdpClient, UdpClientConfig};
 use tokio::net::TcpStream;
 
 use crate::conn::Conn;
@@ -53,8 +53,18 @@ pub async fn ws_stream(mut stream: TcpStream, host: &str) -> io::Result<Conn> {
 
 /// rUDP: bind an ephemeral port and run the cookie handshake
 /// (`UdpClient::connect` — returns once the server holds the session).
-pub async fn udp(addr: SocketAddr) -> io::Result<Conn> {
-    UdpClient::connect(addr).await.map(Conn::udp)
+/// `server_key`: the server's static public key, pinned (the platform
+/// hands it out with the ticket — `docs/RUDP-SECURITY.md` decision 3):
+/// `Some` runs the sealed handshake (Noise NK) and seals the session,
+/// refusing a server that cannot prove that key; `None` is a plaintext
+/// client, for a door configured `udp_security = "plaintext"` (dev/LAN) —
+/// a sealed door refuses it.
+pub async fn udp(addr: SocketAddr, server_key: Option<[u8; 32]>) -> io::Result<Conn> {
+    let config = UdpClientConfig {
+        server_key,
+        ..UdpClientConfig::default()
+    };
+    UdpClient::connect_with(addr, config).await.map(Conn::udp)
 }
 
 #[cfg(test)]

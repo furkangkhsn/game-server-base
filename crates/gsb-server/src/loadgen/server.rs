@@ -31,6 +31,9 @@ pub(crate) struct ServerOverrides {
     /// The UDP door's receive buffer (`None` = config default:
     /// untouched, B4).
     pub(crate) udp_recv_buffer: Option<u32>,
+    /// The rUDP record layer (B5a): sealed — under an ephemeral key drawn
+    /// here, its public half on the server handle — or plaintext.
+    pub(crate) udp_security: gsb_server::UdpSecurityKind,
 }
 
 pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
@@ -54,6 +57,18 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     }
     if let Some(n) = o.udp_recv_buffer {
         cfg.udp_recv_buffer_bytes = Some(n);
+    }
+    // The rUDP door's record layer (B5a): a load run's server is sealed
+    // like a deployment's, under a key of its own (its clients pin the
+    // handle's `udp_public_key`), unless the run asks for plaintext.
+    cfg.udp_security = o.udp_security;
+    if cfg.transport == gsb_server::TransportKind::Udp
+        && o.udp_security == gsb_server::UdpSecurityKind::Sealed
+        && cfg.udp_static_key.is_none()
+    {
+        let (key, _public) =
+            gsb_server::ephemeral_udp_key().expect("the OS entropy source for the run's rUDP key");
+        cfg.udp_static_key = Some(key);
     }
     if let Some(s) = o.disconnect_grace_secs {
         cfg.disconnect_grace_secs = s.max(0.0);
@@ -188,6 +203,7 @@ mod tests {
             mmo_crystallize: None,
             listen_backlog: None,
             udp_recv_buffer: None,
+            udp_security: gsb_server::UdpSecurityKind::Sealed,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &none);
@@ -217,6 +233,7 @@ mod tests {
             mmo_crystallize: None,
             listen_backlog,
             udp_recv_buffer: None,
+            udp_security: gsb_server::UdpSecurityKind::Sealed,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &o(None));
@@ -239,11 +256,50 @@ mod tests {
             mmo_crystallize: None,
             listen_backlog: None,
             udp_recv_buffer,
+            udp_security: gsb_server::UdpSecurityKind::Sealed,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &o(None));
         assert_eq!(cfg.udp_recv_buffer_bytes, None);
         apply_overrides(&mut cfg, &o(Some(4 << 20)));
         assert_eq!(cfg.udp_recv_buffer_bytes, Some(4 << 20));
+    }
+
+    /// A load run's rUDP door is sealed like a deployment's (B5a) under a
+    /// key drawn for the run — unless it asks for plaintext; a TCP run
+    /// gets no key.
+    #[test]
+    fn a_rudp_run_is_sealed_under_its_own_key_unless_plaintext() {
+        let o = |udp_security| ServerOverrides {
+            max_players: None,
+            max_connections: None,
+            idle_timeout_secs: None,
+            write_stall_secs: None,
+            conn_out: None,
+            disconnect_grace_secs: None,
+            mmo_crystallize: None,
+            listen_backlog: None,
+            udp_recv_buffer: None,
+            udp_security,
+        };
+        let udp = || gsb_server::Config {
+            transport: gsb_server::TransportKind::Udp,
+            ..Default::default()
+        };
+        let mut cfg = udp();
+        apply_overrides(&mut cfg, &o(gsb_server::UdpSecurityKind::Sealed));
+        let key = cfg.udp_static_key.clone().expect("a key drawn");
+        assert_eq!(key.len(), 64);
+        apply_overrides(&mut cfg, &o(gsb_server::UdpSecurityKind::Sealed));
+        assert_eq!(cfg.udp_static_key, Some(key), "kept, not redrawn");
+        let mut cfg = udp();
+        apply_overrides(&mut cfg, &o(gsb_server::UdpSecurityKind::Plaintext));
+        assert_eq!(
+            (cfg.udp_security, cfg.udp_static_key),
+            (gsb_server::UdpSecurityKind::Plaintext, None)
+        );
+        let mut tcp = gsb_server::Config::default();
+        apply_overrides(&mut tcp, &o(gsb_server::UdpSecurityKind::Sealed));
+        assert_eq!(tcp.udp_static_key, None);
     }
 }

@@ -98,6 +98,7 @@ async fn no_input_and_no_request_before_the_join_is_answered() {
         deadline: Instant::now() + HOLD + Duration::from_millis(800),
         flood: false,
         kind: crate::Transport::Tcp,
+        udp_key: None,
         capture: None,
         stall: None,
         rpc: Some(RpcPlan {

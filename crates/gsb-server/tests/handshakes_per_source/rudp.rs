@@ -18,10 +18,13 @@ use gsb_server::{Config, TransportKind};
 const PROMPT: Duration = Duration::from_secs(5);
 
 async fn session(to: SocketAddr, name: String) -> Conn {
-    let mut c = tokio::time::timeout(PROMPT, gsb_client::connect::udp(to))
-        .await
-        .expect("prompt")
-        .expect("the rUDP handshake");
+    let mut c = tokio::time::timeout(
+        PROMPT,
+        gsb_client::connect::udp(to, crate::common::rudp_pin()),
+    )
+    .await
+    .expect("prompt")
+    .expect("the rUDP handshake");
     session::auth(&mut c, &Credentials::named(&name), PROMPT, |_| {})
         .await
         .expect("auth");
@@ -35,6 +38,7 @@ async fn an_rudp_door_caps_pending_sessions_not_sessions() {
         transport: TransportKind::Udp,
         room_count: 1,
         max_handshakes_per_source: Some(1),
+        udp_static_key: Some(crate::common::rudp_key().0.clone()),
         ..Default::default()
     };
     let handle = gsb_server::start_server(cfg).await.expect("server starts");

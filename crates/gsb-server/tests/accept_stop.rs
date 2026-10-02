@@ -63,6 +63,7 @@ async fn server(pki: &common::TlsPki) -> gsb_server::ServerHandle {
     let cfg = gsb_server::Config {
         room_count: 1,
         listeners: Some(listeners),
+        udp_static_key: Some(common::rudp_key().0.clone()),
         ..Default::default()
     };
     gsb_server::start_server(cfg).await.expect("server starts")

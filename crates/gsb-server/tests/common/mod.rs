@@ -77,3 +77,22 @@ pub fn tls_client_connector(pki: &TlsPki) -> TlsConnector {
         .with_no_client_auth();
     TlsConnector::from(std::sync::Arc::new(config))
 }
+
+/// The test process's sealed-rUDP identity (B5a): minted at runtime once
+/// (never committed, like the certificates above) — the config's
+/// `udp_static_key` value and the public half a client pins.
+pub fn rudp_key() -> &'static (String, [u8; 32]) {
+    static KEY: std::sync::OnceLock<(String, [u8; 32])> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| gsb_server::ephemeral_udp_key().expect("OS entropy for the rUDP test key"))
+}
+
+/// Seal `cfg`'s rUDP doors under [`rudp_key`] (the server's default
+/// `udp_security` is sealed and needs a key).
+pub fn seal_rudp(cfg: &mut gsb_server::Config) {
+    cfg.udp_static_key = Some(rudp_key().0.clone());
+}
+
+/// The public key a client of a [`seal_rudp`] server pins.
+pub fn rudp_pin() -> Option<[u8; 32]> {
+    Some(rudp_key().1)
+}

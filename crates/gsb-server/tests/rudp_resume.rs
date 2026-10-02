@@ -5,7 +5,9 @@
 //! changes (a NAT rebinding, a mobile handover) or whose socket died
 //! comes back as a NEW session: a new socket, a new cookie handshake,
 //! and a resume under the same credentials (RECONNECT §5). These tests
-//! lock that fallback through the real server, plaintext:
+//! lock that fallback through the real server — on a sealed door (the
+//! default since B5a: Noise NK in the handshake, every datagram a
+//! record) and, under the `plaintext_` names, on a plaintext one:
 //!
 //! - a vanished client (no LEAVE; rUDP has no FIN, so the server learns
 //!   it from the idle sweep) is parked, and a client from a new local
@@ -88,4 +90,44 @@ async fn a_migrating_rudp_session_survives_its_address_change() {
 #[tokio::test]
 async fn with_migration_on_a_vanished_rudp_client_still_resumes() {
     flows::vanish_then_resume(Door::Migrating, Shape::Single).await;
+}
+
+// B5a: the rUDP doors above are SEALED (the server's default — Noise NK
+// in the handshake, every datagram a record; B7's encrypted half). The
+// same flows on a plaintext door (`udp_security = "plaintext"`, the
+// dev/LAN switch) keep the plaintext path covered.
+
+#[tokio::test]
+async fn plaintext_a_vanished_rudp_client_resumes_from_a_new_port() {
+    flows::vanish_then_resume(Door::PlainUdp, Shape::Single).await;
+}
+
+#[tokio::test]
+async fn plaintext_a_vanished_rudp_client_resumes_on_the_sharded_grid() {
+    flows::vanish_then_resume(Door::PlainUdp, Shape::Sharded).await;
+}
+
+#[tokio::test]
+async fn plaintext_a_live_rudp_session_is_taken_over_by_the_newer_one() {
+    flows::takeover(Door::PlainUdp).await;
+}
+
+#[tokio::test]
+async fn plaintext_past_the_grace_the_rudp_client_reclaims_its_entity_from_the_bot() {
+    grace::resume_after_the_grace(Door::PlainUdp).await;
+}
+
+#[tokio::test]
+async fn plaintext_without_a_grace_the_rudp_client_joins_fresh() {
+    grace::no_grace_is_a_fresh_join(Door::PlainUdp).await;
+}
+
+#[tokio::test]
+async fn plaintext_a_migrating_rudp_session_survives_its_address_change() {
+    flows::migrate(Door::PlainMigrating).await;
+}
+
+#[tokio::test]
+async fn plaintext_with_migration_on_a_vanished_rudp_client_still_resumes() {
+    flows::vanish_then_resume(Door::PlainMigrating, Shape::Single).await;
 }

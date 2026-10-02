@@ -34,7 +34,10 @@ const BURST: f64 = 3_000.0;
 /// bytes, before the envelope.
 const FRAME_FLOOR: usize = 41 * 32;
 
+/// The door's config, sealed under a key of the run's own (its public
+/// half is the server handle's `udp_public_key`).
 fn config(congestion: &str) -> gsb_server::Config {
+    let (key, _) = gsb_server::ephemeral_udp_key().expect("entropy");
     let dir = std::env::temp_dir().join(format!(
         "gsb-path-budget-{}-{congestion}",
         std::process::id()
@@ -45,7 +48,7 @@ fn config(congestion: &str) -> gsb_server::Config {
         &file,
         format!(
             "bind = \"127.0.0.1:0\"\ntransport = \"udp\"\nroom_count = 1\n\
-             udp_congestion = \"{congestion}\"\n"
+             udp_congestion = \"{congestion}\"\nudp_static_key = \"{key}\"\n"
         ),
     )
     .expect("write the config");
@@ -69,7 +72,7 @@ async fn run(congestion: &str, secs: u64) -> (Vec<usize>, u64) {
     .await
     .expect("the server starts");
     let relay = Relay::start(handle.addr, RATE, BURST).await;
-    let mut conn = gsb_client::connect::udp(relay.addr)
+    let mut conn = gsb_client::connect::udp(relay.addr, handle.udp_public_key)
         .await
         .expect("rUDP handshake through the relay");
     session::auth_and_join(&mut conn, &Credentials::named("dot"), 1, GUARD, |_| {})

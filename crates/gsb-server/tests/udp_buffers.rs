@@ -54,6 +54,7 @@ async fn out_of_range_refuses_startup_before_anything_binds() {
                 transport: gsb_server::TransportKind::Udp,
                 udp_recv_buffer_bytes: recv.then_some(bad),
                 udp_send_buffer_bytes: (!recv).then_some(bad),
+                udp_static_key: Some(common::rudp_key().0.clone()),
                 ..Default::default()
             };
             let err = match gsb_server::start_server(cfg).await {
@@ -96,10 +97,15 @@ async fn every_udp_door_starts_with_its_buffers() {
         ]),
         udp_recv_buffer_bytes: Some(1 << 30),
         udp_send_buffer_bytes: Some(1 << 20),
+        udp_static_key: Some(common::rudp_key().0.clone()),
         ..Default::default()
     };
     let handle = gsb_server::start_server(cfg).await.expect("server starts");
-    let udp = gsb_net::udp::UdpClient::connect(handle.addrs[0])
+    let pinned = gsb_net::udp::UdpClientConfig {
+        server_key: common::rudp_pin(),
+        ..Default::default()
+    };
+    let udp = gsb_net::udp::UdpClient::connect_with(handle.addrs[0], pinned)
         .await
         .expect("the rUDP door handshakes");
     assert!(udp.is_established());

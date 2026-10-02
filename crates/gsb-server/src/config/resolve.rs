@@ -50,6 +50,12 @@ pub enum ServerError {
     #[error("invalid `udp_cookie_key` in config: {0}")]
     BadCookieKey(String),
 
+    /// The sealed rUDP door's static key (B5a): missing, both spellings
+    /// set, unreadable or malformed. The message never carries key
+    /// material.
+    #[error("rUDP static key: {0}")]
+    BadUdpStaticKey(String),
+
     #[error("invalid `shard_count` {0}: must be 1..=256 (grid topology)")]
     BadShardCount(u32),
 

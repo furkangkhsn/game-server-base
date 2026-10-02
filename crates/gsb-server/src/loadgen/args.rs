@@ -46,6 +46,8 @@ impl Args {
             conn_out: None,
             listen_backlog: None,
             udp_recv_buffer: None,
+            udp_security: gsb_server::UdpSecurityKind::Sealed,
+            udp_server_key: None,
             flood_id: None,
             churn_secs: None,
             churn_cycles: 0,
@@ -226,6 +228,22 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                     "--udp-recv-buffer must be 4096..=2147483647 (Linux caps it at net.core.rmem_max)",
                 )?;
                 args.udp_recv_buffer = Some(n);
+            }
+            "--udp-security" => {
+                args.udp_security = match v()?.as_str() {
+                    "sealed" => gsb_server::UdpSecurityKind::Sealed,
+                    "plaintext" => gsb_server::UdpSecurityKind::Plaintext,
+                    other => {
+                        return Err(CliError(format!(
+                            "--udp-security: expected sealed|plaintext, got {other}"
+                        )));
+                    }
+                };
+            }
+            "--udp-server-key" => {
+                let key = gsb_server::parse_udp_public_key(&v()?)
+                    .map_err(|e| CliError(format!("--udp-server-key: {e}")))?;
+                args.udp_server_key = Some(key);
             }
             "--flood-id" => args.flood_id = Some(number(&a, v()?)?),
             "--churn-secs" => {

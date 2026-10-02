@@ -44,6 +44,7 @@ async fn server(door: ListenerTransport, pki: &common::TlsPki) -> gsb_server::Se
             tls_cert: tls.then(|| pki.cert_pem_path.clone()),
             tls_key: tls.then(|| pki.key_pem_path.clone()),
         }]),
+        udp_static_key: Some(common::rudp_key().0.clone()),
         ..Default::default()
     };
     gsb_server::start_server(cfg).await.expect("server starts")

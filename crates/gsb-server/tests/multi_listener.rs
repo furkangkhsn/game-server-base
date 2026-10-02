@@ -59,7 +59,7 @@ async fn connect(
                 .await
                 .expect("TLS handshake")
         }
-        gsb_server::ListenerTransport::Udp => gsb_client::connect::udp(addr)
+        gsb_server::ListenerTransport::Udp => gsb_client::connect::udp(addr, common::rudp_pin())
             .await
             .expect("rUDP handshake"),
         // THE v1 contract: TLS 1.3 with the gsb ALPN, one bi-stream
@@ -400,6 +400,7 @@ async fn three_transports_serve_one_room_including_rudp() {
             ),
             entry(gsb_server::ListenerTransport::Udp, "127.0.0.1:0", None),
         ]),
+        udp_static_key: Some(common::rudp_key().0.clone()),
         ..Default::default()
     };
     let handle = gsb_server::start_server(cfg)
@@ -490,6 +491,7 @@ async fn websocket_and_rudp_doors_serve_one_room() {
             entry(gsb_server::ListenerTransport::Ws, "127.0.0.1:0", None),
             entry(gsb_server::ListenerTransport::Udp, "127.0.0.1:0", None),
         ]),
+        udp_static_key: Some(common::rudp_key().0.clone()),
         ..Default::default()
     };
     let handle = gsb_server::start_server(cfg)

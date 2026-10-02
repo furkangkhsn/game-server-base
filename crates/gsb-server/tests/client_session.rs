@@ -54,6 +54,7 @@ async fn server(
         }]),
         ..Default::default()
     };
+    common::seal_rudp(&mut cfg);
     tweak(&mut cfg);
     gsb_server::start_server(cfg).await.expect("server starts")
 }
@@ -70,7 +71,7 @@ async fn connect(door: Door, pki: &TlsPki, addr: SocketAddr) -> Conn {
                 .await
                 .expect("TLS handshake")
         }
-        Door::Udp => gsb_client::connect::udp(addr)
+        Door::Udp => gsb_client::connect::udp(addr, common::rudp_pin())
             .await
             .expect("rUDP handshake"),
         Door::Quic => {

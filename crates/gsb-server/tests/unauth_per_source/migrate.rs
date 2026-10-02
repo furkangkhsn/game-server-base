@@ -150,8 +150,10 @@ async fn a_migrated_session_s_count_moves_to_its_new_source() {
             door(ListenerTransport::Udp),
             door(ListenerTransport::Tcp),
         ]),
-        udp_migration: true,
+        udp_migration: Some(true),
         max_unauth_conns_per_source: Some(1),
+        // Sealed (the default), under a key of the test's own.
+        udp_static_key: Some(gsb_server::ephemeral_udp_key().expect("entropy").0),
         ..Default::default()
     };
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -166,7 +168,7 @@ async fn a_migrated_session_s_count_moves_to_its_new_source() {
     // holds that source's one place.
     let mut nat = Nat::start(udp).await;
     let front = nat.front.local_addr().expect("front");
-    let mut c = gsb_client::connect::udp(front)
+    let mut c = gsb_client::connect::udp(front, handle.udp_public_key)
         .await
         .expect("rUDP through the NAT");
     // The client is connected once the demux sends its accept; the accept

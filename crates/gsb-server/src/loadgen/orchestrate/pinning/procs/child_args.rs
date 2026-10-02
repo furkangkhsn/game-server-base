@@ -6,6 +6,14 @@ use super::*;
 
 /// Whether the run drives the 2D demo: its own flags (`bot::is_demo_only`)
 /// are forwarded only then — the other games' children refuse them.
+/// The `--udp-security` spelling of the run.
+fn udp_security(args: &Args) -> &'static str {
+    match args.udp_security {
+        gsb_server::UdpSecurityKind::Sealed => "sealed",
+        gsb_server::UdpSecurityKind::Plaintext => "plaintext",
+    }
+}
+
 fn is_demo(args: &Args) -> bool {
     args.game == gsb_server::games::demo::DemoModule::NAME
 }
@@ -73,6 +81,8 @@ pub(super) fn server_args(args: &Args, pinned_cores: Option<usize>) -> Vec<Strin
     sargs.extend([
         "--transport".into(),
         args.transport.to_string(),
+        "--udp-security".into(),
+        udp_security(args).into(),
         "--duration".into(),
         (args.duration + Duration::from_secs(3))
             .as_secs()
@@ -139,6 +149,7 @@ pub(super) fn client_args(
     count: u64,
     offset: u64,
     server: SocketAddr,
+    udp_key: Option<[u8; 32]>,
     pinned_cores: Option<usize>,
 ) -> Vec<String> {
     let mut cargs = vec![
@@ -178,6 +189,12 @@ pub(super) fn client_args(
         ]);
     }
     cargs.extend(["--transport".into(), args.transport.to_string()]);
+    // The served child's sealed rUDP key (its `SERVING` line's), pinned
+    // by every client child; plaintext runs say so explicitly.
+    cargs.extend(["--udp-security".into(), udp_security(args).into()]);
+    if let Some(k) = udp_key {
+        cargs.extend(["--udp-server-key".into(), gsb_server::udp_key_hex(&k)]);
+    }
     push_workers(&mut cargs, args, pinned_cores);
     // The flood client (by global id) belongs to exactly one child:
     // forward the flag only to the child whose id range contains it.

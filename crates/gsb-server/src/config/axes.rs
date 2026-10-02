@@ -42,6 +42,22 @@ pub enum UdpCongestionKind {
     Pace,
 }
 
+/// The rUDP doors' record layer (`udp_security`; BACKLOG B5a,
+/// `docs/RUDP-SECURITY.md` decision 6).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UdpSecurityKind {
+    /// Noise NK in the cookie handshake and every session datagram
+    /// sealed (ChaCha20-Poly1305) under the server's static key
+    /// (`udp_static_key` / `udp_static_key_file` — required). The
+    /// production default.
+    #[default]
+    Sealed,
+    /// No record layer: the rUDP door before B5a, byte for byte. Dev/LAN
+    /// only — nothing is encrypted or authenticated; startup warns.
+    Plaintext,
+}
+
 impl From<UdpCongestionKind> for gsb_net::udp::UdpCongestion {
     fn from(k: UdpCongestionKind) -> Self {
         match k {

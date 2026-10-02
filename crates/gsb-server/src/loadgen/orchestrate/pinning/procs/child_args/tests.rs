@@ -26,7 +26,7 @@ fn value_of<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
 fn client_children_get_the_orchestrated_cell_size() {
     let mut args = Args::defaults();
     args.cell_size = 50.0;
-    let argv = client_args(&args, 10, 0, door(), None);
+    let argv = client_args(&args, 10, 0, door(), None, None);
     assert_eq!(value_of(&argv, "--cell-size"), Some("50"));
 }
 
@@ -34,7 +34,7 @@ fn client_children_get_the_orchestrated_cell_size() {
 /// child never depends on the two binaries sharing one default.
 #[test]
 fn client_children_get_the_default_cell_size_explicitly() {
-    let argv = client_args(&Args::defaults(), 10, 0, door(), None);
+    let argv = client_args(&Args::defaults(), 10, 0, door(), None, None);
     assert_eq!(value_of(&argv, "--cell-size"), Some("20"));
 }
 
@@ -48,7 +48,7 @@ fn both_children_get_the_game() {
         args.game = game;
         assert_eq!(value_of(&server_args(&args, None), "--game"), Some(game));
         assert_eq!(
-            value_of(&client_args(&args, 10, 0, door(), None), "--game"),
+            value_of(&client_args(&args, 10, 0, door(), None, None), "--game"),
             Some(game)
         );
     }
@@ -67,7 +67,7 @@ fn both_children_get_the_transport() {
         args.transport = t;
         let want = Some(t.to_string());
         let server = server_args(&args, None);
-        let client = client_args(&args, 10, 0, door(), None);
+        let client = client_args(&args, 10, 0, door(), None, None);
         assert_eq!(value_of(&server, "--transport").map(str::to_string), want);
         assert_eq!(value_of(&client, "--transport").map(str::to_string), want);
     }
@@ -89,7 +89,7 @@ fn only_a_demo_run_forwards_the_demo_flags() {
         assert!(server.iter().any(|a| a == flag), "{flag}: {server:?}");
     }
     assert!(server.iter().any(|a| a == "--spawn-half-size"));
-    let client = client_args(&args, 10, 0, door(), None);
+    let client = client_args(&args, 10, 0, door(), None, None);
     for flag in [
         "--profile",
         "--still-frac",
@@ -106,7 +106,7 @@ fn only_a_demo_run_forwards_the_demo_flags() {
         other.game = game;
         for argv in [
             server_args(&other, None),
-            client_args(&other, 10, 0, door(), None),
+            client_args(&other, 10, 0, door(), None, None),
         ] {
             let written: Vec<&str> = argv.iter().map(String::as_str).collect();
             assert!(
@@ -130,7 +130,7 @@ fn the_outbound_capacity_goes_to_the_server_only() {
     args.conn_out = Some(2);
     assert_eq!(value_of(&server_args(&args, None), "--conn-out"), Some("2"));
     assert_eq!(
-        value_of(&client_args(&args, 10, 0, door(), None), "--conn-out"),
+        value_of(&client_args(&args, 10, 0, door(), None, None), "--conn-out"),
         None
     );
 }
@@ -145,7 +145,7 @@ fn the_listen_backlog_goes_to_the_server_only() {
     args.listen_backlog = Some(4096);
     assert_eq!(value_of(&server_args(&args, None), flag), Some("4096"));
     assert_eq!(
-        value_of(&client_args(&args, 10, 0, door(), None), flag),
+        value_of(&client_args(&args, 10, 0, door(), None, None), flag),
         None
     );
 }
@@ -160,7 +160,7 @@ fn the_udp_recv_buffer_goes_to_the_server_only() {
     args.udp_recv_buffer = Some(1 << 22);
     assert_eq!(value_of(&server_args(&args, None), flag), Some("4194304"));
     assert_eq!(
-        value_of(&client_args(&args, 10, 0, door(), None), flag),
+        value_of(&client_args(&args, 10, 0, door(), None, None), flag),
         None
     );
 }
@@ -171,11 +171,11 @@ fn the_udp_recv_buffer_goes_to_the_server_only() {
 fn the_slow_reader_goes_to_the_clients_only() {
     let mut args = Args::defaults();
     assert_eq!(
-        value_of(&client_args(&args, 10, 0, door(), None), "--stall-ms"),
+        value_of(&client_args(&args, 10, 0, door(), None, None), "--stall-ms"),
         None
     );
     args.stall_ms = Some(900);
-    let argv = client_args(&args, 10, 0, door(), None);
+    let argv = client_args(&args, 10, 0, door(), None, None);
     assert_eq!(value_of(&argv, "--stall-ms"), Some("900"));
     assert_eq!(value_of(&argv, "--stall-every-ms"), Some("5000"));
     assert_eq!(value_of(&server_args(&args, None), "--stall-ms"), None);
@@ -189,7 +189,7 @@ fn unpinned_children_keep_their_runtime_default() {
     let args = Args::defaults();
     assert_eq!(args.workers, 0, "the operator named no worker count");
     let server = server_args(&args, None);
-    let client = client_args(&args, 10, 0, door(), None);
+    let client = client_args(&args, 10, 0, door(), None, None);
     assert_eq!(value_of(&server, "--workers"), None, "{server:?}");
     assert_eq!(value_of(&client, "--workers"), None, "{client:?}");
 }
@@ -200,7 +200,7 @@ fn an_explicit_worker_count_reaches_both_children() {
     let mut args = Args::defaults();
     args.workers = 3;
     let server = server_args(&args, None);
-    let client = client_args(&args, 10, 0, door(), None);
+    let client = client_args(&args, 10, 0, door(), None, None);
     assert_eq!(value_of(&server, "--workers"), Some("3"));
     assert_eq!(value_of(&client, "--workers"), Some("3"));
 }
@@ -213,7 +213,7 @@ fn a_pinned_child_gets_its_core_count() {
         let mut args = Args::defaults();
         args.workers = explicit;
         let server = server_args(&args, Some(8));
-        let client = client_args(&args, 10, 0, door(), Some(2));
+        let client = client_args(&args, 10, 0, door(), None, Some(2));
         assert_eq!(value_of(&server, "--workers"), Some("8"));
         assert_eq!(value_of(&client, "--workers"), Some("2"));
     }
@@ -230,6 +230,6 @@ fn no_child_is_told_a_port_picked_in_advance() {
     assert_eq!(value_of(&server, "--bind"), Some("127.0.0.1:0"));
     assert_eq!(value_of(&server, "--metrics-listen"), Some("127.0.0.1:0"));
     let reported: SocketAddr = "127.0.0.1:41873".parse().unwrap();
-    let client = client_args(&args, 10, 0, reported, None);
+    let client = client_args(&args, 10, 0, reported, None, None);
     assert_eq!(value_of(&client, "--addr"), Some("127.0.0.1:41873"));
 }
