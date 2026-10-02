@@ -109,6 +109,7 @@ pub(super) struct Counts {
     pub(super) probes_sent: u64,
     pub(super) probes_send_failed: u64,
     pub(super) probes_unanswered: u64,
+    pub(super) probes_open_at_end: u64,
     pub(super) reports: u64,
     pub(super) late: u64,
     pub(super) invalid: u64,
@@ -219,9 +220,11 @@ impl Feedback {
         self.last_probe = Some(now);
     }
 
-    /// The session is over: what is still outstanding was never answered.
+    /// The session is over: what is still outstanding was cut off, not
+    /// lost — a client that stopped reading (it left, its app closed)
+    /// answers nothing — so it is counted apart from the unanswered.
     pub(super) fn end(&mut self) {
-        self.counts.probes_unanswered += self.ring.len() as u64;
+        self.counts.probes_open_at_end += self.ring.len() as u64;
         self.ring.clear();
     }
 }

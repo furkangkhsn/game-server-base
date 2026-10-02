@@ -2211,8 +2211,12 @@ değişmedi — yalnız oturum sonu log'unda (`game_reports`, `game_loss`,
 
 *Sayaçlar (taşıma kapsamı, OPS §3):* `udp_game_announces_received`,
 `udp_game_probes_sent`, `udp_game_probes_send_failed`,
-`udp_game_probes_unanswered` (yazıcılar bitince `probes_sent =
-reports_received + probes_unanswered`), `udp_game_reports_received`,
+`udp_game_probes_unanswered` (oturum yaşarken raporu gelmeyen: sonda ya
+da rapor kayboldu, daha yeni sonda önce cevaplandı),
+`udp_game_probes_open_at_end` (oturum biterken hâlâ cevap bekleyen —
+kesildi, kayıp değil; ayrı ki `unanswered` kayıp sinyali kalsın; yazıcılar
+bitince `probes_sent = reports_received + probes_unanswered +
+probes_open_at_end`), `udp_game_reports_received`,
 `udp_game_reports_late`, `udp_game_reports_invalid`,
 `udp_game_reports_clamped`, `udp_game_reports_not_forwarded` (demux:
 yazıcı kanalı dolu/kapalı), `udp_game_datagrams_reported_sent` /
@@ -2252,7 +2256,7 @@ sentetik saat: duyurusuz oturum hiç sondalanmaz; kadans; iki sonda → kayıp
 ve RTT, yankı bir kez; düzleştirme; yeniden sıralama fazlası taşınır;
 iddia kırpılır ve sonraki aralığa kredi bırakmaz; geriye giden sayaç
 reddedilir; bilinmeyen id geçersiz, cevaplanmış geç; her sonda ya
-cevaplanır ya cevapsız sayılır), `udp::writer::tests` (cevaplanan sonda
+cevaplanır ya cevapsız ya da oturum sonunda açık sayılır), `udp::writer::tests` (cevaplanan sonda
 REL bandının ilk örneği, geri çekilmeyi bitirir — B87 sunucu tarafı),
 `udp::client::tests::report` (sonda anında sayıyla cevaplanır, yankı
 örnek — B87 istemci tarafı; 5 sn'lik yankı reddedilir; duyurular sınırlı,

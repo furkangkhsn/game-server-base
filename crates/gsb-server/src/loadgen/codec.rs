@@ -256,7 +256,10 @@ mod logic;
 /// end of that section (the game band's probes and receiver reports —
 /// rUDP hardening round 2: `udp_game_announces_received` ..
 /// `udp_game_rtt_sum_us`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E49;
+/// GSNJ = the GSNI layout with one more transport counter at the end of
+/// that section (the probes still open when their session ended, apart
+/// from the unanswered ones: `udp_game_probes_open_at_end`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4A;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

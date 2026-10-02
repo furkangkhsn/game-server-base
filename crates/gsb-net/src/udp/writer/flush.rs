@@ -34,6 +34,7 @@ impl super::UdpWriter {
             udp_game_probes_sent: c.probes_sent,
             udp_game_probes_send_failed: c.probes_send_failed,
             udp_game_probes_unanswered: c.probes_unanswered,
+            udp_game_probes_open_at_end: c.probes_open_at_end,
             udp_game_reports_received: c.reports,
             udp_game_reports_late: c.late,
             udp_game_reports_invalid: c.invalid,

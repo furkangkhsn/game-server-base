@@ -207,9 +207,10 @@ fn unknown_ids_are_invalid_and_answered_ones_late() {
 }
 
 /// The ring bounds the probes awaiting a report, and a session's end
-/// counts the rest: every probe sent is answered or unanswered.
+/// counts the rest apart: every probe sent is answered, unanswered, or
+/// still open when the session ended (not a loss).
 #[test]
-fn every_probe_is_answered_or_counted_unanswered() {
+fn every_probe_is_answered_unanswered_or_open_at_the_end() {
     let t0 = Instant::now();
     let mut f = announced(t0);
     for k in 1..=PROBE_RING as u32 {
@@ -223,5 +224,10 @@ fn every_probe_is_answered_or_counted_unanswered() {
     f.end();
     let c = f.counts;
     assert_eq!(c.probes_sent, PROBE_RING as u64 + 1);
-    assert_eq!(c.probes_sent, c.reports + c.probes_unanswered);
+    assert_eq!(c.probes_unanswered, 2, "evicted 1, superseded 2");
+    assert_eq!(c.probes_open_at_end, 2, "4 and 5, cut off by the end");
+    assert_eq!(
+        c.probes_sent,
+        c.reports + c.probes_unanswered + c.probes_open_at_end
+    );
 }

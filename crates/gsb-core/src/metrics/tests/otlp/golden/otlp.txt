@@ -218,7 +218,7 @@ gsb_transport_udp_game_probes_sent sum t=2 mono=true unit="" n=1 | Game-band PRO
   [] 1000..2000 int 51
 gsb_transport_udp_game_probes_send_failed sum t=2 mono=true unit="" n=1 | Game-band PROBE datagrams the socket refused (lost; the next one goes an interval later), cumulative.
   [] 1000..2000 int 52
-gsb_transport_udp_game_probes_unanswered sum t=2 mono=true unit="" n=1 | Game-band probes whose report never came back (the probe or its report lost, superseded by a newer answered probe, or outstanding when the session ended), cumulative.
+gsb_transport_udp_game_probes_unanswered sum t=2 mono=true unit="" n=1 | Game-band probes whose report never came back while the session lived (the probe or its report lost, or superseded by a newer answered probe), cumulative.
   [] 1000..2000 int 53
 gsb_transport_udp_game_reports_received sum t=2 mono=true unit="" n=1 | Game-band reports answering one of the session's probes, applied (an RTT sample and an interval of loss accounting each), cumulative.
   [] 1000..2000 int 54
@@ -238,6 +238,8 @@ gsb_transport_udp_game_rtt_samples sum t=2 mono=true unit="" n=1 | RTT samples t
   [] 1000..2000 int 61
 gsb_transport_udp_game_rtt_sum_us sum t=2 mono=true unit="" n=1 | Sum of the game-band probe RTT samples in microseconds (divide by gsb_transport_udp_game_rtt_samples_total for the mean), cumulative.
   [] 1000..2000 int 62
+gsb_transport_udp_game_probes_open_at_end sum t=2 mono=true unit="" n=1 | Game-band probes still awaiting their report when the session ended: cut off, not lost (a client that left or stopped reading answers nothing), cumulative.
+  [] 1000..2000 int 63
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

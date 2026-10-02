@@ -940,18 +940,21 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   aritmetikle alınır. Sayaç artıyorsa ilacı `udp_recv_buffer_bytes`
   (§2, B4). Kapı metrik raporlamıyorsa (gömen, test) görev yok.
 - **Taşıma kapsamı: rUDP oyun bandının geri bildirimi (rUDP sertleştirme
-  2).** Satırın ve tablonun sonuna 13 `counter` (B85'inkinden sonra);
-  loadgen telinde `GSNI`, `RESULT`'ta `transport_<ad>=` (her satırda).
+  2).** Satırın ve tablonun sonuna 14 `counter` (B85'inkinden sonra);
+  loadgen telinde `GSNI`, sonra `GSNJ` (`udp_game_probes_open_at_end`), `RESULT`'ta `transport_<ad>=` (her satırda).
   Sunucu, duyuru yapan (raporlayan) her oturuma saniyede bir PROBE yollar,
   istemci her birini o ana dek aldığı oyun datagram'ı sayısıyla cevaplar
   (DESIGN §6 "Oyun bandı geri bildirimi"). Yazıcılardan:
   `udp_game_announces_received` (sondalanmak isteyen istemcinin duyurusu —
   `REPORT{0}`; oturum başına bir, ilk sondası kaybolursa en çok üç),
   `udp_game_probes_sent`, `udp_game_probes_send_failed` (soket reddetti —
-  kayıp, sonraki bir aralık sonra), `udp_game_probes_unanswered` (raporu
-  hiç gelmeyen sonda: sonda ya da rapor kayboldu, daha yeni bir sondanın
-  cevabı onu geride bıraktı ya da oturum önce bitti; yazıcılar bitince
-  `probes_sent = reports_received + probes_unanswered`),
+  kayıp, sonraki bir aralık sonra), `udp_game_probes_unanswered` (oturum
+  yaşarken raporu gelmeyen sonda: sonda ya da rapor kayboldu ya da daha
+  yeni bir sondanın cevabı onu geride bıraktı — bir de okumayı bırakan
+  istemci), `udp_game_probes_open_at_end` (oturum biterken hâlâ cevap
+  bekleyen: kesildi, kayıp değil — ayrı sayaç ki `unanswered` kayıp
+  sinyali kalsın; yazıcılar bitince `probes_sent = reports_received +
+  probes_unanswered + probes_open_at_end`),
   `udp_game_reports_received` (bir sondayı cevaplayan, uygulanan rapor —
   her biri bir RTT örneği), `udp_game_reports_late` (cevaplanmış ya da
   geride kalmış sondanın raporu: yeniden sıralanmış/çiftlenmiş, yok

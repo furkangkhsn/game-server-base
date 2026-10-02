@@ -273,9 +273,10 @@ transport_counters! {
     /// the next one goes an interval later).
     udp_game_probes_send_failed,
     /// rUDP writers (game-band feedback): probes whose report never came
-    /// back — the probe or its report was lost, it was superseded by a
-    /// newer answered probe, or the session ended first. `probes_sent =
-    /// reports_received + probes_unanswered` once the writers end.
+    /// back while the session lived — the probe or its report was lost,
+    /// or a newer probe was answered first (or the client stopped
+    /// answering). Once the writers end, `probes_sent = reports_received
+    /// + probes_unanswered + probes_open_at_end`.
     udp_game_probes_unanswered,
     /// rUDP writers (game-band feedback): reports answering one of the
     /// session's probes, applied (each an RTT sample and an interval of
@@ -309,6 +310,11 @@ transport_counters! {
     /// rUDP writers (game-band feedback): the sum of those samples, in
     /// microseconds (÷ `udp_game_rtt_samples` = the mean probe round trip).
     udp_game_rtt_sum_us,
+    /// rUDP writers (game-band feedback): probes still awaiting their
+    /// report when the session ended — cut off, not lost (a client that
+    /// left or stopped reading answers nothing). Apart from
+    /// `udp_game_probes_unanswered` so that one stays a loss signal.
+    udp_game_probes_open_at_end,
 }
 
 impl TransportCounters {

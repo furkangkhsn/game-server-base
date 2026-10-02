@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 62] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 63] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -290,7 +290,7 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 62] 
     ),
     tr(
         "gsb_transport_udp_game_probes_unanswered_total",
-        "Game-band probes whose report never came back (the probe or its report lost, superseded by a newer answered probe, or outstanding when the session ended), cumulative.",
+        "Game-band probes whose report never came back while the session lived (the probe or its report lost, or superseded by a newer answered probe), cumulative.",
         |t| t.udp_game_probes_unanswered,
     ),
     tr(
@@ -337,6 +337,11 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 62] 
         "gsb_transport_udp_game_rtt_sum_us_total",
         "Sum of the game-band probe RTT samples in microseconds (divide by gsb_transport_udp_game_rtt_samples_total for the mean), cumulative.",
         |t| t.udp_game_rtt_sum_us,
+    ),
+    tr(
+        "gsb_transport_udp_game_probes_open_at_end_total",
+        "Game-band probes still awaiting their report when the session ended: cut off, not lost (a client that left or stopped reading answers nothing), cumulative.",
+        |t| t.udp_game_probes_open_at_end,
     ),
 ];
 
