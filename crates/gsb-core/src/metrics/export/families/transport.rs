@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 64] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 65] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -349,6 +349,11 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 64] 
         "gsb_transport_ops_http_routes_timed_out_total",
         "Ops HTTP requests whose routing (the room bookkeeper's and the registry's answers: /rooms, room open and close) outran http_route_timeout_secs; answered 504, an open or close may still take effect, cumulative.",
         |t| t.ops_http_routes_timed_out,
+    ),
+    tr(
+        "gsb_transport_idle_windows_restarted_late_total",
+        "Idle windows (stream reader pumps, the rUDP idle sweep) restarted because their deadline fired more than the stall grace late: the process, not the client, was silent; restarted once per silence, cumulative.",
+        |t| t.idle_windows_restarted_late,
     ),
 ];
 

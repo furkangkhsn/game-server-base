@@ -66,7 +66,8 @@
 //! (`udp_datagrams_dropped_kernel`). rUDP hardening round 2's
 //! fourteen game-band feedback counters after that
 //! (`udp_game_announces_received` .. `udp_game_rtt_sum_us`, then
-//! `udp_game_probes_open_at_end`), and the
+//! `udp_game_probes_open_at_end`), F72's one after them
+//! (`idle_windows_restarted_late`), and the
 //! deliberate HELP change of `gsb_transport_udp_datagrams_no_session_total`
 //! (REPORT datagrams from an address with no session count there too).
 //! And F50's one deliberate

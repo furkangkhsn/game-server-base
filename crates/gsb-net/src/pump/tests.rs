@@ -155,3 +155,7 @@ async fn a_stall_verdict_into_a_full_mailbox_is_booked_as_write_stall() {
 /// What the pumps lose at their end, counted (B66). A CHILD module: it
 /// reuses the wedged socket above.
 mod lost;
+
+/// The idle window against a stalled process (F72). A CHILD module: it
+/// reuses the wedged socket above.
+mod idle;

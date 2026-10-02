@@ -1059,6 +1059,25 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   sayar ("REL, RAW, ACK and REPORT datagrams …"). Eski bir sunucu
   (bu turdan önceki) yeni istemcinin duyurusunu `udp_datagrams_malformed`'ta
   sayar (bilinmeyen tür; oturum başına en çok 3).
+- **Taşıma kapsamı: takılmış sürecin idle pencereleri (F72).** Satırın ve
+  tablonun sonuna bir `counter`: `idle_windows_restarted_late`
+  (`gsb_transport_idle_windows_restarted_late_total`; loadgen telinde
+  taşıma bölümü bir sayaç uzadı — sihirli sayıyı birleştirmede ebeveyn
+  atar —, `RESULT`'ta `transport_idle_windows_restarted_late=`). Akış
+  kapılarının reader pump'ları ve rUDP demux'ının idle süpürmesi, son
+  tarihi `gsb_net::pump::IDLE_STALL_GRACE` (250 ms) üstü GEÇ ateşlenen
+  pencereyi kapatmak yerine YENİDEN BAŞLATIR ve sayar: süreç o sırada
+  çalışmıyordu (swap, VM duraklaması, aç kalmış runtime), sessizlik
+  istemcinin değil sunucunundu (DESIGN §3 "Geç ateşlenen son tarih").
+  Sessizlik başına bir kez: yeniden başlayan pencere de sessiz geçerse
+  oturum ne kadar geç ateşlenirse ateşlensin `idle_timeout` kapanır; bir
+  kare (rUDP'de datagram) hakkı yeniler. Kayıp değil: her sayım, eski
+  duvar saati penceresinin kapatacağı bir oturum. **Okuma:** sıfırdan
+  farklıysa süreç pencere boyundan uzun takılmış ya da aç kalmıştır —
+  makinenin yükü/swap'ı incelenir; aynı anda `server_close_idle_timeout`
+  sıçraması artık takılmanın değil gerçek sessizliğin işaretidir. Log:
+  pump başına bir `info`, süpürme başına bir `warn` (oturum sayısıyla).
+  Demux'ın duruş satırı bunu taşımaz (sayaç tek seferlik örnekle gider).
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

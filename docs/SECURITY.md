@@ -174,7 +174,12 @@ limit ihlali kovma/kapatma politikası oyunun.
 ## 3.5. Oturum yaşam döngüsü: iki saat, iki yön
 
 Reader pump'un idle penceresi (`idle_timeout_secs`) yarım-açık TCP'yi
-yakalar. Soketin DİĞER yarısı bağlantı sınırları turuna kadar sınırsızdı:
+yakalar. Son tarihi `IDLE_STALL_GRACE` (250 ms) üstü geç ateşlenen pencere
+bir kez yeniden başlar (F72, DESIGN §3 "Geç ateşlenen son tarih"): sürecin
+takılması istemcinin sessizliği sayılmaz. Saldırgan bunu kullanamaz —
+yeniden başlatmayı tetikleyen sunucunun kendi gecikmesidir, istemcinin
+gönderdiği hiçbir şey değil — ve kalıcı aç kalmış bir süreçte bile
+yarım-açık oturum en çok iki pencere (+ takılmalar) yaşar. Soketin DİĞER yarısı bağlantı sınırları turuna kadar sınırsızdı:
 okumayı bırakan ama bağlantısını açık tutan bir istemcinin alım penceresi
 kapanır, writer pump soket yazmasının içinde süresiz park eder, giden
 kanal DOLU kalır (KAPALI değil — yani `w_closing` teardown'ı tetiklenmez),

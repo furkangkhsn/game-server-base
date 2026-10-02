@@ -323,6 +323,17 @@ transport_counters! {
     /// close) — outran `http_route_timeout_secs`; answered `504`, the
     /// outcome of an open or close unknown.
     ops_http_routes_timed_out,
+    /// Stream doors' reader pumps and the rUDP demux's idle sweep (F72):
+    /// idle windows RESTARTED because their deadline fired more than the
+    /// stall grace late (`gsb_net::pump::IDLE_STALL_GRACE`) — the process
+    /// was not running when the client's silence would have been
+    /// observed (a swap storm, a VM pause, a starved runtime), so the
+    /// silence was the server's own, not the client's. Once per silence:
+    /// a client still silent through the restarted window is closed
+    /// `idle_timeout` at its end, however late that fires. Not a loss —
+    /// every count is a session the old wall-clock window would have
+    /// closed.
+    idle_windows_restarted_late,
 }
 
 impl TransportCounters {

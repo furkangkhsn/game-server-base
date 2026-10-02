@@ -310,6 +310,8 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_udp_game_rtt_samples",
         "transport_udp_game_rtt_sum_us",
         "transport_udp_game_probes_open_at_end",
+        // The idle windows a stalled process restarted (F72).
+        "transport_idle_windows_restarted_late",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",

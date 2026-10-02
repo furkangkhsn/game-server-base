@@ -10,7 +10,9 @@
 //!
 //! - the reader's **idle timeout**: when no client frame arrives within
 //!   the window, the pump notifies the connection actor via
-//!   [`ConnIn::ServerClosed`] and stops;
+//!   [`ConnIn::ServerClosed`] and stops (a deadline that fires late — the
+//!   process, not the client, stalled — restarts the window once: see
+//!   `idle`, BACKLOG F72);
 //! - the writer's **write stall**: when the socket accepts no BYTE within
 //!   the window while there is something to write, the same notification
 //!   is sent (see `writer` and [`WriteProgress`]).
@@ -30,6 +32,7 @@
 //! per-connection timer task, registry message, or ticker subscription is
 //! needed (see `docs/DESIGN.md`, session lifecycle).
 
+pub(crate) mod idle;
 mod lost;
 pub(crate) mod verdict;
 mod writer;
@@ -42,6 +45,9 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
+
+pub use idle::IDLE_STALL_GRACE;
+use idle::{IdleWindow, Next};
 
 use gsb_core::channel::{FrameBatch, Inbox, Mailbox};
 use gsb_core::conn::{ConnIn, ServerClose};
@@ -146,22 +152,23 @@ where
         timeouts.write_stall,
         metrics.clone(),
     );
-    let idle_timeout = timeouts.idle;
+    let mut idle = timeouts
+        .idle
+        .map(|t| IdleWindow::new(conn, t, metrics.clone()));
 
     let read = tokio::spawn(async move {
         let mut stream = reader;
         // The notification to send when the loop exits (if any).
         let mut exit_msg: Option<ConnIn> = None;
         loop {
-            // One awaited source, optionally with a deadline. `timeout`
-            // wraps a single future — it does not multiplex two live
-            // sources: the deadline fires only while the read stays
-            // pending, and a ready frame always wins (this is the same
-            // idiom the load generator's client reads use).
-            let item = match idle_timeout {
-                Some(t) => match tokio::time::timeout(t, stream.next()).await {
-                    Ok(item) => item,
-                    Err(_) => {
+            // One awaited source, optionally inside the idle window (see
+            // `idle`: a deadline that fires late — the process stalled —
+            // restarts it once; a ready frame always wins).
+            let item = match &mut idle {
+                Some(window) => match window.next(&mut stream).await {
+                    Next::Item(item) => item,
+                    Next::Idle => {
+                        let t = window.window();
                         warn!(
                             %conn,
                             timeout = ?t,

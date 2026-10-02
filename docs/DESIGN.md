@@ -102,6 +102,39 @@ ve "kaynak yok" hali imkânsız (kanal kapanmasıyla net bir son vardır).
   (yalnızca gerçekten boşta olan bağlantılar uyanır). Elenen
   alternatiflerin 100k matematiği: CHANGELOG "Kapatılanlar (koruma katmanı
   turu)".
+- **Geç ateşlenen son tarih = sürecin takılması (F72).** Pencere duvar
+  saatidir; süreç pencereden uzun takılırsa (swap, VM duraklaması, aç
+  kalmış runtime) uyanışta her canlı oturumun son tarihi geçmiş olur ve
+  hepsi `idle_timeout` kapanırdı (t1: loadgen'i 2 sn'lik pencereye karşı
+  3 sn dondurmak `left=0 server_close_idle_timeout=4`). Son tarih NEDEN
+  hiçbir şey gelmediğini bilemez ama GEÇ ateşlendiğini bilir: hedefinden
+  `IDLE_STALL_GRACE` (250 ms) fazla sonra ateşlenen son tarih sürecin
+  takılmasıdır, pencere yeniden başlar (sayılır:
+  `idle_windows_restarted_late`, OPS §3). Sessizlik başına BİR kez:
+  yeniden başlayan pencere de sessiz biterse oturum — o ateşleme ne kadar
+  geç olursa olsun — kapanır; kalıcı aç kalmış bir süreç yarım-açık
+  oturumu sonsuza dek tutamaz (sınır: iki pencere + takılmalar). Kare
+  hakkı yeniler. Eşik sabit, pencerenin kesri değil: SÜRECİ yargılar.
+  Ölçüm (bu makine, 500 tokio zamanlayıcısı, 1 sn'lik uykular): sessizde
+  en geç 18 ms, iki çekirdeğe sabitlenip 24 `yes` yanında 12 ms; aynı yük
+  altında nice 19 ile (yavaşlamış değil aç kalmış süreç) p50 17 ms, p99
+  1,3 sn. 250 ms ikisinin arasında ve `CUT_GRACE`'in "sağlıklı görev bu
+  kadar sürmez" sınırıyla aynı. **Hükümden önce bir bakış (F34):**
+  zamanlayıcı ile soketin hazır olması ayrı sürücü olaylarıdır; sokette
+  bekleyen kare pump'ı uyandıran zamanlayıcıdan sonra raporlanabilir.
+  Hükümden önce pump bir kez `yield` eder (runtime, bırakılan görevi
+  yeniden çalıştırmadan IO sürücüsünü yoklar) ve akışı beklemeden bir kez
+  daha okur: kare oradaysa kazanır. rUDP süpürmesi aynı kuralı alan
+  eklemeden uygular: oturumun ilk pencere girdisi tam `last_seen + idle`,
+  yeniden başlatılanınki daha geç (uyanış + idle), daha erkeni bayattır.
+  rUDP'de hükümden önce bakış YOK: demux'ın her döngüsü son tarihten önce
+  bekleyen datagram'ı okur (sıfır süreli `timeout` önce okumayı yoklar);
+  bütçe (`coop`) tükenirse süpürme gelir ama o zaman son tarih genelde
+  geç ateşlenmiştir. Kapsam dışı pencereler: QUIC'in protokol
+  `max_idle_timeout`'u (quinn'in kendi zamanlayıcısı, `IDLE_TIMEOUT` 30 sn
+  — değiştirilemez), rUDP REL bandının canlılık sınırı
+  (`REL_NO_ACK_FATAL`, yazıcı), odanın girdi-boşta tavanı (tick saati),
+  park süresi, el sıkışma son tarihleri (BACKLOG c2 satırları).
 - **Oda başına 1 görev:** room actor. Tick'ler **tek global ticker görevinden**
   gelir (`tokio::sync::broadcast`): oda actor'ünün *tek* await'i
   `tick_rx.recv()`; tick gövdesi tamamen senkron. Oda hizi global hızın tam
