@@ -1993,6 +1993,8 @@ komutu (rUDP 1000, katılma fırtınası), yük < 5; "önce" = `09b9254`,
 | önce, varsayılan arabellek | 4441 (önceki koşular 3370–5345) | 1488 · 1479 · 983 | 65/216 · 56/206 · 53/149 | 4 · 3 · 0 | 2228 · 2115 · 2096 / — |
 | sonra, varsayılan arabellek | 4162 (önceki koşular 3863–4502) | 1348 · 1515 · 1405 | 53/755 · 65/769 · 69/756 | 75 · 49 · 114 | 1524 · 1347 · 1618 / 1919 · 2230 · 1452 |
 | sonra, `--udp-recv-buffer 4194304` | 0 | 0 · 16 | 19/51 · 21/59 | 0 · 0 | 0 · 0 / 0 · 0 |
+| B86 + rapor (`b745890`), varsayılan — **yük 47 · 13 · 31** | 4830 · 7115 · 5285 (sunucu soketi, B85: 4053 · 6337 · 4507) | 1533 · 1780 · 1298 | 65/559 · 169/613 · 54/369 | 10 · 68 · 56 | 1748 · 1632 · 1654 / 468 · 1101 · 1857 |
+| B86 + rapor (`b745890`), `--udp-recv-buffer 4194304` — **yük 44 · 53 · 4,9** | 0 · 0 · 0 (B85: 0 · 0 · 0) | 142 · 0 · 0 | 56/100 · 28/53 · 23/60 | 0 · 0 · 0 | 388 · 0 · 0 / 810 · 0 · 0 |
 
 Her koşuda `connected = joined = left = 1000`, `server_closes = 0`,
 `snap_total` 230 135–235 820. *Okuma.* (1) **Kaybolan arabellekte
@@ -2012,8 +2014,11 @@ penceresini kaçırıyordu (`left = 981`; kaçıranların zamanlayıcısı 648 m
 1 sn: fırtınanın geri çekilmesi ya da fırtına anında şişmiş bir RTTVAR
 örneği); kuralla altı koşuda `left = 1000`. Şişmiş RTTVAR kuralın
 kapsamı dışında: seyrek kontrol bandında sonraki örneğe dek sürer
-(BACKLOG B87). Karar bakımcının: el sıkışma geri çekilmesine tavan ya da
-bandın el sıkışmanın geri çekilmesini devralmaması (BACKLOG B86).
+(BACKLOG B87 — *rUDP sertleştirme 2'de kapandı: raporlayan oturumda sonda
+turları bandı saniyede bir örnekler, aşağıda "Oyun bandı geri
+bildirimi"*). Karar bakımcının: el sıkışma geri çekilmesine tavan ya da
+bandın el sıkışmanın geri çekilmesini devralmaması (BACKLOG B86 — *karar
+(a), aşağıda "El sıkışma geri çekilmesinin tavanı"*).
 
 **Çekirdeğin soket kayıpları sunucuda (BACKLOG B85 — 2026-10-02).** B4'ün
 ölçümü fırtınada koşu başına binlerce datagram'ın çekirdekte düştüğünü
@@ -2090,6 +2095,32 @@ değil. (d) *Tavanı bandın tavanına (1 sn) bırakıp yalnız devralmayı
 kaldırmak* — AUTH/JOIN düzelir ama connect p99'un ~760 ms'si kalır.
 (e) *Adımlarda geri çekilme yok (sabit 50 ms)* — B2 öncesi; uzun yolda her
 adım RTT/50 kopya yollar, gerçek bir tıkanıklıkta 20 Hz'de döver.
+
+*Ölçüm (2026-10-02, release, `b745890` — B86 + B85 + rapor).* Yukarıdaki
+B2 tablosunun son iki satırı; aynı komut (rUDP 1000 katılma fırtınası,
+iki kol dönüşümlü, üçer koşu). **Dürüst not: makine sakin değildi** —
+altı ajan aynı anda derliyordu; her koşu 10 dk'ya dek yükün 1 dk
+ortalamasının 5'in altına inmesini bekledi, yalnız bir koşuda indi
+(4 MiB, 3. tur: 4,9); diğerleri 13–53 yükte koştu. Sayılar B2'nin
+(yük < 5) satırlarıyla bire bir kıyaslanamaz; ebeveyn birleştirmeden sonra
+sakin makinede yeniden ölçecek. Her koşuda `connected = joined = left =
+1000`, `server_closes = 0`, `snap_total` 227 444–235 151. *Okuma:* (1)
+varsayılan arabellekte connect p99 369–613 ms — B2'nin "sonra" satırının
+755–769 ms'sinin altında, B2 öncesinin 149–216 ms'sinin üstünde; yükün payı
+ayrılamıyor (4 MiB kolunun yük 4,9'daki koşusu 23/60 ms, B2'nin 19/51 ·
+21/59'u bandında). (2) `errors` (loadgen'in JOIN sonucundan önce girdi
+yollaması — B88, diğer hattın işi) 10–68: B2'de 49–114. (3) B85'in
+sayacı sunucu soketinin kaybını ayırıyor: sistem geneli `RcvbufErrors`
+4830–7115'in 4053–6337'si sunucunun soketi, kalan ~700–800'ü loadgen
+çocuklarının istemci soketleri. (4) Rapor: her oturum duyurdu
+(`udp_game_announces_received = 1000`), sonda ~10,6–11 bin, rapor 7,2–8
+bin; `udp_game_datagrams_reported_lost = 0` (465–482 bin oyun
+datagram'ında — loopback'te kayıp yalnız sunucunun ALMA kuyruğunda, yani
+istemci → sunucu yönünde); ortalama sonda turu 2–20 ms (yükle). Bu
+ikilide oturum sonunda açık kalan sondalar da `unanswered`'a giriyordu
+(4 MiB kolunda tam 3000 = oturum başına 3: loadgen LEAVE'den sonra okumayı
+bırakıyor) — bir sonraki commit onları `udp_game_probes_open_at_end`'e
+ayırdı, `unanswered` kayıp sinyali kaldı.
 
 *Testler (önce kırmızı; mutasyonlu).* `rel::rto::tests::
 {a_seed_keeps_the_estimate_and_drops_the_backoff,
