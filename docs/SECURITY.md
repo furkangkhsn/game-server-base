@@ -21,7 +21,8 @@
 | rUDP el sıkışma kaybı: proof yeniden gönderimi + kabul (`ACK{1}`), sunucu proof'ta idempotent | H turu | ✅ Uygulandı (§4.2; DESIGN §6 "El sıkışma kaybı") |
 | Doğrulanmış kimlik = karakter anahtarı (ticket'sız yol yalnız geliştirme) | K4 turu | ✅ Uygulandı (§4b) |
 | El sıkışma accept döngüsünün dışında, kapı başına sınırlı (WS/TLS/QUIC; sessiz tek soket kapıyı kilitliyordu) | B31 | ✅ Uygulandı (§4.3; DESIGN §6 "El sıkışan kapılar") |
-| rUDP şifreleme/congestion | Kapsam DIŞI — rUDP deneysel statüde; kanıtlanmış taşıma ya da ayrı tur |
+| rUDP kayıt katmanı: Noise NK el sıkışması + ChaCha20-Poly1305 kayıtları, sunucu statik anahtarı config'de, mühürlü kip varsayılan | B5a | ✅ Uygulandı (§4.7; DESIGN §6 "Kayıt katmanı"; `docs/RUDP-SECURITY.md`). Kalan: B5b (rekey politikası, stateless reset, CID rotasyonu), dış inceleme (D13) |
+| rUDP tıkanıklık tepkisi | B1 | ✅ Opt-in (`udp_congestion = "pace"`, DESIGN §6) |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 | Ops HTTP istek başlığına süre sınırı (sessiz / damlatan eş görevini tutmaz; 5 sn, sonra tek `408`) | B47 | ✅ Uygulandı (OPS §3 "İstek başlığının süre sınırı"); eşzamanlı ops bağlantı tavanı ve yanıt yazmanın süre sınırı yok (§6) |
 
@@ -508,7 +509,7 @@ sınır yok** — kapı bayt bayt eskisi.
 | 2 | **Bakış çerezden sonra, kuruluştan (ve B5a'nın DH'sinden) önce** | Yol dışı sahteci çerezi geçemez: sayılan ya da reddedilen her kaynak dönüş yolunu kanıtlamıştır. Kurbanın adresiyle sahte proof, süresi geçmiş proof ya da challenge isteği yer tutmaz (QUIC'in kanıtsız/kanıtlı ayrımına gerek kalmaz — §4.3.1 #5). Reddedilen proof hiçbir şey kurmaz: DH yok, oturum yok |
 | 3 | **Sınır üstü: proof sessizce düşer, sayılır** (`udp_proofs_refused_per_source`); kaynak başına dönem başına tek `warn`, ret başına `debug` | Kabul yok, tel değişmez; istemci proof'u yeniden gönderir (5 sn'lik el sıkışma süresi içinde) ve yer açılınca girer. Sayaç proof datagram'ını sayar (her yeniden gönderim bir), el sıkışmayı değil — adı bu |
 | 4 | **Kilitsiz, tek sahip, sınırlı:** tablo demux görevinde; yer kuyruğa giren uç noktada (`Pending`) yaşar, düşünce oturumun anahtarını demux'a kuyrukla geri yollar (accept döngüsü aldı / dinleyicinin kuyruğuyla düştü / dolu kanalda söküldü); demux her karardan önce toplar | §4.3.1 #6'nın biçimi. Girdi yalnız yer tutuldukça yaşar; yerler kuyruktaki uç noktalardadır: tablo ve geri dönüş kuyruğu uç nokta kanalının sınırını (1024 + bekleyen accept başına bir) aşamaz, kaynaklar ne olursa olsun |
-| 5 | **Sınır kuruluşları keser, oturumları değil, DH hızını hiç** | Accept döngüsü uç noktayı hemen alır: tek kaynak art arda sınırsız oturum kurabilir (D12 ve `max_connections` onları sayar); sınır yalnız aynı anda bekleyenleri ve uç nokta kanalını (tek kaynağın onu doldurup başkalarının oturumlarını `udp_sessions_dropped_accept_full`'a düşürmesini) keser. Tek kaynağın **saniyedeki** DH'sini sınırlamaz: o B5a'nın küresel bütçesi (RUDP-SECURITY §12) |
+| 5 | **Sınır kuruluşları keser, oturumları değil, DH hızını hiç** | Accept döngüsü uç noktayı hemen alır: tek kaynak art arda sınırsız oturum kurabilir (D12 ve `max_connections` onları sayar); sınır yalnız aynı anda bekleyenleri ve uç nokta kanalını (tek kaynağın onu doldurup başkalarının oturumlarını `udp_sessions_dropped_accept_full`'a düşürmesini) keser. Tek kaynağın **saniyedeki** DH'sini sınırlamaz: o B5a'nın küresel bütçesi (`udp_handshakes_per_sec`, §4.7 #3) — sınırdan SONRA bakılır, sınırın reddettiği proof jeton harcamaz |
 | 6 | **Göç kaynağı taşır (B113):** doğrulanan göç bağlantı aktörüne de bildirilir (`ConnIn::PeerChanged`; yazıcıyla birlikte ya da hiç), aktör `peer`'ini günceller ve registry'ye söyler; registry satırın kaynağını, demux bekleyen oturumun yerini taşır | Önceden göçten sonra D12 sayımı ve aktörün `peer`'i ilk adreste kalıyordu: eski kaynak boşuna dolu, yeni kaynak hiç saymıyordu |
 | 7 | **Yeni kaynak sınırdaysa sayım eski kaynakta kalır, sayılır; göç yine olur** (`unauth_source_moves_kept`, `udp_pending_source_moves_kept`) | Göçü reddetmek NAT'ı yeniden bağlanan ya da dolu bir CGNAT'a geçen dürüst oyuncuyu ölü yolda bırakırdı (demux registry'nin sayımını da bilemez — beklemez). Sınıra bakmadan taşımak sınırı delerdi: A'dan doldur, B'ye taşı, A boşalır, yeniden doldur — B sınırsız. Yerinde bırakmak: her sayım oturumun kanıtladığı bir kaynakta, hiçbir kaynak sınırın üstünde değil, havuz `U` hâlâ `U`/sınır kaynakla dolar. Authed satır hiçbir sayımda değil, serbestçe taşınır |
 
@@ -594,7 +595,7 @@ bayt bayt eskisidir. Kriptodan (B5a) önce açmanın bedeli açıktır:
 | 2 | Doğrulanana kadar s→c **eski yolda** (karar 10); yeni adrese yalnız challenge gider, adresten alınan baytların en çok 3 katı | Sahte kaynaklı etiketli datagram kurbanı yalnız 9 B'lik challenge'larla, aday konuştukça ve en çok 200 ms'de bir vurabilir: oran yapısal olarak ≤ 1 (`udp_path_amplification_capped` kuralı B5a'nın mühürlü boyları için yerinde) |
 | 3 | Doğrulanmamış adresten **gelen** girdi oturuma kabul edilir | Kriptosuz bu, eski adresi sahtelemenin zaten açtığından fazlasını açmaz (o da enjekte eder); CID'yi bilmek gerekir (yol dışı için 2^64). Düşürmek her dürüst göçe bir RTT girdi kaybettirirdi |
 | 4 | Yanıtlanmayan challenge 3 sn'de biter, oturum eski yolda kalır; başka oturumun adresi aday olamaz; bilinmeyen CID düşer | Sahte kaynak göç yaptıramaz (sayılır: `udp_path_validations_timed_out`, `udp_cid_unknown`); bir oturum başka bir oturumun adresini devralamaz (`udp_path_address_in_use`) |
-| 5 | Kriptodan sonra (B5a) challenge şifreli, göç kuralı RFC 9146 §6'nın üç koşuluna çıkar, varsayılan açılır | RUDP-SECURITY §7 |
+| 5 | **B5a'da yapıldı:** mühürlü kapıda challenge şifreli, göç kuralı RFC 9146 §6'nın üç koşulu (açılan + en yeni + yolu doğrulanmış), varsayılan açık; bu bölümün 1–3'ü yalnız `udp_security = "plaintext"` kapı için geçerli | §4.7 #5, RUDP-SECURITY §7 |
 
 **Kalan yüzey (bilinçli):** CID ağlar arası sabittir — pasif bir
 gözlemci iki ağdaki oturumu ilişkilendirebilir (gizlilik; çözüm CID
@@ -605,6 +606,47 @@ sayımı (§4.3.2) ve aktörün `peer`'i artık yeni adrese taşınır (B113,
 Kilit: `udp::demux::tests::{grant, migrate}`, `udp::tests::migrate`
 (gerçek soket: NAT yeniden bağlanması, `rebind`, uyumluluk matrisi,
 göç kapalıyken bayt bayt kimlik), `udp::path::tests`.
+
+### 4.7 rUDP kayıt katmanı: mühürlü kapı (B5a)
+
+Tasarım, tehdit modeli ve kayıt düzeni `docs/RUDP-SECURITY.md`'de; tel
+ve kod DESIGN §6 "Kayıt katmanı"nda. **Varsayılan: mühürlü.** Düz metin
+yalnız `udp_security = "plaintext"` ile (dev/LAN; başlangıçta `warn`).
+
+| # | Karar | Gerekçe |
+|---|---|---|
+| 1 | **Sunucu kimliği = config'deki statik X25519 anahtarı** (`udp_static_key` 64 hex ya da `udp_static_key_file`); yoksa/bozuksa/ikisi birden varsa başlatma hatası | Karar 3 (PKI yok, istemci açık anahtarı sabitler) ve TLS'in "eksik dosya ⇒ başlamaz, asla düz metin" ilkesi (§2). Anahtar hiçbir log'a, hata metnine ya da `Debug`'a girmez (testli); yalnız açık yarı bind'de loglanır |
+| 2 | **DH yalnız çerezden, msg1 biçiminden, kaynak sınırından ve küresel bütçeden SONRA** | Yol dışı saldırgan çerezi geçemez; dönüş yolu olan kaynak bile DH'yi bütçeden fazla yaptıramaz. Sıra mutasyonla kilitli |
+| 3 | **Küresel DH bütçesi** (`udp_handshakes_per_sec`, vars. 1000/s, kova 50 ms'lik; `0` = yok) | Demux tek görev; el sıkışma başına ~180 µs (B110) bütün oturumların girişini durdurur. 1000/s ≈ demux çekirdeğinin %18'i; en uzun art arda DH koşusu ~9 ms (REL'in 50 ms tabanının altında). Reddedilen proof sayılır (`udp_proofs_refused_budget`), istemci yeniden yollar. Kova adaleti korumaz (B120 açık): tek dönüş yollu kaynak onu tüketebilir — dürüst istemciler yeniden gönderimle gecikir, düşmez |
+| 4 | **Her oturum datagramı mühürlü, iki yönde; demux bile açık metin göndermez** (ACK ve challenge yazıcı üzerinden, `UDP_SEND`) | Tek bir düz metin istisna (ör. ACK) istemciyi enjeksiyona açardı. Açılmayan her datagram adıyla sayılır (`seal_*`, `udp_datagrams_unsealed`) |
+| 5 | **Göç = açılan + en yeni + yolu doğrulanmış** (RFC 9146 §6); mühürlü kapıda varsayılan açık (B112) | Koklanmış CID ile sahte kayıt AEAD'de düşer; başka adresten tekrar oynatılan gerçek kayıt replay penceresinde düşer; daha eski gerçek kayıt işlenir ama göç başlatmaz (`udp_path_candidates_not_newest`). Challenge şifreli: CID'yi bilen ama anahtarı olmayan yanıtlayamaz. §4.6'nın taşıyıcı-jeton riski mühürlü kapıda kapandı |
+| 6 | **İdempotent proof saklanan msg2'yle**; ilk kayıt açılınca bırakılır | İkinci DH yok (bütçe ve CPU); sahte msg1'e aynı msg2 saldırgana bir şey vermez (istemcinin efemeral anahtarı gerek) |
+| 7 | **Bütünlük sınırı (2^36 sahte) ve sayaç tavanı (2^62) oturumu kapatır**, sayılı (`udp_sessions_ended_seal_limit`, kapanış `stream_rejected`) | RFC 9001 §6.6; sayaç asla sarmaz, nonce asla tekrar etmez |
+| 8 | **Uyumluluk kırılması bilinçli** (karar 6): düz metin istemci mühürlü kapıda reddedilir, mühürlü istemci düz metin kapıyı reddeder | "Eski istemciyle düz metin konuş" saldırganın da seçebileceği bir geri düşüş olurdu. Ret iki tarafta sayılı ve açık (DESIGN §5) |
+
+**Kriptodan sonra tehdit modeli** (RUDP-SECURITY §3'ün son sütunu,
+artık geçerli): kare okuma/enjeksiyon/değiştirme/tekrar oynatma
+kapandı (görünen: c→s CID, sayaç, boy, zamanlama); sahte sunucu
+kapandı (istemci anahtarı sabitler, msg2'yi yalnız gerçek sunucu
+üretir); oturum kaçırma kapandı (challenge şifreli). **Açık kalan:**
+sunucu yeniden başlarsa istemci 5 sn REL sınırını bekler (stateless
+reset, B5b); CID ağlar arası sabit (pasif bağlanabilirlik — CID
+rotasyonu, B5b/§10); sayaç düz görünür (paket hızı/kayıp — sayaç
+gizleme, sonra); DH bütçesinde kaynak başına adalet yok (B120); kayıt
+katmanı dış incelemeden geçmedi (D13). Sunucu statik anahtarının
+sızması kapsam dışı: geçmiş oturumlar efemeral DH ile korunur, ama
+sızan anahtarla sunucu taklit edilebilir — platform yeni açık anahtarı
+dağıtır.
+
+Kilit: `gsb-net` `udp::demux::tests::sealed` (el sıkışma baytları,
+idempotent proof, düz metin/bozuk/yanlış anahtarlı proof, her ret adı,
+bütünlük sınırı, göç kuralı, DH bütçesi duraklatılmış saatte),
+`udp::writer::tests::seal`, `udp::client::tests::seal`,
+`udp::tests::sealed` (gerçek soket: gidiş-dönüş, eski/yeni matrisi,
+mühürlü göç), `udp::sealed::tests`; `gsb-server` `config::udp_key::tests`
+(anahtar eksik/ikisi/bozuk, hiçbir karakter yankılanmaz),
+`tests/startup_errors.rs`, `tests/rudp_resume.rs` (her akış mühürlü ve
+düz metin kapıda).
 
 ## 4b. Oyuncu kimliği = karakter anahtarı (K4)
 
@@ -664,7 +706,7 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
   cevabını bekleyen yönlendirmenin süre sınırı (B90,
   `http_route_timeout_secs`, aşılırsa `504`; OPS §3); kaynak adres başına
   tavan yok (localhost sözleşmesi)
-- rUDP crypto — deneysel statü (çekirdek `gsb_net::seal` hazır, bağlama B5a); o zamana dek göç opt-in ve CID taşıyıcı jeton (§4.6)
+- rUDP kayıt katmanının kalanı (B5b): rekey politikası (ACK → `note_peer_ack`), stateless reset (config anahtarı), CID rotasyonu; DH bütçesinde kaynak başına adalet (B120); dış güvenlik incelemesi (D13). Düz metin kapı (`udp_security = "plaintext"`) hiçbir şeyi korumaz: orada göç opt-in ve CID taşıyıcı jeton (§4.6)
 - Kaynak adres başına sınırın kapsamadığı evre: rUDP demux'ının kayıttan
   önceki oturum tablosu (§4.3.1 #8, BACKLOG B89; kaydedilmiş rUDP
   oturumları §4.3.2'ye girer)

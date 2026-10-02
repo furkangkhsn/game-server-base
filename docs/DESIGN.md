@@ -411,7 +411,10 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   oyun bandı raporu demux'tan yazıcıya bu opcode'la geçer, §6 "Oyun bandı
   geri bildirimi"; `14` = UDP_PATH, aynı türden ve hiç tele çıkmaz —
   demux'ın "oturum doğrulanmış yeni adrese göçtü" bildirimi yazıcıya bu
-  opcode'la gider, §6 "Bağlantı göçü"); `1000+` oyun bandı
+  opcode'la gider, §6 "Bağlantı göçü"; `16` = UDP_SEND, aynı türden ve
+  opcode olarak hiç tele çıkmaz — mühürlü kapıda demux'ın kendi
+  datagramını (ACK, PATH_CHALLENGE) mühürleyip göndermesi için yazıcıya
+  isteği, §6 "Kayıt katmanı"); `1000+` oyun bandı
   (MOVE_TO=1000, WORLD_SNAPSHOT=1003; PRIVATE=1004 `RoomLogic::private`
   için ayrılmış, demo kullanmaz; 1001/1002 boş — eski ENTITY_SPAWNED /
   ENTITY_REMOVED kaldırıldı, üyelik snapshot'ta var olmaya indirgendi).
@@ -444,6 +447,15 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   yazma, hiçbir kilit).
 - `FrameBody { op, payload: Bytes }` — `Bytes` sayesinde payload kopyasız
   akar (socket → actor → oda → yayın, tek kopya).
+- **rUDP'nin tek bilinçli uyumluluk kırılması (B5a, karar 6 —
+  güvenlik):** mühürlü kapı (sunucunun varsayılanı) düz metin istemcinin
+  proof'unu reddeder (`udp_proofs_refused_plaintext`; istemci
+  `TimedOut`), mühürlü istemci düz metin kapının kabulünü reddeder
+  (`ConnectionRefused`). rUDP hattının geri kalan her eklemesi (FRAG,
+  PROBE/REPORT, CID) eski uçla konuşmaya devam etti; bu etmez, çünkü
+  "eski istemciyle düz metin konuş" bir saldırganın da seçebileceği bir
+  geri düşüş olurdu. Düz metin isteyen dev/LAN kapısı bunu açıkça söyler
+  (`udp_security = "plaintext"`). Matris ve tel: §6 "Kayıt katmanı".
 
 ### 5.1 Band seçimi: kaybın bedeli, boyut değil
 
@@ -1807,8 +1819,9 @@ verilmişse o (operatör denetimi — deploy'da sabit anahtar isteyenler
 için), (2) verilmediyse **OS entropisinden** (`getrandom`) 16 bayt.
 Sessiz zayıf geri düşüş **yoktur**: entropi kaynağı başarısız olursa
 süreç başlatmayı reddeder (yapı `Result` döndürür; duvar saati gibi
-tahmin edilebilir bir değer asla kullanılmaz). v1'de kriptografik katman
-(HMAC/imza) hâlâ yok — §10 satırı geçerli; ama key artık tahmin
+tahmin edilebilir bir değer asla kullanılmaz). Düz metin kapıda
+kriptografik katman (HMAC/imza) yok — mühürlü kapıda (B5a, varsayılan)
+Noise NK bu el sıkışmaya biner, aşağıda "Kayıt katmanı"; ama key tahmin
 edilemez, dolayısıyla sahte-proof koruması key'in *gibi görünen*
 (tahmin edilemez) olmasına dayanır. Çift yönlü mesajlar
 aynı boyutta → amplifikasyon oranı ≤ 1; sahte proof, key bilmeden
@@ -2818,9 +2831,10 @@ ve yol doğrulamasından sonra yeni adrese **göçer**. Kod: `udp::path`
 *Opt-in (karar 5).* Kriptodan önce CID **taşıyıcı jetondur**: istemcinin
 trafiğini koklayan biri CID'yi okur, düz metin PATH_CHALLENGE'ı kendi
 adresinden yanıtlar ve oturumun s→c akışını kendine çeker. Bu yüzden
-sunucu CID'yi yalnız `udp_migration = true` ise verir; varsayılan
-`false` kapı bayt bayt eskisidir (test, aşağıda). B5a'dan (mühürlü kayıt)
-sonra challenge şifreli olur ve varsayılan açılır (RUDP-SECURITY §7).
+düz metin kapı CID'yi yalnız `udp_migration = true` ise verir; orada
+varsayılan kapalı ve kapı bayt bayt eskisidir (test, aşağıda). B5a'dan
+beri mühürlü kapıda (sunucunun varsayılanı) challenge şifrelidir ve
+göç varsayılan açıktır (B112; aşağıda "Kayıt katmanı").
 
 *Tel — hepsi eklemeli (§5'in evrim kuralı):*
 
@@ -3042,12 +3056,125 @@ kaynak sınırı aşmaz, havuz `U` hâlâ `U`/sınır kaynakla dolar; dürüst
 oyuncu göçer ve AUTH'la sayımdan çıkar. Unauthed pencere bir AUTH
 gidiş-dönüşüdür; bu durum nadirdir, ama sayılır.
 
-*B5a'ya kalanlar.* B5a: CID'yi
-msg2'nin şifreli yükünde ver; etiketli düz metin yerine SEALED c→s
-(CID aynı konumda); göç kuralının üç koşulu (`Opener::open` Ok +
-`newest` + yol doğrulanmış), PATH_* şifreli iç tür olur; "en yeni aday"
-kuralı `newest` ile gerçek sıraya kavuşur; sonra `udp_migration`
-varsayılanı açılır.
+*B5a'da yapıldı* (aşağıda "Kayıt katmanı"): CID msg2'nin şifreli
+yükünde; etiketli düz metin yerine SEALED c→s (CID aynı konumda); göç
+kuralının üç koşulu; PATH_* şifreli iç tür; mühürlü kapıda
+`udp_migration` varsayılanı açık.
+
+**Kayıt katmanı — mühürlü kapı (BACKLOG B5a — 2026-10-02; tasarım ve
+tehdit modeli `docs/RUDP-SECURITY.md`; bakımcı kararları 3, 5, 6).**
+`udp_security = "sealed"` (varsayılan) kapısında `gsb_net::seal`'in
+sans-IO çekirdeği rUDP'ye bağlıdır: Noise `NK_25519_ChaChaPoly_BLAKE2s`
+çerez el sıkışmasına biner (0 ek RTT), sonra oturumun her datagramı iki
+yönde SEALED kayıttır. `"plaintext"` kapı B5a öncesinin bayt bayt
+aynısıdır (dev/LAN; başlangıçta tek `warn`). Kod: `udp::sealed` (kip,
+el sıkışma teli, DH bütçesi, `UDP_SEND`), `udp::demux::{noise, record}`,
+`udp::writer::seal`, `udp::client::seal`.
+
+*Tel:*
+
+| Datagram | Bayt düzeni | Boy |
+|---|---|---|
+| challenge isteği / challenge | değişmedi: `[3][u64 nonce][u64 cookie]` | 18 B / 18 B |
+| proof | `[3][u64 nonce][u64 cookie][0][u8 caps][msg1]` — caps HEP var (msg1 sabit konumda, bayt 19); msg1 = `e`(32) + boş yükün tag'i (16) | 67 B (msg1 48..80 B → 67..99 B) |
+| accept | `[2][u32 1][msg2]` — `ACK{1}` + msg2 = `e`(32) + şifreli `{cid u64, reset jetonu 16}` + tag(16) | 77 B |
+| SEALED c→s | `[0x40\|faz][u64 cid][u64 sayaç][şifreli iç datagram][tag 16]` | iç + 33 B |
+| SEALED s→c | `[0x40\|faz][u64 sayaç][şifreli iç datagram][tag 16]` | iç + 25 B |
+
+İç datagram düz metin kapının datagramının aynısı (RAW, REL, ACK, FRAG,
+PROBE, REPORT, `PATH_CHALLENGE [7][u64]`, `PATH_RESPONSE [8][u64]` —
+artık etiketsiz, iç tür). Yazıcının bütçesi iç datagramındır
+(1472 − 25); istemci c→s için 1472 − 33 kalır. Noise prologue bağlamı
+HELLO nonce'u + çerez (16 B): başka çerez alışverişinden yakalanan msg1
+tutmaz. Reset jetonu alanı ayrıldı ve dolu (kapı başına rastgele
+anahtardan; B5b config'e taşır — tel değişmez).
+
+*Sıra (kural):* çerez doğrulaması → msg1 biçimi (yalnız boy; düz metin
+proof burada `udp_proofs_refused_plaintext`, bozuk boy
+`udp_handshakes_malformed`) → kaynak başına sınır (B89) → **küresel DH
+bütçesi** (B119, `udp_handshakes_per_sec`, vars. 1000/s, kova 50 ms'lik;
+boşken `udp_proofs_refused_budget`) → CID çekimi → DH
+(`Msg1::cookie_verified`; doğrulanamayan msg1 `udp_handshakes_failed_decrypt`).
+Reddedilen proof hiçbir şey kurmaz, kabul almaz; istemci yeniden yollar.
+Mutasyonla kilitli: DH bütçeden önce koşarsa, ya da bütçe kaynak
+sınırından önce jeton harcarsa test kırılır.
+
+*İdempotent proof:* accept datagramı oturumla saklanır; oturumun ilk
+kaydı açılana kadar aynı adresten doğrulanan proof AYNI baytları alır —
+ikinci DH yok (testte tek jetonlu kova + bayt eşitliği; mutasyonla
+kilitli). İlk kayıt açılınca saklanan accept bırakılır (istemci oturumu
+tutuyor, proof'u bir daha yollamaz; 100k oturumda 77 B × 100k
+tutulmaz).
+
+*İki yarı, paylaşım yok:* oturumun `Opener`'ı demux'ta (soketi okuyan tek
+görev), `Sealer`'ı yazıcıda. Demux'ın kendi s→c datagramları — güvenilir
+bandın birikimli ACK'i, PATH_CHALLENGE — yazıcıya `UDP_SEND` (opcode 16)
+isteğiyle gider (piggyback ACK gibi); yazıcı mühürler: tek sayaç alanı,
+tek sahip, kilit yok. Güvenilir band iç datagramı tutar; her yeniden
+gönderim YENİ sayaçla mühürlenir. Kanal reddederse sayılır
+(`udp_acks_not_queued`, `udp_path_challenges_not_queued`); yazıcıda
+soket reddederse `udp_acks_send_failed` / `udp_path_challenges_send_failed`.
+
+*Retler:* açılmayan her datagram `seal::Refusal` adıyla sayılır
+(`seal_integrity_limit`, `seal_malformed`, `seal_too_old`,
+`seal_replayed`, `seal_wrong_phase`, `seal_forged`); mühürlü kapıda düz
+metin oturum datagramı `udp_datagrams_unsealed`; bilinmeyen CID
+`udp_cid_unknown`. Bütünlük sınırı (2^36 sahte) ve yazıcının sayaç
+tavanı (2^62) oturumu kapatır (`stream_rejected`,
+`udp_sessions_ended_seal_limit`). İstemci aynı adları
+`UdpClientStats`'ta tutar.
+
+*Göç (RUDP-SECURITY §7):* başka adresten gelen kayıt yalnız (1) açıldıysa
+ve (2) şimdiye kadarki en yüksek sayaçsa (`Opened::newest`) yol
+doğrulaması başlatır; (3) challenge ve yanıt şifreli. Açılan ama en yeni
+olmayan kayıt işlenir (istemcinindir), göç başlatmaz
+(`udp_path_candidates_not_newest`). Koklanmış CID + sahte kayıt AEAD'de
+düşer: doğrulama başlamaz (testli, mutasyonla kilitli). Mühürlü kapıda
+`udp_migration` ayarlanmamışsa açık (B112); `false` ise başka adresten
+gelen kayıt hiç açılmaz (`udp_datagrams_no_session`), adres değişimi
+yeni oturum + resume.
+
+*Uyumluluk matrisi (rUDP hattının tek bilinçli kırılması, §5):*
+
+| İstemci → kapı | Sonuç |
+|---|---|
+| düz metin → düz metin | bayt bayt B5a öncesi |
+| mühürlü (anahtar sabitli) → mühürlü | Noise + SEALED |
+| düz metin / eski → mühürlü | proof reddedilir: `udp_proofs_refused_plaintext` (+ kapı başına bir `warn`); istemci `TimedOut` |
+| mühürlü → düz metin | düz accept (msg2 yok) reddedilir, sayılır (`accepts_unsealed`); sahte olabilir diye beklemeye devam; süre dolunca `ConnectionRefused` |
+| başka anahtar sabitleyen → mühürlü | `udp_handshakes_failed_decrypt`; istemci `TimedOut` |
+
+*Kimlik:* sunucu statik X25519 özel anahtarı config'den: `udp_static_key`
+(64 hex) ya da `udp_static_key_file`; mühürlü kapıda yoksa, ikisi
+birden varsa ya da bozuksa başlatma hatası (sessiz düz metin yok);
+hiçbir log ve hata anahtarın bir karakterini taşımaz. Açık yarı bind'de
+loglanır ve `ServerHandle::udp_public_key`'dedir; istemci onu sabitler
+(`UdpClientConfig::server_key`, `gsb_client::connect::udp(addr, key)`).
+Testler ve yük üreteci çalışma anında kendi anahtarını üretir
+(`gsb_server::ephemeral_udp_key`).
+
+*Ölçüm (yük 11–38 — makine meşguldü; ayrıntı RUDP-SECURITY §15):*
+responder el sıkışması 130–136 µs; demux'ın gelen datagram başına
+işi düz metin ~135 ns, mühürlü ~1,3 µs (açma ~1,17 µs ekler) → 100k
+oturum × 10 dg/s'de ~1,2 çekirdek ek: tek demux'ın sınırı (~60–70k
+oturum bu hızda; BACKLOG b5a). 1000 istemcilik katılma fırtınası (4 MiB
+arabellek): düz metin p99 0,08–0,13 sn; mühürlü bütçe 1000/s'de p99
+1,0–1,4 sn (bütçe belirliyor), bütçesiz ya da 5000/s'de ~0,3 sn.
+
+*Reddedilenler:* (1) demux'a ayrı sayaç alanlı ikinci bir `Sealer`
+(çift/tek sayaç ya da alt anahtar): istemcinin tek replay penceresi iki
+hızla ilerleyen sayaç alanını kaldıramaz (yavaş taraf `TooOld` olur),
+alt anahtar ise yönü ikiye böler — `UDP_SEND` bir kanal atlaması
+pahasına tek sahibi korur. (2) Demux ACK'ini düz metin bırakmak: düz
+metin ACK'e güvenen istemci enjeksiyona açılır; "her datagram mühürlü"
+kuralının tek istisnası olurdu. (3) Bütçeyi kaynak sınırından önce
+bakmak: sınırın reddettiği proof jeton yakardı. (4) Mühürlü kapıda düz
+metin istemciye özel bir ret datagramı: eski istemci onu okuyamaz;
+sunucu sayar ve loglar, istemci zaman aşımıyla biter. (5) Saklanan
+msg2'yi oturum boyu tutmak (bellek), ya da msg1'i karşılaştırmak: aynı
+adres + aynı nonce'a bağlı doğrulanan çerez aynı el sıkışmadır; sahte
+msg1'e aynı msg2'yi vermek saldırgana bir şey kazandırmaz (istemcinin
+efemeral anahtarı olmadan çözülemez).
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
@@ -4597,7 +4724,7 @@ beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | ~~Accept loop abort~~ *(kapandı — B16: `close` bekleyen accept'i bitirir, döngü kendiliğinden döner; abort yalnız 1 sn'yi aşan döngüye geri sigorta)* | — | §9 |
 | rUDP: **tıkanıklık tepkisi opt-in, oyuna sinyal yok** *(B1 tur 3: `udp_congestion = "pace"` — raporlayan oturumun oyun bandı tahmini yol hızına göre hızlanır, en eski kareler düşer + sayılır; varsayılan `"off"`)* | Varsayılan kapalı: titreşimli gerçek yolda sahte gecikme sinyali ölçülmedi; `PathState` henüz odaya ulaşmıyor, oyun içeriğini yola göre inceltemez | sinyal çekirdek/kite (sonraki tur — §6 "Tıkanıklık tepkisi"), sonra varsayılanın çevrilmesi |
-| rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
+| rUDP: ~~şifreleme/imza yok~~ — **B5a'da kapandı** | Mühürlü kapı (sunucu varsayılanı): Noise NK + ChaCha20-Poly1305 kayıt katmanı, sunucu statik anahtarı config'de (§6 "Kayıt katmanı", `docs/RUDP-SECURITY.md`). Düz metin yalnız açık `udp_security = "plaintext"` (dev/LAN); orada çerez anahtarı tahmin edilemezdir ama hiçbir şey imzalanmaz ya da şifrelenmez | B5b: rekey politikası, stateless reset, CID rotasyonu; dış inceleme (D13) |
 | rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
 | ~~rUDP: SO_RCVBUF ayarı yok~~ *(kapandı — B4: `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`, rUDP ve QUIC kapıları, `socket2` ile; yazılmazsa dokunulmaz — §6 "UDP kapılarının soket arabellekleri")* | — | — |
 | rUDP: **bağlantı göçü opt-in** *(B3: `udp_migration = true` — CID + yol doğrulaması, NAT yeniden bağlanması ve ağ değişimi oturumu bitirmez; varsayılan kapalı: yeni el sıkışma + resume, eski oturum idle sweep'e kadar)* | Kriptodan önce CID taşıyıcı jetondur: koklayan, challenge'ı yanıtlayıp s→c akışını kendine çekebilir (RUDP-SECURITY §3, §7) | B5a (mühürlü kayıt) — sonra varsayılan açık |

@@ -298,34 +298,89 @@ udp_congestion = "pace"   # vars. "off"
 - **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` ve `[[listeners]]`
   girdisi reddeder. Bilinmeyen değer ayrıştırma hatası.
 
-**Sunucu düzeyi: rUDP bağlantı göçü `udp_migration` (BACKLOG B3).** Her
-rUDP kapısı — düz anahtardan türeyen kapı ya da `[[listeners]]`'ın her
-`udp` girdisi.
+**Sunucu düzeyi: rUDP kayıt katmanı `udp_security`, sunucu anahtarı
+`udp_static_key` / `udp_static_key_file`, el sıkışma bütçesi
+`udp_handshakes_per_sec` (BACKLOG B5a, B119).** Her rUDP kapısı — düz
+anahtardan türeyen kapı ya da `[[listeners]]`'ın her `udp` girdisi;
+hepsi aynı kimliği ve politikayı taşır.
 
 ```toml
-udp_migration = true   # vars. false
+udp_security = "sealed"          # vars.; "plaintext" = dev/LAN
+udp_static_key_file = "/etc/gsb/rudp-static.key"   # ya da udp_static_key = "<64 hex>"
+udp_handshakes_per_sec = 1000    # vars.; 0 = bütçe yok
 ```
 
-- **`false` (varsayılan):** CID verilmez; adresi değişen istemci (NAT
-  yeniden bağlanması, Wi-Fi ↔ hücresel) YENİ oturumdur: yeni el sıkışma
-  ve resume (RECONNECT §5). Kapı anahtardan önceki gibi, bayt bayt
-  (istemcinin proof'una eklediği caps baytı yok sayılır).
-- **`true`:** isteyen her istemciye (varsayılan `UdpClient` ister) rastgele
-  bir bağlantı kimliği (CID) verilir; yeni adresten konuşan oturum yol
-  doğrulamasından (o adrese challenge, yanıtı) sonra oraya **göçer** —
-  el sıkışma yok, resume yok, kapanış yok. Doğrulanana kadar sunucu eski
-  adrese yollamaya devam eder.
-- **Ne zaman açılır:** oyuncular mobil veride / ağ değiştiren
-  cihazlardaysa (`server_close_idle_timeout` ve resume sayıları adres
-  değişiminden geliyorsa). **Güvenlik bedeli:** rUDP kaydı şifrelenene
-  kadar (B5a) CID düz metindir — istemcinin trafiğini koklayabilen biri
-  oturumun sunucu → istemci akışını kendine çekebilir (SECURITY §4.6).
-  Güvenilir ağda ya da bu riski kabul eden dağıtımda açın.
+- **`"sealed"` (varsayılan, üretim):** Noise `NK_25519_ChaChaPoly_BLAKE2s`
+  çerez el sıkışmasına biner (0 ek RTT); oturumun her datagramı iki yönde
+  ChaCha20-Poly1305 ile mühürlenir (DESIGN §6 "Kayıt katmanı",
+  `docs/RUDP-SECURITY.md`). **Anahtar şart:** yoksa, ikisi birden
+  yazılmışsa ya da bozuksa sunucu BAŞLAMAZ (`rUDP static key: missing |
+  both … | malformed: …`); sessiz düz metin geri düşüşü yok.
+- **Anahtar biçimi:** 64 hex karakter (32 bayt X25519 özel anahtarı;
+  her 32 rastgele bayt geçerli): `openssl rand -hex 32 >
+  /etc/gsb/rudp-static.key`, dosya izni 0600. Dosyada baştaki/sondaki
+  boşluk yok sayılır. Anahtar hiçbir log'a ya da hata metnine girmez;
+  hata yalnız sorunu (eksik, boy, konum, dosya yolu) söyler.
+- **Açık anahtar (istemcinin sabitlediği):** bind'de loglanır —
+  `rUDP transport bound … sealed=true public_key=<64 hex>` (`info`) — ve
+  `ServerHandle::udp_public_key`'dedir. Platform onu bilet ve adresle
+  birlikte istemciye verir (karar 3); istemci `UdpClientConfig::server_key`
+  / `gsb_client::connect::udp(addr, Some(key))`. **Anahtar döndürme:**
+  yeni anahtar = yeni açık anahtar; eski istemciler yeni sunucuya
+  bağlanamaz (`udp_handshakes_failed_decrypt`) — platform yeni açık
+  anahtarı yaymadan sunucuyu değiştirmeyin.
+- **`"plaintext"`:** B5a öncesi kapı, bayt bayt; hiçbir şey şifrelenmez ya
+  da doğrulanmaz. Başlangıçta tek `warn`. Yalnız dev/LAN.
+- **Uyumluluk:** düz metin (ya da B5a öncesi) istemci mühürlü kapıda
+  reddedilir — `udp_proofs_refused_plaintext` artar, kapı başına bir
+  `warn`, istemci zaman aşımına uğrar; mühürlü istemci düz metin kapıda
+  `ConnectionRefused` alır. rUDP hattının tek bilinçli kırılması
+  (DESIGN §5).
+- **`udp_handshakes_per_sec`:** mühürlü kapının saniyede başlattığı Noise
+  el sıkışması — çerezden ve kaynak sınırından sonra, DH'den önce bir
+  jeton kovası (kova 50 ms'lik). El sıkışma başına ~180 µs (demux'ın tek
+  görevinde): 1000/s ≈ bir çekirdeğin %18'i, 1000 oyunculuk katılma
+  fırtınası ~1 sn'de girer. Boşken gelen doğrulanmış proof sayılır
+  (`udp_proofs_refused_budget`), istemci ≤ 200 ms'de yeniden yollar.
+  **Ne zaman büyütülür:** fırtınada `connect` p99 bütçenin dayattığı
+  süreyi (oyuncu sayısı ÷ hız) gösteriyor ve demux CPU'su rahatsa.
+  Ölçüm (1000 istemci, 4 MiB arabellek, yüklü makine): 1000/s'de p99
+  1,0–1,4 sn ve istemci başına ~3 reddedilen proof; 5000/s'de ya da
+  bütçesiz ~0,3 sn, ret yok (RUDP-SECURITY §15). Yük üretecinde
+  `--udp-handshakes-per-sec N`.
+  **Ne zaman küçültülür:** proof selinde demux CPU'su diğer oturumların
+  gecikmesini artırıyorsa. `0` = bütçe yok (önerilmez).
+- **Katman yok:** üçü de tek sunucu anahtarı; `[rooms.<id>]` ve
+  `[[listeners]]` girdisi reddeder.
+
+**Sunucu düzeyi: rUDP bağlantı göçü `udp_migration` (BACKLOG B3,
+B112).**
+
+```toml
+udp_migration = false   # vars.: mühürlü kapıda açık, düz metinde kapalı
+```
+
+- **Yazılmamış (varsayılan):** mühürlü kapıda **açık** (B5a'dan beri:
+  yalnız açılan ve en yeni kayıt yol doğrulaması başlatır, challenge
+  şifreli — karar 5), düz metin kapıda **kapalı**.
+- **`false`:** adresi değişen istemci (NAT yeniden bağlanması, Wi-Fi ↔
+  hücresel) YENİ oturumdur: yeni el sıkışma ve resume (RECONNECT §5).
+  Düz metin kapıda CID verilmez ve kapı anahtardan önceki gibi, bayt
+  bayt; mühürlü kapıda CID yine verilir (kayıtları yönlendirir) ama
+  başka adresten gelen kayıt okunmaz (`udp_datagrams_no_session`).
+- **`true`:** yeni adresten konuşan oturum yol doğrulamasından (o adrese
+  challenge, yanıtı) sonra oraya **göçer** — el sıkışma yok, resume yok,
+  kapanış yok. Doğrulanana kadar sunucu eski adrese yollamaya devam eder.
+- **Düz metin kapıda açmanın güvenlik bedeli:** CID düz metindir —
+  istemcinin trafiğini koklayabilen biri oturumun sunucu → istemci
+  akışını kendine çekebilir (SECURITY §4.6). Mühürlü kapıda bu kapandı
+  (SECURITY §4.7).
 - **Okuma:** `udp_migrations` (göçen oturum), `udp_migrations_port_only`
   (bunların NAT yeniden bağlanması olanı); başarısız denemeler
   `udp_path_validations_timed_out` (sahte ya da kaybolan aday),
-  `udp_cid_unknown` (bitmiş oturumun ya da sahte CID'nin datagram'ı) —
-  §3 "Taşıma kapsamı: rUDP bağlantı göçü".
+  `udp_cid_unknown` (bitmiş oturumun ya da sahte CID'nin datagram'ı),
+  mühürlü kapıda `udp_path_candidates_not_newest` — §3 "Taşıma kapsamı:
+  rUDP bağlantı göçü" ve "mühürlü kapı".
 - **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` ve `[[listeners]]`
   girdisi reddeder.
 
@@ -1191,9 +1246,10 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
 - **Taşıma kapsamı: rUDP bağlantı göçü (B3).** Satırın ve tablonun
   sonuna 15 `counter` (tıkanıklık tepkisininkilerden sonra); loadgen
   telinin transport bölümü 15 sayaç uzar — **GSNN** —, `RESULT`'ta
-  `transport_<ad>=`. Yalnız `udp_migration = true` iken artar (§2):
-  `udp_cids_assigned` (CID verilen oturum — isteyen istemci; kayıp
-  değil), `udp_entropy_draws_failed` (OS entropisinin veremediği CID ya
+  `transport_<ad>=`. Yalnız göç açıkken artar (§2; mühürlü kapıda
+  varsayılan açık, düz metinde `udp_migration = true`):
+  `udp_cids_assigned` (CID verilen oturum — düz metin kapıda isteyen
+  istemci, mühürlü kapıda her oturum; kayıp değil), `udp_entropy_draws_failed` (OS entropisinin veremediği CID ya
   da challenge nonce'u — oturum CID'siz kuruldu ya da aday doğrulanmadı;
   zayıf değer asla), `udp_cid_unknown` (hiçbir oturumu anmayan etiketli
   datagram, düştü), `udp_path_validations_started` (oturumun adresi
@@ -1233,6 +1289,42 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   HELP'i bilerek değişti: eşleşen yanıtın bildirimleri artık yazıcıya
   **ve** bağlantı aktörüne gider (ikisi ya da hiçbiri) — kanallarından
   biri dolu/kapalıysa sayılır, doğrulama bekler.
+- **Taşıma kapsamı: rUDP mühürlü kapı (B5a).** Satırın ve tablonun
+  sonuna 16 `counter`; `RESULT`'ta `transport_<ad>=`; loadgen telinin
+  taşıma bölümü 16 sayaç uzar (**tel düzeni değişti — sihir numarasını
+  sıradaki tur atar**). Düz metin kapıda hepsi 0 (yazıcının ikisi hariç:
+  yine 0). Ret adları `seal::Refusal::name()`'in kararlı adları — her
+  datagram tek ad:
+  - El sıkışma (sıra çerez → msg1 biçimi → kaynak sınırı → bütçe → DH):
+    `udp_proofs_refused_budget` (DH bütçesi boş — oturum yok, kabul
+    yok, istemci yeniden yollar), `udp_proofs_refused_plaintext` (msg1'siz
+    doğrulanmış proof — düz metin/eski istemci), `udp_handshakes_malformed`
+    (msg1 boyu yanlış; DH'den önce), `udp_handshakes_failed_decrypt`
+    (msg1 DH'den sonra doğrulanmadı — başka anahtar sabitleyen istemci,
+    sahte msg1), `udp_handshakes_failed_internal` (kripto arka ucu).
+  - Kayıt: `udp_datagrams_unsealed` (mühürlü kapıda düz metin oturum
+    datagramı, okunmadı), `seal_integrity_limit`, `seal_malformed`,
+    `seal_too_old`, `seal_replayed`, `seal_wrong_phase`, `seal_forged`
+    (sıra ucuzdan pahalıya, RUDP-SECURITY §5), `udp_sessions_ended_seal_limit`
+    (bütünlük sınırı ya da yazıcının 2^62 sayaç tavanı oturumu kapattı;
+    kapanış `stream_rejected`).
+  - Göç: `udp_path_candidates_not_newest` (başka adresten açılan ama en
+    yeni olmayan kayıt: işlendi, doğrulama başlamadı).
+  - Demux → yazıcı: `udp_acks_not_queued`, `udp_path_challenges_not_queued`
+    (mühürlü oturumun yazıcı kanalı ACK'i / challenge'ı reddetti; istemci
+    yeniden yollar / bir sonraki tur). Yazıcının soketi reddederse eski
+    adlar artar: `udp_acks_send_failed`, `udp_path_challenges_send_failed`.
+
+  **Okuma:** `seal_forged` sıfırdan büyükse biri sahte datagram
+  yolluyor (ya da yol bozuyor); `seal_replayed` ağdaki çoğaltma ya da
+  tekrar saldırısı; `udp_proofs_refused_plaintext` güncellenmemiş istemci
+  sayısının izi; `udp_proofs_refused_budget` fırtınada artar — sürekli
+  artıyorsa ya bütçe küçük ya da biri proof yağdırıyor;
+  `udp_handshakes_failed_decrypt` anahtar döndürmeden sonra eski açık
+  anahtarlı istemcileri gösterir. Demux'ın duruş satırında `sealed`,
+  `proofs_refused_budget`, `seal_forged`. İstemci tarafı aynı adları
+  `UdpClientStats`'ta tutar (`seal_*`, `unsealed_dropped`,
+  `accepts_forged`, `accepts_unsealed`).
 - **Registry kapsamı: göçte tutulan kaynak sayımı (B113 — u89).**
   Registry satırının (`gsb-metric scope=registry`) sonuna
   `unauth_source_moves_kept=`, Prometheus'ta

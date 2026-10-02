@@ -34,9 +34,10 @@
 //! ```
 //!
 //! `F` is a per-process-keyed mix (splitmix64 folds of `nonce`, the peer
-//! address, the key and the time slot) — not a KDF: v1 has no crypto
-//! layer (out of scope), and the property needed is "unforgeable over the
-//! network without the key". The challenge response is well-formed only
+//! address, the key and the time slot) — not a KDF: the property needed
+//! is "unforgeable over the network without the key". On a sealed door
+//! (B5a, module `sealed`) the proof also carries Noise message 1 and the
+//! accept message 2; the cookie still comes first (no DH before it). The challenge response is well-formed only
 //! for a well-formed challenge (same 18-byte size), so forged-traffic
 //! amplification stays at ratio ≤ 1, and a forged proof needs the
 //! cookie, which needs the key. The accept (5 bytes) answers only a
@@ -578,6 +579,14 @@
 //! <5% of the cost and breaks the single-`accept()` future / the shared
 //! connection-id space; per-due O(N) sweeps rejected: 80× the cost of
 //! the heap under join churn).
+//!
+//! **A sealed door adds the record open** (B5a, module `sealed`):
+//! measured ~1.2 µs per inbound datagram on a loaded 7950X (the
+//! `demux::tests::sealed::cost` probe: ~135 ns plaintext against
+//! ~1.3 µs sealed). At 100k sessions × 10 datagrams/s that is ~1.2 more
+//! cores on this one task — past what one demux carries; the way out
+//! (an allocation-free open in place, the open moved off the demux) is
+//! `docs/RUDP-SECURITY.md` §15 and BACKLOG.
 //!
 //! ## What is still open (why the label stays)
 //!

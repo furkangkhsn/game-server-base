@@ -600,7 +600,8 @@ mutasyonlar (oda/shard devralmasını kaldırmak, LEAVE'e dönmek, sayaç
 düşürmemek, eski satırı odada bırakmak, aynı bağlantıyı ya da parklı
 satırı devralmak) öldü.
 
-**rUDP üstünde resume (B7, düz metin).** Bugün rUDP demux'ı oturumu eş
+**rUDP üstünde resume (B7 — düz metin yarısı e1, şifreli yarısı B5a).**
+Göç kapalı kapıda rUDP demux'ı oturumu eş
 adresine göre anahtarlar: adresi değişen (NAT yeniden bağlaması, mobil
 devir) ya da soketi ölen istemci YENİ bir oturum olarak döner — yeni
 soket, yeni cookie el sıkışması, aynı kimlik bilgisiyle resume. UDP'de
@@ -632,9 +633,23 @@ ERROR 9'u göndermemek) öldü. **B3 (bağlantı göçü) ve B5 (Noise) bu
 yedisini yeşil tutmak zorundadır:** göç eden oturum için "el sıkışmasız,
 resume gerekmez" beklentisi kapı-başı beklentinin yanına EKLENİR; yeni
 port + yeni el sıkışma + aynı kimlik yolu (ve F32 devralması) geri
-düşüş olarak kalır. Şifreli e2e B5'ten sonra.
+düşüş olarak kalır.
 
-**Göç ve resume (B3, 2026-10-02).** `udp_migration = true` olan kapıda
+**Şifreli e2e (B5a, 2026-10-02 — B7 kapandı).** `Door::Udp` ve
+`Door::Migrating` artık **mühürlü** kapıdır (sunucunun varsayılanı:
+Noise NK el sıkışması, her datagram SEALED kayıt; anahtar testin
+kendisinin, istemci `Rig::key`'i sabitler ve oturumun mühürlü olduğunu
+doğrular). Aynı yedi rUDP akışı `plaintext_` adlarıyla düz metin
+kapıda da koşar (`Door::PlainUdp`, `Door::PlainMigrating`); 16 test,
+sayılar ve kapanış aileleri iki kipte aynı. Mühürlü kapıda resume
+yolunun kendisi değişmedi: kaybolan istemci YENİ bir el sıkışma (yeni
+efemeral anahtarlar, yeni CID) yapar ve aynı kimlik bilgisiyle resume
+eder; eski oturumun anahtarları onunla gider. Sunucu yeniden
+başladığında istemcinin 5 sn REL sınırını beklemeden öğrenmesi
+(stateless reset) B5b'nin işi.
+
+**Göç ve resume (B3, 2026-10-02; B5a'dan beri mühürlü kapıda
+varsayılan açık).** Göçü açık kapıda
 oturum adresten bağımsız bir CID taşır (DESIGN §6 "Bağlantı göçü"):
 adresi değişen istemci (NAT yeniden bağlanması — istemci görmez; ya da
 `UdpClient::rebind`, yeni yerel soket) **aynı oturumda** kalır, sunucu
@@ -648,13 +663,15 @@ oda `joins 1 / resumes 0 / detached 0`, registry `opens 1 / closes 0 /
 conns 1 / leaves 0`, kapanış ailesi boş, `udp_migrations = 1`) ve
 `with_migration_on_a_vanished_rudp_client_still_resumes` (göç açıkken de
 geri düşüş aynı: kaybolan istemci yeni el sıkışma + resume ile döner).
-Yedi eski test değişmeden yeşil (göç kapalı varsayılan kapıda).
-**Resume ne zaman hâlâ gerekir:** göç kapalıysa; istemci CID istemiyorsa
-(eski istemci) ya da sunucu vermiyorsa (eski sunucu); yeni adres 3 sn
-içinde doğrulanamazsa (oturum eski yolda kalır, REL bandı oradan
-ölürse oturum biter); istemci süreci/soketi tamamen kaybolduysa (bellek
-gitti: CID de gitti). Kriptodan (B5a) önce CID taşıyıcı jetondur —
-SECURITY §4.6.
+Yedi eski test değişmeden yeşil (göç kapalı kapıda — rig onu açıkça
+kapatır, çünkü mühürlü kapının varsayılanı artık açık). Mühürlü kapıda
+göç yalnız açılan ve en yeni kayıtla başlar, challenge şifrelidir
+(SECURITY §4.7); düz metin kapıda CID taşıyıcı jetondur — SECURITY §4.6.
+**Resume ne zaman hâlâ gerekir:** göç kapalıysa; düz metin kapıda
+istemci CID istemiyorsa (eski istemci) ya da sunucu vermiyorsa; yeni
+adres 3 sn içinde doğrulanamazsa (oturum eski yolda kalır, REL bandı
+oradan ölürse oturum biter); istemci süreci/soketi tamamen
+kaybolduysa (bellek gitti: CID ve oturum anahtarları da gitti).
 
 ## 6. Shard rotasyonu: broadcast-resume
 

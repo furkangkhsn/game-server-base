@@ -1,13 +1,17 @@
 # gsb: rUDP Güvenliği — Noise NK el sıkışması + kendi kayıt katmanımız
 
-> **Durum:** TASARIM + ÇEKİRDEK (x1 turu, 2026-10-02).
-> - **Bu turda yapılan:** kripto çekirdeği `gsb_net::seal` (sans-IO, soket
->   yok, tokio yok) ve bu doküman. Testli, ama **rUDP'ye bağlı değil**.
-> - **Bağlama:** B5a (§12). O tura kadar rUDP bugünkü gibi düz metindir
->   (BACKLOG B5).
-> - **B3 (2026-10-02):** kriptosuz CID ve göç yapıldı, opt-in
->   (`udp_migration`); kind bayt haritası kesinleşti (§5, B109). Ne
->   yapıldığı ve B5a'ya ne kaldığı: §7.
+> **Durum:** BAĞLI (B5a, 2026-10-02). Mühürlü kip sunucunun varsayılanı.
+> - **x1:** kripto çekirdeği `gsb_net::seal` (sans-IO, soket yok, tokio
+>   yok) ve bu doküman.
+> - **B3 (2026-10-02):** kriptosuz CID ve göç, kind bayt haritası (§5,
+>   B109). §7.
+> - **B5a (2026-10-02):** çekirdek rUDP'ye bağlandı — NK msg1 proof'ta,
+>   msg2 accept'te, her oturum datagramı iki yönde SEALED, küresel DH
+>   bütçesi, göçün üç koşulu, sunucu statik anahtarı config'de, mühürlü
+>   kip varsayılan (`udp_security`), düz metin yalnız açık dev/LAN
+>   anahtarıyla. Ne yapıldığı: §15; B5b'nin devraldığı: §15 sonu.
+> - **Kalan:** B5b (§12): rekey politikası, stateless reset, CID
+>   rotasyonu. Dış inceleme (karar 8, D13).
 >
 > Kaynak araştırma: x1 araştırma raporu (2026-10-02). Bu doküman onun
 > §4–§7'sini ve maintainer'ın 10 kararını sözleşmeye çevirir.
@@ -73,7 +77,7 @@
 
 | Saldırı | Bugün (düz metin) | B3 (kriptosuz CID, opt-in) | Kripto (B5a sonrası) |
 |---|---|---|---|
-| Kare okuma | Koklayıcı her şeyi okur | Aynı | Şifreli. Görünen: CID (c→s), sayaç, boy, zamanlama |
+| Kare okuma | Koklayıcı her şeyi okur | Aynı | Şifreli. Görünen: CID (c→s), sayaç, boy, zamanlama — **B5a'dan beri mühürlü kapıda geçerli** (bu sütunun tamamı; reset satırı hariç, o B5b) |
 | Kare enjeksiyonu / değiştirme | Koklayıcı enjekte eder; yol dışı, portu bilirse sahte RAW/FRAG basar | Aynı | AEAD reddeder → `seal_forged` |
 | Tekrar oynatma | Mümkün | Mümkün | Replay penceresi → `seal_replayed` / `seal_too_old` |
 | Oturum kaçırma | Adres sahteciliğiyle kısmen | **CID taşıyıcı jetondur:** CID'yi koklayan, düz metin PATH_CHALLENGE'ı kendi adresinden yanıtlayıp s→c akışını kendine çeker | Challenge şifreli, yanıtlanamaz; eski yolda beklenir |
@@ -126,8 +130,14 @@ SEALED REL AUTH(bilet)              ──▶        AUTH artık şifreli kanal�
     Statik anahtarın yeniden türetilmesi (+1 çarpım) el sıkışmanın ~%25'i:
     `clatter` ya da kendi NK'mız onu geri alır (B110 açık kalır, B5a'nın
     ölçümüne bağlı).
-  - **B5a'nın DH bütçesi (tasarım; u89'da kodlanmadı — DH olmadan
-    korunacak bir maliyet yok, ayarı DH'nin nerede koşacağına bağlı):**
+  - **B5a'nın DH bütçesi — YAPILDI (B119 kapandı; `udp::sealed::budget`).**
+    Kodlanan: aşağıdaki 1. madde; kova 50 ms'lik (oranın 1/20'si, en az
+    bir jeton): en uzun art arda DH koşusu ~9 ms (REL'in 50 ms
+    tabanının altında). Sıra: çerez → msg1 boyu → kaynak sınırı → kova
+    → CID → DH; mutasyonla kilitli (DH kovadan önce; kova kaynak
+    sınırından önce). Tokio saati: duraklatılmış saatli testler kovayı
+    sürer. 2. ve 3. madde B120/B121 olarak açık (B5a ölçümü, §15).
+    Asıl tasarım metni:
     1. Küresel jeton kovası, demux'ta, çerez ve kaynak sınırından
        sonra, DH'den önce: `udp_handshakes_per_sec` (sunucu anahtarı;
        vars. demux'ın bir çekirdeğinin ~%20'si — ölçülen değerle ~1000/s;
@@ -165,9 +175,10 @@ SEALED REL AUTH(bilet)              ──▶        AUTH artık şifreli kanal�
 - **İstemci kimliği:** NK katmanında istemci anonimdir; kimliğini şifreli
   AUTH biletiyle kanıtlar. `Session::handshake_hash()` kanal bağlama için
   açıktır: platform bileti ileride bu hash'e bağlayabilir (opsiyonel).
-- **Sunucu statik anahtarı config'de** (B5a). Yoksa ya da bozuksa
-  başlatma hatası olur; sessiz düz metin geri düşüşü yoktur (SECURITY §2
-  karar 3'ün ilkesi).
+- **Sunucu statik anahtarı config'de** (B5a, yapıldı): `udp_static_key`
+  (64 hex) ya da `udp_static_key_file`. Yoksa, ikisi birden varsa ya da
+  bozuksa başlatma hatası olur; sessiz düz metin geri düşüşü yoktur
+  (SECURITY §2 karar 3'ün ilkesi). Biçim gerekçesi §15.
 - **Hata adları (`HandshakeError`):** `Malformed` (DH'den önce), `Decrypt`,
   `PayloadTooLarge`, `Internal`. Her biri ayrı sayılır.
 
@@ -344,18 +355,23 @@ adresini yalnız şu üçü birden doğruysa değiştirir:
   adaydan yeni datagram'la); kural ve sayacı B5a'nın mühürlü boyları
   için yerinde ve testli.
 
-**B5a'nın B3'ten devraldığı:**
-- CID'yi accept'in düz metin uzantısı yerine msg2'nin şifreli yüküne
-  taşı (`Accept`); caps baytı msg1'den önce kalır.
-- Etiketli düz metin yerine SEALED c→s (CID aynı bayt 1..9'da);
-  PATH_* şifreli iç tür olur; demux'ın yönlendirmesi değişmez.
-- Göç kuralına 1. ve 2. koşulu ekle (`Opener::open` Ok + `newest`):
-  "en yeni aday" kuralı numarasızdan sayaç sırasına geçer.
-- `udp_migration` varsayılanını aç (karar 5).
-- B89/B113 yapıldı (u89): kaynak başına bekleyen oturum sınırı ve göçte
-  kaynağın taşınması (aktörün `peer`'i, registry'nin D12 sayımı, demux'ın
-  bekleyen yeri; dolu kaynağa sayım taşınmaz). B5a göçün üç koşulunu
-  ekleyince bildirim yolu aynı kalır.
+**B5a'nın B3'ten devraldığı — YAPILDI (2026-10-02; ayrıntı §15):**
+- CID accept'in düz metin uzantısı yerine msg2'nin şifreli yükünde
+  (`Accept`); mühürlü kapıda HER oturuma verilir (kayıtların
+  yönlendirme anahtarı); caps baytı msg1'den önce kaldı ve mühürlü
+  proof'ta hep var (msg1 bayt 19'da).
+- Etiketli düz metin yerine SEALED c→s (CID aynı bayt 1..9'da); PATH_*
+  şifreli iç tür (`PATH_RESPONSE` artık etiketsiz `[8][u64]`); demux'ın
+  yönlendirmesi CID'le.
+- Göç kuralının 1. ve 2. koşulu: başka adresten gelen kayıt yalnız
+  `Opener::open` Ok + `Opened::newest` ise aday olur; açılan ama en yeni
+  olmayan işlenir, göç başlatmaz (`udp_path_candidates_not_newest`).
+  "En yeni aday" kuralı artık sayaç sırasıyla. Challenge yazıcı
+  üzerinden mühürlü gider (`UDP_SEND`); 3× bütçe mühürlü boyla
+  (9 + 25 B) hesaplanır.
+- `udp_migration` varsayılanı mühürlü kapıda açık (B112 kapandı); düz
+  metin kapıda kapalı kaldı (opsiyonel `bool`: yazılmamışsa kipe göre).
+- Bildirim yolu (B89/B113) aynı kaldı.
 
 ## 8. Stateless reset
 
@@ -385,11 +401,16 @@ ad); `Opener` buna bir `Forged` sonrası kanca verir.
 
 ## 9. Düz metin kipi
 
-Kripto bağlandıktan sonra (B5a) **mühürlü kip üretim varsayılanıdır**
-(karar 6). Düz metin rUDP yalnız açık bir config anahtarıyla açılır:
-- Örnek: `udp_plaintext = true`, "dev/LAN" diye belgelenir.
+B5a'dan beri **mühürlü kip üretim varsayılanıdır** (karar 6). Düz metin
+rUDP yalnız açık bir config anahtarıyla açılır (yapıldı):
+- `udp_security = "plaintext"` (vars. `"sealed"`), "dev/LAN" diye
+  belgeli (OPS §2, `config.example.toml`). Tek bir anahtar, iki değer:
+  ileride üçüncü bir kip (karar 4'ün bilet anahtarı kipi) aynı yere
+  oturur; `udp_plaintext = true` gibi bir boolean oturmazdı.
 - Açılırsa başlangıçta tek bir `warn` yazılır.
-- Sunucu anahtarı yoksa sessiz düz metne düşülmez; başlatma hatası olur.
+- Mühürlü kapıda sunucu anahtarı yoksa sessiz düz metne düşülmez;
+  başlatma hatası olur (testli: `config::udp_key::tests`,
+  `tests/startup_errors.rs`).
 
 ## 10. Sonraya kalanlar (karar 7, 4)
 
@@ -439,9 +460,9 @@ Kripto bağlandıktan sonra (B5a) **mühürlü kip üretim varsayılanıdır**
 | **x1 (bu tur)** | **Yapıldı:** `gsb_net::seal` çekirdeği (el sıkışma sarmalayıcısı, `Sealer`/`Opener`, replay penceresi, anahtar fazı, reset jetonu, SEALED başlık kodlaması) + bu doküman. **Bağlanmadı:** rUDP'nin hiçbir yolu bu modülü çağırmaz |
 | **B3** | **Yapıldı (2026-10-02):** kriptosuz CID ve göç (opt-in `udp_migration`): proof'a caps baytı, accept'te CID, etiketli c→s datagramı, PATH_CHALLENGE/RESPONSE, 3x bütçe, oturumlara iç anahtar + `addr→key` / `cid→key` indeksleri, writer'a `UDP_PATH` (`PathChanged`), `UdpClient::rebind()`, 15 sayaç; kind haritası kesin (§5). Ayrıntı §7, DESIGN §6 "Bağlantı göçü" |
 | **B89** | **Yapıldı (u89, 2026-10-02):** kaynak başına bekleyen oturum sınırı (`max_handshakes_per_source`, D11'in anahtarı; çerezden sonra, DH'den önce; `udp_proofs_refused_per_source`), göçte kaynağın taşınması (B113: aktörün `peer`'i, registry'nin D12 sayımı, demux'ın bekleyen yeri; dolu kaynağa taşınmaz — `unauth_source_moves_kept`, `udp_pending_source_moves_kept`), B110 ölçümü (§4). **B5a'ya devredildi:** DH'den önce küresel el sıkışma bütçesi (§4 tasarımı) — kaynak başına sınır hızı kesmez. SECURITY §4.3.3 |
-| **B5a** | **Bu modülü bağlar:** DH'den önce küresel el sıkışma bütçesi (§4; B89'dan); msg1 proof'a, msg2 accept'e; SEALED kayıt; sunucu statik anahtarı config'den; `Sealer` writer'a, `Opener` demux'a; `Refusal` adları sayaçlara; göç kuralının üç koşulu; PATH_* şifreli iç kind; mühürlü kip varsayılan, düz metin dev/LAN anahtarı; demux'ta çözme CPU'sunun ölçümü (100k'da) |
+| **B5a** | **Yapıldı (2026-10-02):** DH'den önce küresel el sıkışma bütçesi (§4; B89'dan); msg1 proof'a, msg2 accept'e; SEALED kayıt; sunucu statik anahtarı config'den; `Sealer` writer'a, `Opener` demux'a (demux'ın kendi gönderdikleri `UDP_SEND` ile yazıcıdan); `Refusal` adları sayaçlara; göç kuralının üç koşulu; PATH_* şifreli iç kind; mühürlü kip varsayılan, düz metin dev/LAN anahtarı; demux'ta çözme CPU'sunun ölçümü. Ayrıntı §15 |
 | **B5b** | Anahtar fazı politikası (ne zaman rekey; ACK → `note_peer_ack` eşlemesi), stateless reset (config anahtarı, reset datagramı, istemci kontrolü), opsiyonel CID rotasyonu / adres doğrulama jetonu |
-| **B7** | Şifreli resume e2e: reset ya da göç başarısızlığından sonra yeni el sıkışma + RECONNECT'in resume yolu, rUDP üstünde uçtan uca |
+| **B7** | **Kapandı (B5a ile):** `rudp_resume.rs`'in her rUDP akışı mühürlü ve düz metin kapıda koşar (RECONNECT §5). Reset sonrası hızlı yeniden el sıkışma B5b'nin stateless reset'iyle gelir |
 
 ## 13. Bu turun çekirdeği (`crates/gsb-net/src/seal/`)
 
@@ -458,6 +479,16 @@ Kripto bağlandıktan sonra (B5a) **mühürlü kip üretim varsayılanıdır**
 | `replay.rs` | `REPLAY_WINDOW` bit halkası |
 | `reset.rs` | `ResetKey`, `ResetToken` (sabit zamanlı karşılaştırma) |
 | `wire.rs` | SEALED başlık sabitleri ve kodlama/çözme |
+
+**B5a'nın çekirdeğe eklediği** (vektörler ve testler değişmedi, yeşil):
+- `StaticKey::private_bytes()` — özel yarı, `Zeroizing` içinde (anahtar
+  dosyası/efemeral test ve yük koşusu config'i için; asla loglanmaz).
+- `impl Debug for StaticKey` — yalnız açık yarıyı yazar (`UdpSecurity`'nin
+  `Debug`'ı hiçbir anahtar yazmaz); testli.
+- Test kancaları `Sealer::set_next_counter_for_test`,
+  `Opener::set_forged_for_test` `pub(super)` → `pub(crate)`
+  (`#[cfg(test)]`; rUDP'nin sınır testleri onları kullanır).
+- Modül belgeleri "bağlı değil" yerine "B5a'da bağlandı".
 
 **Bağımlılıklar** (hepsi saf Rust; `ring` yalnız mevcut quinn/rustls
 yolundan gelir, yenilerden hiçbiri getirmez):
@@ -509,3 +540,137 @@ yolundan gelir, yenilerden hiçbiri getirmez):
   https://www.nccgroup.com/research-blog/public-report-rustcrypto-aesgcm-and-chacha20pluspoly1305-implementation-review/
 - **netcode:** https://github.com/mas-bandwidth/netcode/blob/main/STANDARD.md
 - **C#:** https://github.com/bcgit/bc-csharp
+
+## 15. B5a: bağlama (2026-10-02)
+
+**Kod:** `crates/gsb-net/src/udp/sealed.rs` (kip `UdpSecurity`, el
+sıkışma teli, `UDP_SEND` yükü, sayaçlar) + `sealed/budget.rs` (DH
+kovası); `udp/demux/noise.rs` (proof → msg1 biçimi → kova → CID → DH),
+`udp/demux/record.rs` (SEALED yönlendirme, açma, retler, göç kuralı,
+bütünlük sınırında kapanış), `udp/writer/seal.rs` (her s→c datagramı
+mühürlenir; `UDP_SEND`; sayaç tavanında kapanış), `udp/client/seal.rs` +
+`client/handshake.rs` (istemci NK, sabitlenmiş anahtar, retler);
+`gsb-server` `config/udp_key.rs` (anahtar, kip). Tel tabloları ve
+uyumluluk matrisi DESIGN §6 "Kayıt katmanı"nda.
+
+**Kararlar ve gerekçeleri:**
+1. **Demux'ın gönderdikleri yazıcıdan (`UDP_SEND`, opcode 16).** Demux
+   ACK'i ve PATH_CHALLENGE'ı doğrudan gönderiyordu; mühürlü kapıda s→c
+   `Sealer` yazıcıdadır. Demux'a ikinci bir `Sealer` vermek (ayrı sayaç
+   alanı ya da alt anahtar) reddedildi: istemcinin TEK replay penceresi
+   farklı hızla ilerleyen iki sayaç alanını kaldıramaz (yavaş taraf
+   `TooOld` olurdu), alt anahtar ise yönü ikiye böler ve Opener'ı
+   değiştirirdi. Bedel: ACK başına bir kanal atlaması (µs) ve dolu kanalda
+   kayıp (sayılı: `udp_acks_not_queued`); istemci yeniden gönderir.
+2. **Güvenilir band iç datagramı tutar, her gönderim yeniden
+   mühürlenir.** Aynı sayaçla yeniden göndermek alıcının replay
+   penceresinde düşer; mühürlü baytı saklamak nonce'u tekrar etmezdi ama
+   işe yaramazdı. Yazıcı ve istemci aynı kuralı izler (`wire`).
+3. **İdempotent proof: accept saklanır, ilk açılan kayıtta bırakılır.**
+   msg1 karşılaştırılmaz: aynı adres + nonce'a bağlı doğrulanan çerez
+   aynı el sıkışmadır; sahte msg1'e saklanan msg2 saldırgana bir şey
+   vermez. Oturum boyu saklamak 100k'da ~7,7 MB olurdu, gereksiz.
+4. **Mühürlü kapıda CID her oturuma.** Kayıt başlığı CID'yi taşır;
+   CID'siz mühürlü oturum yönlendirilemez. Entropi başarısızsa oturum
+   kurulmaz (sayılı `udp_entropy_draws_failed`), zayıf değer yok.
+   `udp_migration = false` mühürlü kapıda CID'yi kaldırmaz, yalnız başka
+   adresten geleni okumaz (`udp_datagrams_no_session`).
+5. **Reset jetonu alanı dolu, kapı başına rastgele anahtardan.** Tel
+   (msg2'nin 24 B'lik yükü) B5b'de değişmesin diye; anahtarın config'e
+   taşınması (karar 9) ve jetonun kullanımı B5b.
+6. **Anahtar biçimi: 64 hex, satır içi ya da dosya.** `udp_cookie_key`
+   ile aynı yazım (config'de ham anahtar baytları için tek biçim);
+   base64 (WireGuard) ek kod ve ikinci biçim olurdu. Dosya yolu üretim
+   için (anahtar config dosyasının dışında). Hata metinleri anahtarın
+   hiçbir karakterini taşımaz (testli). Testler ve yük üreteci çalışma
+   anında üretir (`gsb_server::ephemeral_udp_key`) — sertifikalar gibi
+   depoya anahtar girmez.
+7. **Bütçe varsayılanı 1000/s, kova 50 ms.** Ölçülen ~130–180 µs/el
+   sıkışma (yüklü makine) ile demux'ın ~%13–18'i; 1000 oyunculuk
+   fırtına ~1 sn'de girer (ölçüm aşağıda: p99 1,0–1,4 sn; bütçesiz
+   ~0,3 sn). Kova küçük tutuldu: büyük kova fırtınada demux'ı yüz
+   milisaniyelerce DH'ye bağlardı.
+8. **Mühürlü istemci düz metin kabulü görünce hemen bırakmaz.** Kabul
+   imzasızdır, yol dışı saldırgan sahteleyebilir; hemen bırakmak el
+   sıkışmayı öldürmeye açık olurdu. Sayar, bekler; süre dolunca yalnız
+   düz metin kabul gördüyse `ConnectionRefused` ("düz metin kapı?").
+9. **Bütünlük sınırı ve sayaç tavanı oturumu kapatır** — yeni kapanış
+   nedeni açılmadı: `stream_rejected` ("taşıma akışı reddetti") anlamca
+   tutar; ayrıntı `udp_sessions_ended_seal_limit` ve gerekçe metninde.
+
+**Ölçüm (B5a, 2026-10-02, release; Ryzen 9 7950X, 32 iş parçacığı,
+`rmem_max` 4 MiB).** **Yük notu, dürüstçe:** makinede başka işler
+koşuyordu; 1 dk yük ortalaması 20 dk beklemede de 5'in altına inmedi —
+koşular yük **11–38** iken alındı (her satırda başlangıç yükü). Sayılar
+sessiz makinede daha iyi olur; oranlar ve sıralama anlamlıdır.
+
+*El sıkışma CPU'su (B110 sondası `seal::tests::cost`, değişmedi; yük
+~33, 3 koşu):* responder el sıkışması **130–136 µs** (çekirdek-saniyede
+~7,3–7,7 bin), istemcinin msg1'i 64–67 µs, bir X25519 39–40 µs, oran 3,4.
+u89'un 175–186 µs'si (yük ~36) ile aynı sınıf.
+
+*Demux'ın datagram başına CPU'su (yeni sonda
+`udp::demux::tests::sealed::cost`, 40 B'lik girdi, 200k datagram, yük
+~22–23, 3 koşu):* düz metin **132–136 ns**, mühürlü **1300–1355 ns**
+(76 B kayıt): **kayıt katmanı datagram başına ~1,17 µs ekler** (açma =
+ChaCha20-Poly1305 + düz metnin `Vec`'i + kopya). Soketten okuma
+(`recv_from`, ~0,1–0,3 µs) iki kolda da ayrıca.
+
+*100k çıkarımı (B107'nin sorusu):* demux tek görev. Oturum başına
+saniyede `r` gelen datagramla ek açma CPU'su `100k × r × 1,17 µs`:
+`r = 2` → **0,23 çekirdek**; `r = 10` (150 ms'lik girdi + ACK + rapor —
+loadgen'in profili) → **1,17 çekirdek**, toplam demux işi
+(`~1,3 µs + recv`) ~1,5–1,6 çekirdek: **tek demux 100k mühürlü oturumu
+10 dg/s'de taşıyamaz**; bu ölçümle tavan ~600–700 bin datagram/s/çekirdek
+≈ 10 dg/s'de ~60–70k oturum. Çözüm yolları (b5a satırı, BACKLOG):
+tahsissiz yerinde açma (`Opener::open_in_place` — tahsis ve kopya
+gider), açmayı demux'tan almak (oturum başına işçi ya da kapının
+paylaştırılması; B121'in DH için önerdiği işçi biçimiyle birlikte).
+
+*rUDP katılma fırtınası* (`gsb-loadgen 1000 --orchestrate --procs 2
+--visibility spatial --duration 8 --transport udp --udp-security
+{plaintext|sealed} [--udp-recv-buffer 4194304]
+[--udp-handshakes-per-sec N]`; her koşuda `connected = joined = 1000`,
+`errors = 0`, `seal_forged = 0`):
+
+| Kol | arabellek | yük | connect p50 / p99 ms | `hs_retries` | `udp_proofs_refused_budget` | `RcvbufErrors` |
+|---|---|---|---|---|---|---|
+| düz metin | varsayılan | 11 · 23 · 22 | 71/556 · 61/574 · 65/363 | 1360 · 1394 · 1322 | — | 4909 · 4931 · 5056 |
+| düz metin | 4 MiB | 11 · 28 · 38 | 50/81 · 47/105 · 54/125 | 128 · 12 · 96 | — | 0 · 0 · 0 |
+| mühürlü (bütçe 1000/s) | varsayılan | 20 · 23 · 29 | 777/2190 · 968/2384 · 965/2382 | 5550 · 5869 · 5847 | 2793 · 3166 · 3439 | 4977 · 5524 · 5064 |
+| mühürlü (bütçe 1000/s) | 4 MiB | 23 · 25 · 37 | 476/1189 · 464/1379 · 483/1045 | 3136 · 3080 · 3095 | 3084 · 3024 · 3095 | 0 · 0 · 0 |
+| mühürlü, bütçe YOK (`0`) | 4 MiB | 33 · 33 · 36 | 178/335 · 147/298 · 165/299 | 1092 · 876 · 1193 | 0 | 0 · 0 · 0 |
+| mühürlü, bütçe 5000/s | 4 MiB | 32 · 35 · 36 | 151/280 · 190/318 · 165/305 | 677 · 1264 · 756 | 0 | 0 · 0 · 0 |
+
+Sunucu CPU'su (`server_cpu_s`, 8 sn'lik koşunun tamamı): düz metin
+5,9–12,3, mühürlü 10,1–15,6 (yükte gürültülü; fark el sıkışma DH'si +
+açma + mühürleme).
+
+**Okuma.** (1) Mühürlü fırtınanın gecikmesini **bütçe** belirliyor, DH
+değil: 1000 el sıkışma 1000/s'de en az ~1 sn — p99 4 MiB'de 1,0–1,4 sn;
+bütçesiz ya da 5000/s'de p99 ~0,3 sn (düz metnin 4 MiB'lik 0,08–0,13
+sn'sine karşı: +~0,2 sn = 1000 × ~135 µs'lik DH'nin demux'ta seri
+işlenmesi ve istemcinin kendi DH'leri). (2) Reddedilen proof istemci
+başına ~3: kova 50 ms'lik, yeniden gönderimler ≤ 200 ms'de. (3)
+Varsayılan arabellekte çekirdek düşüşleri iki kipte aynı sınıf (~5000);
+mühürlü proof/accept daha büyük olsa da düşüşü bütçenin yeniden
+gönderimleri büyütür. **Karar (bu tur):** varsayılan 1000/s kaldı —
+sözleşmenin değeri ve gerekçesi (demux'ın ≤ ~%14–18'i DH'ye); fırtına
+p99'u ~1 sn uzar. Hızlı katılma isteyen dağıtım bütçeyi yükseltir
+(`udp_handshakes_per_sec`, OPS §2); seçim kullanıcıya (BACKLOG b5a
+satırı).
+
+**B5b'nin devraldığı:**
+- Rekey politikası (ne zaman) ve ACK → sayaç eşlemesi
+  (`Sealer::note_peer_ack`): REL ACK'i hangi kayıt sayacına karşılık
+  geliyor — yazıcı her REL gönderiminin sayacını tutmalı (yeniden
+  gönderim yeni sayaç alır).
+- Stateless reset: config'de 32 B reset anahtarı (karar 9; bugün kapı
+  başına rastgele), bilinmeyen CID'li SEALED datagramına kısa ve oranlı
+  reset (demux'ta bugün `udp_cid_unknown` sayılıp düşer — kanca orası),
+  istemcide `Forged` sonrası sabit zamanlı jeton kontrolü ve sayaç adı.
+- CID rotasyonu / adres doğrulama jetonu (opsiyonel).
+- Kova adaleti (B120) ve DH'yi işçi havuzuna taşıma (B121) — ölçüme
+  bağlı.
+- Dış inceleme (D13) bu turun kodunu da kapsar (§11 madde 3).
+
