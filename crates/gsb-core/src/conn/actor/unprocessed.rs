@@ -31,12 +31,20 @@ impl super::ConnectionActor {
     /// relayed by the registry, a pump's, a destroyed room's) is one the
     /// session would have booked in `server_closes` and its client would
     /// have been told, and got the stop's `ERROR` 14 instead: a lost
-    /// verdict, sent as `MetricsEvent::VerdictsLost`. Only the first — a
-    /// session books one reason. Behind a verdict or a client's end a
-    /// second verdict loses nothing: the session already had its end.
-    pub(super) fn abandon_inbox(&mut self, stopped: bool) {
+    /// verdict, sent as `MetricsEvent::VerdictsLost`. Only ONE per
+    /// session — a session books one reason: the verdict the stop's
+    /// notice says it `overtaken` (F60: the registry decided it before
+    /// its stop, and it was still waiting for room in this inbox — behind
+    /// the notice now, or refused by the close below, and counted by
+    /// nobody else), else the first verdict found behind the stop.
+    /// Behind a verdict or a client's end a second verdict loses
+    /// nothing: the session already had its end.
+    pub(super) fn abandon_inbox(&mut self, stopped: bool, overtaken: Option<ServerClose>) {
         self.inbox.close();
         let mut lost = VerdictsLost::default();
+        if let Some(verdict) = overtaken {
+            lost.close(verdict);
+        }
         while let Ok(msg) = self.inbox.try_recv() {
             if let ConnIn::Frame(frame) = &msg {
                 self.count_unprocessed(frame.op);

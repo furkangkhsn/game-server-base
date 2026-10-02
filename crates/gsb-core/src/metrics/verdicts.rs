@@ -20,10 +20,12 @@
 //! - carried out, but the connection had taken the stop's
 //!   `ConnIn::Shutdown` first and the verdict was left in its inbox —
 //!   the connection's end (any server verdict left there: a pump's too);
-//! - posted to the connection while its inbox was full, the stop's notice
-//!   reached it first and it closed its inbox before a slot freed: the
-//!   send was refused — the registry's fallback sender (F58,
-//!   `registry/actor/tell.rs`).
+//! - posted to the connection while its inbox was full, and the stop's
+//!   notice reached it first: the notice names that verdict
+//!   (`ConnIn::ShutdownOvertaking`) and the connection's end counts it
+//!   — whether it is behind the notice or its spawned send is refused
+//!   (F58, F60, `registry/actor/tell.rs`). One per session either way:
+//!   the named verdict, else the first one behind the stop.
 //!
 //! The client then gets the stop's `ERROR` 14 instead of the verdict,
 //! and `server_closes` never books it. B57 had left these uncounted

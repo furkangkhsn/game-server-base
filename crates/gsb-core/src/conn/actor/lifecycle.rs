@@ -96,8 +96,10 @@ impl super::ConnectionActor {
     /// ordering with the first client frame is guaranteed.
     pub async fn run(mut self) {
         // Whether the SERVER'S STOP ended the session (`ConnIn::Shutdown`):
-        // a verdict still behind it in the inbox is then a lost one (F56).
+        // a verdict still behind it in the inbox is then a lost one (F56)
+        // — or, when the stop says it overtook one (F60), that one.
         let mut stopped = false;
+        let mut overtaken = None;
         while let Some(msg) = self.inbox.recv().await {
             match msg {
                 ConnIn::Frame(frame) => {
@@ -198,11 +200,18 @@ impl super::ConnectionActor {
                     stopped = true;
                     break;
                 }
+                ConnIn::ShutdownOvertaking(verdict) => {
+                    // The same stop, ahead of a verdict the registry
+                    // decided before it (F60): that verdict is the lost one.
+                    self.on_shutdown();
+                    (stopped, overtaken) = (true, Some(verdict));
+                    break;
+                }
             }
         }
 
-        // What the end left in the inbox, counted (B60, F56).
-        self.abandon_inbox(stopped);
+        // What the end left in the inbox, counted (B60, F56, F60).
+        self.abandon_inbox(stopped, overtaken);
 
         // Metrics: final flush of whatever is unflushed (marks the
         // connection's end).

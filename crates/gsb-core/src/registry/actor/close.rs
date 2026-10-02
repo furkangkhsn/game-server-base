@@ -74,7 +74,7 @@ where
             // `ConnClosed` routes a DETACH, the game's `on_disconnect`
             // runs once.
             debug!(%conn, room = %room, entity, ?cause, "close request for an earlier membership: the table stays, the connection closes");
-            self.tell_closed(inbox, cause, reason);
+            self.tell_closed(conn, inbox, cause, reason);
             return;
         }
         if parked {
@@ -86,7 +86,7 @@ where
             self.settle_ended(conn, room);
         }
         debug!(%conn, room = %room, parked, ?cause, "room asked for the connection's close");
-        self.tell_closed(inbox, cause, reason);
+        self.tell_closed(conn, inbox, cause, reason);
     }
 
     /// Relay a room's verdict to the connection, never awaited here. No
@@ -101,12 +101,18 @@ where
     /// stop's notice, and after the connection had closed its inbox be
     /// refused: a verdict lost uncounted (F56 counts the one behind).
     ///
-    /// The one way the spawned send loses it — refused by a connection
-    /// that ended first, at the stop — is counted where it happens
-    /// (`Self::tell`, BACKLOG F58).
-    fn tell_closed(&self, inbox: Option<Mailbox<ConnIn>>, cause: ServerClose, reason: String) {
+    /// A verdict left waiting in the spawned send is named by the stop's
+    /// notice, so the connection that reads the stop first counts it as
+    /// lost, once (`Self::tell`, BACKLOG F58, F60).
+    fn tell_closed(
+        &mut self,
+        conn: ConnectionId,
+        inbox: Option<Mailbox<ConnIn>>,
+        cause: ServerClose,
+        reason: String,
+    ) {
         if let Some(inbox) = inbox {
-            self.tell(&inbox, ConnIn::ServerClosed { cause, reason });
+            self.tell(conn, &inbox, ConnIn::ServerClosed { cause, reason });
         }
     }
 
@@ -177,6 +183,8 @@ where
             identity: info.identity.clone(),
             authed: true,
             detached: true,
+            // A park row has no transport: nothing to name at the stop.
+            verdict_in_flight: None,
         };
         if info.detached {
             self.conns.remove(&conn);

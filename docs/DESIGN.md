@@ -3036,10 +3036,12 @@ yerlerden TAM BİRİNDE yakalanır; her yer kendi yakaladığını sayar:
    ve oturum başına yalnız İLKİ sayılır — oturum tek gerekçe yazar;
    bir hükmün ya da istemcinin kendi sonunun arkasındaki hüküm hiçbir
    şey kaybettirmez (oturum zaten bitti).
-5. **Bağlantının kapalı kutusu spawn'lu yedeği reddetti** — bağlantının
-   kutusu doluyken işlenen hüküm yedek göndericide bekliyordu, duruşun
-   bildirimi bağlantıya önce vardı: registry'nin yedeği
-   (`registry/actor/tell.rs`, F58; aşağıda).
+5. **Duruşun bildirimi spawn'lu yedeği geçti** — bağlantının kutusu
+   doluyken işlenen hüküm yedek göndericide bekliyordu, duruşun
+   bildirimi bağlantıya önce vardı: bildirim o hükmü ADIYLA taşır
+   (`ConnIn::ShutdownOvertaking`), onu ilk okuyan bağlantının sonu sayar
+   (`abandon_inbox`; F58'in ret noktasındaki sayımının yerine F60 —
+   aşağıda "Oturum başına tek kayıp hüküm (F60)").
 
 Her yer saydığını tek `MetricsEvent::VerdictsLost` ile gönderir
 (durdurma-mesajı deyimi; oda/shard son örneğinden ÖNCE, hiçbir şey
@@ -3071,7 +3073,9 @@ gönderimle ikisi de kırmızı).
 **Spawn'lu yedeğin reddi sayılıyor (F58).** Bağlantının kutusu doluyken
 işlenen hüküm spawn'lu yedekle gider ve aynı yarışa girebilir:
 duruşun bildirimi önce varır, bağlantı kutusunu kapatır, yedek
-reddedilir — hiçbir yer saymıyordu. Artık reddin olduğu yerde sayılıyor:
+reddedilir — hiçbir yer saymıyordu. F58 onu reddin olduğu yerde saydı
+(bu paragraf o hâli anlatır; F60 sayımı bağlantıya taşıdı, `post_or`
+kalktı — aşağıda):
 registry'nin bağlantıya her HÜKMÜ (`tell_closed`'un kapatma hükmü,
 `superseded`, doğum tavanları, iki `RoomGone`) `Registry::tell` ile
 gider (`registry/actor/tell.rs`), o da `channel::post_or` ile —
@@ -3083,11 +3087,9 @@ haber vermeden ÖNCE kapatır) hüküm gerekçesiyle tek
 registry çalışırken red, kendi kendine bitmiş bir bağlantıdır — kutusundaki
 istemci sonunun arkasındaki hüküm gibi, kayıp yok. Hüküm taşımayan
 bildirim (`LeftRoom`: registry satırı zaten yerleştirdi) `post`'ta kaldı;
-eşleme bağlantının sonuyla ortak (`ConnIn::verdict`). Sınırlı
-belirsizlik: aynı oturumun kutusunda duruşun arkasında başka bir hüküm
-de bulunmuşsa (pompanınki) ikisi de sayılır; duruşta istemcisi kendi
-bitmiş oturumun bekleyen hükmü de sayılır — ikisi de dolu kutu +
-duruş penceresi gerektirir. Kilit: `registry::actor::close::tests::refused`
+eşleme bağlantının sonuyla ortak (`ConnIn::verdict`). (F60 bu
+ret-noktası sayımını kaldırdı: iki oturumda yanlış sayıyordu — aşağıda.)
+Kilit (F58 hâli): `registry::actor::close::tests::refused`
 (dolu kutu, hüküm spawn'lu yedekte, registry durur, bağlantı biter →
 1 `kicked`; aynı yoldan yok edilen odanın `RoomGone`'u → 1 `room_gone`;
 aynısı registry çalışırken → 0; `ConnIn::verdict` eşlemesi her kolda;
@@ -3105,6 +3107,46 @@ boşaltmasının ve bağlantının saydığıyla tek ailede toplanamazdı.
 Kilit: `registry::close::tests`, `room::tests::idle::stop`,
 `shard::tests::idle::stop`, `registry::actor::run::leftovers::tests`,
 `conn_counts::stopped`.
+
+**Oturum başına tek kayıp hüküm (F60).** F58'in ret noktasındaki sayımı
+oturumun nasıl bittiğini bilmeden sayıyordu; iki yanlışı vardı, ikisi de
+dolu bağlantı kutusu + duruş penceresi ister: (a) bağlantının sonu
+duruşun arkasında bir hüküm (pompanınki) bulup saydı, registry'nin aynı
+oturuma spawn'lu yedekteki hükmü de duruştan sonra reddedilip sayıldı —
+bir oturum için iki kayıp; (b) istemcisi (ya da başka bir hüküm) oturumu
+önce bitirmiş bağlantının reddettiği yedek de, registry durmuşsa,
+sayılıyordu — oysa oturum zaten bitmişti, kayıp yok (bağlantının kendi
+sonu da istemci sonunun arkasındaki hükmü saymaz). Oturumun nasıl
+bittiğini yalnız bağlantı bilir; sayım ona taşındı:
+
+- registry yedeğe düşen (yerinde kuyruklanamayan) İLK hükmü satırına
+  yazar (`ConnInfo::verdict_in_flight`, `registry/actor/tell.rs`;
+  `channel::post_where` yerinde/yedek/ret ayrımını söyler). Satırsız
+  bağlantı (doğumda tavan reddi) duruş bildirimi almaz — hükmü okur ya
+  da kendi biter, kayıp yok;
+- duruşun bildirimi o satır için `ConnIn::Shutdown` yerine
+  `ConnIn::ShutdownOvertaking(hüküm)`'dür. Bağlantı onu ilk okursa duruş
+  gibi biter (ERROR 14, aynı tel) ve adı geçen hükmü TEK kayıp hüküm
+  olarak sayar — hüküm arkasında da olsa, kapanışta reddedilse de;
+  arkasında bulunan başka bir hüküm (pompanınki) ikinci kez sayılmaz.
+  Etiket: adı geçen hüküm, çünkü registry onu duruşundan ÖNCE verdi;
+  arkadaki hüküm duruştan sonra da verilmiş olabilir;
+- hükmü önce okuyan bağlantı onunla biter (`server_closes`'ta, kayıp
+  değil) ve duruş bildirimini hiç okumaz; kendi biten bağlantı ikisini de
+  okumaz. Spawn'lu yedeğin reddi bu yüzden hiçbir yerde sayılmaz: oturum
+  hangi yolla bittiyse sonu kaybını saymıştır.
+
+Satır alanı hiç temizlenmez: hüküm oturumu bitirir; satırı duruşa kadar
+yaşayan bağlantı hükmü henüz okumamıştır (okuduysa `ConnClosed` satırı
+söker ya da `inbox`'ı düşürür). `LeftRoom` hüküm değildir, bildirimi
+düz `Shutdown` kalır. Elenen: bağlantı ile yedek arasında paylaşılan bir
+"oturum sonu" atomiği (kanal dışı ortak durum; duruş bildirimi zaten
+bağlantıya giden tek sıralı yol), registry'nin duruşu yedeğin arkasına
+zincirlemesi (bağlantı başına sıralı röle görevi — aynı sonucu daha
+pahalı verir). Kilit: `registry::actor::close::tests::twice` (önce
+kırmızı: (a) 2 saydı, (b) iki biçimde 1 saydı) ve `…::refused` (duruş
+yedekteki hükmü — ilkini — adıyla taşır; yerinde giden hüküm ve
+`LeftRoom` için düz `Shutdown`; ret sayılmaz).
 
 **Kapalı registry'ye katılma (F54).** `Shutdown` kolu kutuyu kapattıktan
 sonra hâlâ yaşayan bir bağlantıya gelen JOIN'in `SpawnPlayer` gönderimi

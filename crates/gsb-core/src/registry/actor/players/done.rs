@@ -51,9 +51,9 @@ where
                 None => None,
             };
             if let Some(inbox) = notify {
-                // Posted: in place when the inbox has room (F57); a
-                // refused fallback is counted at the stop (F58).
-                self.tell(&inbox, ConnIn::RoomGone(room));
+                // Posted: in place when the inbox has room (F57); one
+                // left waiting is named by the stop's notice (F60).
+                self.tell(conn, &inbox, ConnIn::RoomGone(room));
             }
             debug!(
                 %conn,

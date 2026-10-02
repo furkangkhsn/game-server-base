@@ -64,9 +64,10 @@ where
                 let reason = "a newer session for this player superseded this \
                      connection"
                     .to_string();
-                // Posted: in place when the inbox has room (F57); a
-                // refused fallback is counted at the stop (F58).
+                // Posted: in place when the inbox has room (F57); one
+                // left waiting is named by the stop's notice (F60).
                 self.tell(
+                    old_conn,
                     &inbox,
                     ConnIn::ServerClosed {
                         cause: ServerClose::Superseded,

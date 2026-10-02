@@ -33,15 +33,24 @@ where
             let _ = op_tx.try_send(RoomOp::Close);
         }
         self.conn_ops.clear();
-        // 2. Notify every registered connection.
-        let doomed: Vec<Mailbox<ConnIn>> = self
+        // 2. Notify every registered connection — naming the verdict
+        //    still waiting for room in its inbox, if any: the stop may
+        //    overtake it, and the connection that reads the stop first
+        //    counts it lost (F60, the `tell` module).
+        let doomed: Vec<(Mailbox<ConnIn>, ConnIn)> = self
             .conns
             .values()
-            .filter_map(|i| i.inbox.clone())
+            .filter_map(|i| {
+                let notice = match i.verdict_in_flight {
+                    Some(verdict) => ConnIn::ShutdownOvertaking(verdict),
+                    None => ConnIn::Shutdown,
+                };
+                Some((i.inbox.clone()?, notice))
+            })
             .collect();
-        for inbox in doomed {
+        for (inbox, notice) in doomed {
             tokio::spawn(async move {
-                let _ = inbox.send(ConnIn::Shutdown).await;
+                let _ = inbox.send(notice).await;
             });
         }
         self.conns.clear();

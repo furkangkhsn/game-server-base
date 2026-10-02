@@ -266,19 +266,35 @@ pub enum ConnIn {
     LeftRoom { room: RoomId },
     /// Server-wide shutdown.
     Shutdown,
+    /// Server-wide shutdown, sent to a connection whose verdict the
+    /// registry had decided earlier but could not queue in place (its
+    /// inbox was full: the verdict waits in a spawned sender, BACKLOG
+    /// F60). The stop may overtake it. Read first, it is the stop — and
+    /// the verdict it carries is the one the session lost (counted once,
+    /// at the connection's end, under this reason); the verdict itself,
+    /// behind it or refused at the end, is not counted again. Read
+    /// behind the verdict, it is never read at all: the verdict ended
+    /// the session.
+    ShutdownOvertaking(ServerClose),
 }
 
 impl ConnIn {
     /// The server verdict this message carries — the reason its session
     /// would book in `server_closes` — or `None` for a message that is
     /// not one (a frame, the client's end, a membership notice, the
-    /// stop). What a lost message costs (F56, F58).
+    /// stop — also the stop that overtook a verdict: the verdict is
+    /// counted by whoever reads that notice, F60). What a lost message
+    /// costs (F56, F58).
     pub(crate) fn verdict(&self) -> Option<ServerClose> {
         match self {
             Self::ServerClosed { cause, .. } => Some(*cause),
             Self::RoomGone(_) => Some(ServerClose::RoomGone),
             Self::StreamRejected { .. } => Some(ServerClose::StreamRejected),
-            Self::Frame(_) | Self::Closed { .. } | Self::LeftRoom { .. } | Self::Shutdown => None,
+            Self::Frame(_)
+            | Self::Closed { .. }
+            | Self::LeftRoom { .. }
+            | Self::Shutdown
+            | Self::ShutdownOvertaking(_) => None,
         }
     }
 }

@@ -1,10 +1,9 @@
 //! A verdict whose connection's inbox was FULL goes from a spawned
-//! sender (BACKLOG F58). If the connection ends before a slot frees —
-//! at the stop, the stop's own notice can reach it first — the send is
-//! refused: counted then, in `close_verdicts_lost`, when the registry had
-//! already stopped (the verdict was decided before the stop, and the
-//! stop kept it from the client). A refusal while the registry runs is
-//! a connection that ended on its own: nothing lost, nothing counted.
+//! sender (BACKLOG F58). At the stop, the stop's own notice can reach the
+//! connection first. Since F60 the refusing side counts nothing (it
+//! cannot know how the session ended): the stop's notice names the
+//! verdict left waiting (`ConnIn::ShutdownOvertaking`), and the
+//! connection that reads it first counts it, once (`twice.rs`).
 
 use super::*;
 use crate::metrics::{MetricsEvent, VerdictsLost};
@@ -77,18 +76,35 @@ async fn lost(mut metrics: mpsc::Receiver<MetricsEvent>) -> VerdictsLost {
 }
 
 /// The kick meets the full inbox and waits in a spawned sender; the
-/// registry stops; the connection ends before a slot frees: the refused
-/// kick is counted, once, under its reason.
+/// registry stops: its notice names the kick (F60), and whichever of the
+/// two the connection reads first, it reads both.
 #[tokio::test]
-async fn a_verdict_refused_after_the_stop_is_counted() {
+async fn the_stop_names_a_verdict_left_waiting() {
+    let (mut reg, tx, mut conn, _metrics) = registry_full();
+    reg.on_close_conn(kick());
+    tx.try_send(RegistryMsg::Shutdown).expect("room");
+    reg.run().await;
+    let told = read(&mut conn, 3).await;
+    assert!(matches!(told[0], ConnIn::LeftRoom { .. }), "{told:?}");
+    let named = told
+        .iter()
+        .filter(|m| matches!(m, ConnIn::ShutdownOvertaking(ServerClose::Kicked)))
+        .count();
+    let kicks = told.iter().filter(|m| m.verdict().is_some()).count();
+    assert_eq!((named, kicks), (1, 1), "{told:?}");
+}
+
+/// Refused after the stop, the kick is not counted where it is refused:
+/// the connection's end counts what its session lost (F60 — a connection
+/// that ended without reading the stop ended on its own).
+#[tokio::test]
+async fn a_verdict_refused_after_the_stop_is_not_counted_at_the_refusal() {
     let (mut reg, tx, mut conn, metrics) = registry_full();
     reg.on_close_conn(kick());
     tx.try_send(RegistryMsg::Shutdown).expect("room");
     reg.run().await;
     end(&mut conn);
-    let lost = lost(metrics).await;
-    assert_eq!(lost.closes.get(ServerClose::Kicked), 1, "{lost:?}");
-    assert_eq!(lost.closes.total(), 1, "{lost:?}");
+    assert!(lost(metrics).await.is_empty());
 }
 
 /// The same refusal while the registry still runs: the connection ended
@@ -108,18 +124,73 @@ async fn a_verdict_refused_while_the_registry_runs_is_not_counted() {
     assert!(lost(metrics).await.is_empty());
 }
 
-/// A destroyed room's notice waits the same way: refused after the
-/// stop, it is counted under `room_gone`.
+/// A destroyed room's notice waits the same way: the stop names it
+/// under `room_gone`.
 #[tokio::test]
-async fn a_room_gone_refused_after_the_stop_is_counted() {
-    let (mut reg, tx, mut conn, metrics) = registry_full();
+async fn the_stop_names_a_room_gone_left_waiting() {
+    let (mut reg, tx, mut conn, _metrics) = registry_full();
     reg.notify_room_gone(RoomId(1));
     tx.try_send(RegistryMsg::Shutdown).expect("room");
     reg.run().await;
-    end(&mut conn);
-    let lost = lost(metrics).await;
-    assert_eq!(lost.closes.get(ServerClose::RoomGone), 1, "{lost:?}");
-    assert_eq!(lost.closes.total(), 1, "{lost:?}");
+    let told = read(&mut conn, 3).await;
+    let named = told
+        .iter()
+        .any(|m| matches!(m, ConnIn::ShutdownOvertaking(ServerClose::RoomGone)));
+    assert!(named, "{told:?}");
+}
+
+/// Two verdicts left waiting: the stop names the first the registry
+/// decided — the one the session would have read first had the stop not
+/// overtaken them.
+#[tokio::test]
+async fn the_stop_names_the_first_verdict_left_waiting() {
+    let (mut reg, tx, mut conn, _metrics) = registry_full();
+    reg.on_close_conn(kick());
+    // A second verdict for the (now settled) membership: B43's arm.
+    reg.on_close_conn(CloseRequest {
+        cause: ServerClose::IdleInput,
+        ..kick()
+    });
+    tx.try_send(RegistryMsg::Shutdown).expect("room");
+    reg.run().await;
+    let told = read(&mut conn, 4).await;
+    let named = told
+        .iter()
+        .any(|m| matches!(m, ConnIn::ShutdownOvertaking(ServerClose::Kicked)));
+    assert!(named, "{told:?}");
+}
+
+/// A notice that is no verdict (`LeftRoom`) waiting the same way names
+/// nothing: the stop is the plain one.
+#[tokio::test]
+async fn a_waiting_notice_that_is_no_verdict_names_nothing() {
+    let (mut reg, tx, mut conn, _metrics) = registry_full();
+    reg.on_leave_conn(LeaveRequest {
+        conn: CONN,
+        room: RoomId(1),
+        entity: 7,
+        park: None,
+    });
+    tx.try_send(RegistryMsg::Shutdown).expect("room");
+    reg.run().await;
+    let told = read(&mut conn, 3).await;
+    assert!(
+        told.iter().any(|m| matches!(m, ConnIn::Shutdown)),
+        "{told:?}"
+    );
+}
+
+/// The next `n` messages of the connection's inbox, each in time.
+async fn read(conn: &mut Inbox<ConnIn>, n: usize) -> Vec<ConnIn> {
+    let mut told = Vec::new();
+    for _ in 0..n {
+        let msg = tokio::time::timeout(Duration::from_secs(5), conn.recv())
+            .await
+            .expect("a notice in time")
+            .expect("the registry's senders");
+        told.push(msg);
+    }
+    told
 }
 
 /// What a lost message costs, shared by the connection's end and the
@@ -145,7 +216,8 @@ fn a_message_is_a_verdict_only_when_the_server_decided_the_end() {
         reason: String::new(),
     };
     let left = ConnIn::LeftRoom { room: RoomId(1) };
-    for msg in [frame, client, left, ConnIn::Shutdown] {
+    let stop = ConnIn::ShutdownOvertaking(ServerClose::Kicked);
+    for msg in [frame, client, left, ConnIn::Shutdown, stop] {
         assert_eq!(msg.verdict(), None, "{msg:?}");
     }
 }

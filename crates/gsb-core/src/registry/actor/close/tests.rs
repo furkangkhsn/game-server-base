@@ -14,10 +14,11 @@ use crate::channel::{Inbox, Mailbox, channel};
 use crate::conn::{ConnIn, ServerClose};
 use crate::id::{ConnectionId, RoomId};
 use crate::registry::actor::Registry;
-use crate::registry::{CloseRequest, ConnInfo, RegistryMsg, RoomFactory};
+use crate::registry::{CloseRequest, ConnInfo, LeaveRequest, RegistryMsg, RoomFactory};
 use crate::ticker::Ticker;
 
 mod refused;
+mod twice;
 
 type Reg = Registry<(), (), (), ()>;
 

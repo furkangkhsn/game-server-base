@@ -141,7 +141,7 @@ impl super::ConnectionActor {
                     self.server_close = Some(ServerClose::StreamRejected);
                     return;
                 }
-                ConnIn::Closed { .. } | ConnIn::Shutdown => return,
+                ConnIn::Closed { .. } | ConnIn::Shutdown | ConnIn::ShutdownOvertaking(_) => return,
                 // A frame looked through is never processed: counted
                 // (B60), like the ones `abandon_inbox` finds after it.
                 ConnIn::Frame(frame) => self.count_unprocessed(frame.op),

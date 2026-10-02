@@ -203,4 +203,13 @@ pub(crate) struct ConnInfo {
     /// with the entity alive under a bot, genuinely holding its slot and
     /// still a valid resume target (`docs/RECONNECT.md` §9).
     pub(crate) detached: bool,
+    /// The first verdict the registry told this connection that its full
+    /// inbox could not take in place: it waits in a spawned sender
+    /// (`Registry::tell`, BACKLOG F60). Never cleared — a verdict ends the
+    /// session, so a row that outlives it is one whose connection has not
+    /// read it yet. The stop's notice then says so
+    /// ([`ConnIn::ShutdownOvertaking`]): the stop may overtake the
+    /// verdict, and the connection that reads the stop first counts this
+    /// one as its lost verdict, once.
+    pub(crate) verdict_in_flight: Option<crate::conn::ServerClose>,
 }

@@ -46,9 +46,10 @@ where
                 capacity = cap,
                 "server at connection capacity; new connection rejected"
             );
-            // Posted: in place when the inbox has room (F57); a refused
-            // fallback is counted at the stop (F58).
+            // Posted: in place when the inbox has room (F57). No row is
+            // recorded, so no stop notice follows (F60, `Self::tell`).
             self.tell(
+                conn,
                 &inbox,
                 ConnIn::ServerClosed {
                     cause: ServerClose::ConnCap,
@@ -78,6 +79,7 @@ where
                 "server at unauthenticated capacity; new connection rejected"
             );
             self.tell(
+                conn,
                 &inbox,
                 ConnIn::ServerClosed {
                     cause: ServerClose::UnauthCap,
