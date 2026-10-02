@@ -169,7 +169,7 @@ impl<G: Game, M: SectorMap> SectorRoom<G, M> {
         }
     }
 
-    /// Opt in to [`SnapshotBudget`] (BACKLOG B103): a member whose path
+    /// Opt in to [`SnapshotBudget`](crate::budget::SnapshotBudget) (BACKLOG B103): a member whose path
     /// its transport limits (`TickCtx::budget`) gets this room's
     /// full-snapshot frames at the rate its budget carries — every one
     /// when the frame fits — and at least one in every
