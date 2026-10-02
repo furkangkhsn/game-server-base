@@ -423,6 +423,75 @@ transport_counters! {
     /// source holding `max_handshakes_per_source`: the move happened, the
     /// session's place stayed counted at its old source.
     udp_pending_source_moves_kept,
+    /// rUDP demux (sealed door, B5a/B119): verified proofs refused because
+    /// the door's handshake budget (`udp_handshakes_per_sec`, a token
+    /// bucket before the Diffie-Hellman) was empty — no DH, no session,
+    /// no accept; the client re-sends its proof.
+    udp_proofs_refused_budget,
+    /// rUDP demux (sealed door): verified proofs that carried no Noise
+    /// message 1 — a plaintext client (or one built before B5a) at a
+    /// sealed door: refused, no session, no accept (the client's
+    /// handshake times out).
+    udp_proofs_refused_plaintext,
+    /// rUDP demux (sealed door): verified proofs whose Noise message 1
+    /// had the wrong length (refused before any Diffie-Hellman).
+    udp_handshakes_malformed,
+    /// rUDP demux (sealed door): Noise message 1 that failed to
+    /// authenticate after the Diffie-Hellman — a client pinning another
+    /// server key, a forged message, a cookie context that did not match.
+    udp_handshakes_failed_decrypt,
+    /// rUDP demux (sealed door): handshakes the crypto backend failed (not
+    /// caused by the peer's bytes).
+    udp_handshakes_failed_internal,
+    /// rUDP demux (sealed door): session datagrams that arrived unsealed
+    /// (plaintext RAW/REL/ACK/REPORT/FRAG or a CID-tagged one) — every
+    /// datagram of a session on a sealed door is a SEALED record; dropped
+    /// unread.
+    udp_datagrams_unsealed,
+    /// rUDP demux (record layer): sealed datagrams refused because their
+    /// session had already failed authentication more than 2^36 times
+    /// (RFC 9001 §6.6); the session is ended
+    /// (`udp_sessions_ended_seal_limit`).
+    seal_integrity_limit,
+    /// rUDP demux (record layer): sealed datagrams too short for a header
+    /// and a tag, or with a counter at or over 2^62; dropped before the
+    /// AEAD.
+    seal_malformed,
+    /// rUDP demux (record layer): sealed datagrams older than the
+    /// 1024-wide replay window (possibly genuine, reordered that far);
+    /// dropped before the AEAD.
+    seal_too_old,
+    /// rUDP demux (record layer): sealed datagrams whose counter was
+    /// already opened (a replay or a network duplicate); dropped before
+    /// the AEAD.
+    seal_replayed,
+    /// rUDP demux (record layer): sealed datagrams whose key phase bit
+    /// contradicts their counter (no honest peer sends one); dropped
+    /// before the AEAD.
+    seal_wrong_phase,
+    /// rUDP demux (record layer): sealed datagrams that failed
+    /// authentication — forged, corrupted, or under the wrong key.
+    seal_forged,
+    /// rUDP (record layer): sessions ended because a record limit was
+    /// reached — the demux's integrity limit on one session's forged
+    /// datagrams, or a writer's 2^62 record counter (the close cause is
+    /// `stream_rejected`).
+    udp_sessions_ended_seal_limit,
+    /// rUDP demux (sealed door, migration): authenticated datagrams from
+    /// an address that is not their session's which were NOT the newest
+    /// (a lower record counter than one already opened — a reordered or
+    /// replayed-elsewhere copy): processed, but no path validation begun
+    /// (RUDP-SECURITY §7, condition 2).
+    udp_path_candidates_not_newest,
+    /// rUDP demux (sealed door): the reliable band's cumulative ACKs the
+    /// session's writer channel refused (full or closed) — on a sealed
+    /// door the writer seals every server → client datagram; the client
+    /// re-sends what they would have acknowledged.
+    udp_acks_not_queued,
+    /// rUDP demux (sealed door, migration): path challenges the session's
+    /// writer channel refused (full or closed); retried on the
+    /// candidate's next datagram, an interval on.
+    udp_path_challenges_not_queued,
 }
 
 impl TransportCounters {

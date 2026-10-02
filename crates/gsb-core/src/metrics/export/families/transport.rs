@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 87] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 103] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -464,6 +464,86 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 87] 
         "gsb_transport_udp_pending_source_moves_kept_total",
         "rUDP sessions that migrated while pending into a source holding its max_handshakes_per_source: moved, their place kept at the old source, cumulative.",
         |t| t.udp_pending_source_moves_kept,
+    ),
+    tr(
+        "gsb_transport_udp_proofs_refused_budget_total",
+        "Verified rUDP proofs refused because the sealed door's handshake budget (udp_handshakes_per_sec) was empty (no Diffie-Hellman, no session, no accept; the client re-sends), cumulative.",
+        |t| t.udp_proofs_refused_budget,
+    ),
+    tr(
+        "gsb_transport_udp_proofs_refused_plaintext_total",
+        "Verified rUDP proofs without a Noise message 1 at a sealed door (a plaintext client), refused, cumulative.",
+        |t| t.udp_proofs_refused_plaintext,
+    ),
+    tr(
+        "gsb_transport_udp_handshakes_malformed_total",
+        "rUDP proofs whose Noise message 1 had the wrong length, refused before any Diffie-Hellman, cumulative.",
+        |t| t.udp_handshakes_malformed,
+    ),
+    tr(
+        "gsb_transport_udp_handshakes_failed_decrypt_total",
+        "rUDP Noise handshakes whose message 1 failed to authenticate after the Diffie-Hellman (another pinned key, a forgery, a context mismatch), cumulative.",
+        |t| t.udp_handshakes_failed_decrypt,
+    ),
+    tr(
+        "gsb_transport_udp_handshakes_failed_internal_total",
+        "rUDP Noise handshakes the crypto backend failed (not the peer's bytes), cumulative.",
+        |t| t.udp_handshakes_failed_internal,
+    ),
+    tr(
+        "gsb_transport_udp_datagrams_unsealed_total",
+        "rUDP session datagrams that arrived unsealed at a sealed door, dropped unread, cumulative.",
+        |t| t.udp_datagrams_unsealed,
+    ),
+    tr(
+        "gsb_transport_seal_integrity_limit_total",
+        "rUDP sealed datagrams refused because their session exceeded the 2^36 forgery limit (the session is ended), cumulative.",
+        |t| t.seal_integrity_limit,
+    ),
+    tr(
+        "gsb_transport_seal_malformed_total",
+        "rUDP sealed datagrams too short for header and tag, or with a counter at or over 2^62, dropped before the AEAD, cumulative.",
+        |t| t.seal_malformed,
+    ),
+    tr(
+        "gsb_transport_seal_too_old_total",
+        "rUDP sealed datagrams older than the replay window, dropped before the AEAD, cumulative.",
+        |t| t.seal_too_old,
+    ),
+    tr(
+        "gsb_transport_seal_replayed_total",
+        "rUDP sealed datagrams whose record counter was already opened (a replay or a duplicate), dropped before the AEAD, cumulative.",
+        |t| t.seal_replayed,
+    ),
+    tr(
+        "gsb_transport_seal_wrong_phase_total",
+        "rUDP sealed datagrams whose key phase bit contradicts their counter, dropped before the AEAD, cumulative.",
+        |t| t.seal_wrong_phase,
+    ),
+    tr(
+        "gsb_transport_seal_forged_total",
+        "rUDP sealed datagrams that failed authentication (forged, corrupted, wrong key), cumulative.",
+        |t| t.seal_forged,
+    ),
+    tr(
+        "gsb_transport_udp_sessions_ended_seal_limit_total",
+        "rUDP sessions ended because a record limit was reached (the integrity limit, or a writer's record counter), cumulative.",
+        |t| t.udp_sessions_ended_seal_limit,
+    ),
+    tr(
+        "gsb_transport_udp_path_candidates_not_newest_total",
+        "Authenticated rUDP datagrams from a new address that were not the newest record: processed, no path validation begun, cumulative.",
+        |t| t.udp_path_candidates_not_newest,
+    ),
+    tr(
+        "gsb_transport_udp_acks_not_queued_total",
+        "rUDP reliable-band ACKs the sealed session's writer channel refused (the client re-sends), cumulative.",
+        |t| t.udp_acks_not_queued,
+    ),
+    tr(
+        "gsb_transport_udp_path_challenges_not_queued_total",
+        "rUDP path challenges the sealed session's writer channel refused (retried on the candidate's next datagram), cumulative.",
+        |t| t.udp_path_challenges_not_queued,
     ),
 ];
 

@@ -108,6 +108,9 @@
 //! told too). B113's registry-scope `unauth_source_moves_kept=` at the end of that
 //! line, with `gsb_registry_unauth_source_moves_kept_total` after
 //! `gsb_registry_detach_despawns_lost_total`.
+//! B5a's sixteen transport counters at the end of that line and table
+//! (`udp_proofs_refused_budget` .. `udp_path_challenges_not_queued`,
+//! the record layer's six `seal_*` refusals among them).
 
 use super::*;
 use crate::conn::ServerClose;

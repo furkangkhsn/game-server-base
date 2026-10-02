@@ -294,6 +294,38 @@ gsb_transport_udp_proofs_refused_per_source sum t=2 mono=true unit="" n=1 | Veri
   [] 1000..2000 int 86
 gsb_transport_udp_pending_source_moves_kept sum t=2 mono=true unit="" n=1 | rUDP sessions that migrated while pending into a source holding its max_handshakes_per_source: moved, their place kept at the old source, cumulative.
   [] 1000..2000 int 87
+gsb_transport_udp_proofs_refused_budget sum t=2 mono=true unit="" n=1 | Verified rUDP proofs refused because the sealed door's handshake budget (udp_handshakes_per_sec) was empty (no Diffie-Hellman, no session, no accept; the client re-sends), cumulative.
+  [] 1000..2000 int 88
+gsb_transport_udp_proofs_refused_plaintext sum t=2 mono=true unit="" n=1 | Verified rUDP proofs without a Noise message 1 at a sealed door (a plaintext client), refused, cumulative.
+  [] 1000..2000 int 89
+gsb_transport_udp_handshakes_malformed sum t=2 mono=true unit="" n=1 | rUDP proofs whose Noise message 1 had the wrong length, refused before any Diffie-Hellman, cumulative.
+  [] 1000..2000 int 90
+gsb_transport_udp_handshakes_failed_decrypt sum t=2 mono=true unit="" n=1 | rUDP Noise handshakes whose message 1 failed to authenticate after the Diffie-Hellman (another pinned key, a forgery, a context mismatch), cumulative.
+  [] 1000..2000 int 91
+gsb_transport_udp_handshakes_failed_internal sum t=2 mono=true unit="" n=1 | rUDP Noise handshakes the crypto backend failed (not the peer's bytes), cumulative.
+  [] 1000..2000 int 92
+gsb_transport_udp_datagrams_unsealed sum t=2 mono=true unit="" n=1 | rUDP session datagrams that arrived unsealed at a sealed door, dropped unread, cumulative.
+  [] 1000..2000 int 93
+gsb_transport_seal_integrity_limit sum t=2 mono=true unit="" n=1 | rUDP sealed datagrams refused because their session exceeded the 2^36 forgery limit (the session is ended), cumulative.
+  [] 1000..2000 int 94
+gsb_transport_seal_malformed sum t=2 mono=true unit="" n=1 | rUDP sealed datagrams too short for header and tag, or with a counter at or over 2^62, dropped before the AEAD, cumulative.
+  [] 1000..2000 int 95
+gsb_transport_seal_too_old sum t=2 mono=true unit="" n=1 | rUDP sealed datagrams older than the replay window, dropped before the AEAD, cumulative.
+  [] 1000..2000 int 96
+gsb_transport_seal_replayed sum t=2 mono=true unit="" n=1 | rUDP sealed datagrams whose record counter was already opened (a replay or a duplicate), dropped before the AEAD, cumulative.
+  [] 1000..2000 int 97
+gsb_transport_seal_wrong_phase sum t=2 mono=true unit="" n=1 | rUDP sealed datagrams whose key phase bit contradicts their counter, dropped before the AEAD, cumulative.
+  [] 1000..2000 int 98
+gsb_transport_seal_forged sum t=2 mono=true unit="" n=1 | rUDP sealed datagrams that failed authentication (forged, corrupted, wrong key), cumulative.
+  [] 1000..2000 int 99
+gsb_transport_udp_sessions_ended_seal_limit sum t=2 mono=true unit="" n=1 | rUDP sessions ended because a record limit was reached (the integrity limit, or a writer's record counter), cumulative.
+  [] 1000..2000 int 100
+gsb_transport_udp_path_candidates_not_newest sum t=2 mono=true unit="" n=1 | Authenticated rUDP datagrams from a new address that were not the newest record: processed, no path validation begun, cumulative.
+  [] 1000..2000 int 101
+gsb_transport_udp_acks_not_queued sum t=2 mono=true unit="" n=1 | rUDP reliable-band ACKs the sealed session's writer channel refused (the client re-sends), cumulative.
+  [] 1000..2000 int 102
+gsb_transport_udp_path_challenges_not_queued sum t=2 mono=true unit="" n=1 | rUDP path challenges the sealed session's writer channel refused (retried on the candidate's next datagram), cumulative.
+  [] 1000..2000 int 103
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0
