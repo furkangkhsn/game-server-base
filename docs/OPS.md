@@ -27,6 +27,14 @@
 
 Admin yolları mevcut `ServerHandle` komutlarını kullanır — yeni bir kontrol yolu AÇILMAZ, yalnız transport eklenir.
 
+`/rooms`, `/rooms/open` ve `/rooms/close` registry'nin (ve oda
+listesinin defterinin) cevabını bekler; bu bekleyiş
+`http_route_timeout_secs` (vars. 10 sn, B90 — §3) ile sınırlı. Aşılırsa
+yanıt **`504 Gateway Timeout`**: registry'ye soruldu ama zamanında
+cevap gelmedi — açma/kapama registry'nin kuyruğundaysa yine de
+uygulanabilir (ikisi de idempotent: tekrar denemek güvenli; sonucu
+`GET /rooms` söyler). `/healthz` ve `/metrics` beklemez, kesilmez.
+
 **`/rooms/open`'ın açtığı oda = sunucunun odası (BACKLOG F8).** Admin
 yüzeyi kendi oda varsayılanını UYDURMAZ: açılan odanın `RoomConfig`'i,
 başlangıçta ön-kurulan odaların geldiği şablondur
@@ -952,6 +960,15 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   döngüsü en çok 500 ms'de bir (bir accept'ten sonra) ve kapanırken
   gönderir; son accept'ten sonraki zaman aşımı sonraki accept'te ya da
   kapanışta gelir (intake'in kuralı).
+- **Taşıma kapsamı: ops HTTP yönlendirmesinin süre sınırı (B90).**
+  Satırın ve tablonun sonuna (tur 2'nin oyun bandı sayaçlarından sonra)
+  bir `counter`: `ops_http_routes_timed_out`
+  (`gsb_transport_ops_http_routes_timed_out_total`) — yönlendirmesi
+  (defterin ve registry'nin cevabı: `/rooms`, oda açma/kapama)
+  `http_route_timeout_secs`'i aşan, `504` ile yanıtlanan istekler.
+  `RESULT`'ta `transport_ops_http_routes_timed_out=`; loadgen telinin
+  taşıma bölümü bir büyür (yeni düzen — sihirli sayı birleştirmede
+  atanır). B49'un ikisi gibi accept döngüsünden `Flusher`'la gider.
 - **Taşıma kapsamı: el sıkışan kapıların kaynak başına sınırı (D11).**
   Satırın ve tablonun sonuna iki `counter`; `RESULT`'ta
   `transport_<ad>=` (her satırda). Loadgen teli: taşıma bölümü
@@ -1293,10 +1310,38 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   Böylece bir bağlantı görevi en çok 5 sn (başlık) + yönlendirme + 10 sn
   (yazma) + 300 ms (boşaltma) yaşar ve aynı anda en çok 64 tanesi.
   `0` (ya da negatif / sonsuz süre — `write_stall_secs` kuralı) ilgili
-  sınırı kapatır. Katman yok: `[rooms.<id>]` reddeder. *Sınır dışı
-  kalan:* yönlendirmenin kendisi (`/rooms`, oda açma/kapama registry
-  yanıtını bekler) yazma süresine dahil değil; registry'nin cevabı
-  kendi sınırında.
+  sınırı kapatır. Katman yok: `[rooms.<id>]` reddeder. Yönlendirmenin
+  kendisi (registry'nin cevabı) yazma süresine dahil değil — kendi
+  sınırı var (B90, aşağıda).
+- **Yönlendirmenin süre sınırı (B90).** `/rooms` ve oda açma/kapama
+  registry'nin (ve `/rooms`'ta oda defterinin) cevabını B49'un yazma
+  süresinin dışında bekliyordu: takılan bir registry (uzun bir iş, dolu
+  posta kutusu) bağlantı görevini cevap gelene dek tutuyordu ve 64
+  görevlik tavanı dolduruyordu. Bir sunucu anahtarı (B49'un şekli,
+  varsayılan AÇIK):
+  ```toml
+  http_route_timeout_secs = 10.0 # vars. 10 sn; 0 = sınır yok
+  ```
+  (1) **Tek süre** yönlendirmenin TAMAMINA — `/rooms`'un sıralı durum
+  sorguları ve dolu registry posta kutusunda yer beklemek dahil;
+  sorgu başına değil (B47/B49'un kuralı). (2) **Aşılırsa `504 Gateway
+  Timeout`**, `503` değil: yüzey burada registry'nin önünde bir ağ
+  geçidi gibi davranır ve yukarı akışından zamanında cevap alamadı
+  (RFC 9110 §15.6.5). Sonuç bilinmez — bekleyiş bırakılır ama istek
+  registry'nin kuyruğundaysa uygulanabilir; `503` "yapılmadı, sonra
+  dene" der, bu yanlış olurdu. Açma/kapama idempotent: tekrar denemek
+  güvenli, gövde `GET /rooms`'u önerir. Diğer `503`'ler (registry
+  gitmiş, defter yok) "yapılmadı" anlamında kalır. (3) Sayılır
+  (`ops_http_routes_timed_out`, §3) ve her biri `warn` (operatör
+  hızında). (4) **10 sn:** sağlıklı registry kontrol düzlemi isteğini
+  mikrosaniyelerde cevaplar; katılma fırtınasında dolu bir posta kutusu
+  (4096 ileti, açılış başına O(bağlantı) tarama) bile tahminen saniyenin
+  altında boşalır (tahmin, ölçülmedi) — bu süreye yalnız takılmış
+  registry ulaşır; görev de diğer iki süreyle aynı mertebede sınırlı
+  kalır. `0` (ya da negatif / sonsuz) kapatır. Katman yok:
+  `[rooms.<id>]` reddeder. Böylece bir bağlantı görevi en çok 5 sn
+  (başlık) + 10 sn (yönlendirme) + 10 sn (yazma) + 300 ms (boşaltma)
+  yaşar.
 - Kapanış (B33): accept, oyun dinleyicileriyle aynı `Door`'dan geçer
   (B16). `ServerHandle::stop` kapıyı kapatır, bekleyen accept
   `listener_closed` ile biter, döngü döner ve listener'ı düşürür (port
@@ -1395,6 +1440,18 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
    tavan üstü bağlantı reddi yüzeyin kendi `/metrics`'inde
    `gsb_transport_ops_http_conns_refused_total` olarak görünür. Önce
    kırmızı (süre sınırı ve tavan yokken); öldürülen mutasyonlar raporda.
+6c. Yönlendirme süre sınırı (B90, `http/tests/route_deadline.rs`, paused
+   saat, bellek içi boru): hiç okunmayan registry posta kutusunda `GET
+   /rooms`, `POST /rooms/open`, `POST /rooms/close` tam
+   `http_route_timeout_secs`'te (öncesinde değil, 5 ms içinde) `504` alır,
+   her biri sayılır; `/healthz` kesilmez; dolu (tek slotlu, dolmuş) posta
+   kutusunda yer beklemek de aynı sürede kesilir; sınırdan 10 ms önce
+   cevaplayan registry `200` verir, sayaç 0; süre kapalıyken (`0`) 60 sn
+   bekleyen cevap da `200`; anahtarın çözümü (vars. 10 sn; 0, negatif,
+   sonsuz, NaN = kapalı). Önce kırmızı (süre yokken iki test asılma
+   korumasına takıldı); öldürülen mutasyonlar: süre yok, `504` yerine
+   `503`, sayılmayan zaman aşımı, sınırın 100'de biri, iki katı, yazma
+   anahtarını okumak, `0`'ı kapalı saymamak.
 7. Başlatma hatası (F63, `tests/startup_errors.rs`): gerçek ikililer
    (`CARGO_BIN_EXE_gsb-server`, `…gsb-loadgen`) bir şey bağlamadan
    reddeden config'lerle koşar — girdide bilinmeyen anahtar (anahtar,

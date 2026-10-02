@@ -573,6 +573,22 @@ pub struct Config {
     /// milliseconds, and even a slow admin link in seconds. `0` (or a
     /// negative or non-finite value) disables it, as `write_stall_secs`.
     pub http_write_timeout_secs: f64,
+    /// **Routing deadline** of the ops HTTP surface, in seconds (BACKLOG
+    /// B90): the whole routing step of one request — the room
+    /// bookkeeper's and the registry's answers that `/rooms` and the room
+    /// open/close wait for, queueing on a full registry mailbox included;
+    /// one timeout around it, like the head read and the write. Past it
+    /// the request is answered `504 Gateway Timeout` (the outcome of an
+    /// open or close is unknown: the registry may still apply it — both
+    /// are idempotent, a retry is safe) and counted
+    /// (`ops_http_routes_timed_out`). Default 10 s: a healthy registry
+    /// answers in microseconds, and even a full join-storm mailbox (4096
+    /// messages) should drain in under a second (an estimate, not
+    /// measured), so only a stalled registry reaches it,
+    /// while the connection task stays bounded by the same order as its
+    /// other two deadlines. `0` (or a negative or non-finite value)
+    /// disables it, as `http_write_timeout_secs`.
+    pub http_route_timeout_secs: f64,
     /// The export layer's push exporters (`[metrics]`, docs/OPS.md §6):
     /// `[metrics.otlp]` pushes every report interval to an OpenTelemetry
     /// collector. Empty (the default) = no push; the log lines and the
@@ -614,6 +630,10 @@ pub(crate) const DEFAULT_HTTP_MAX_CONNECTIONS: u32 = 64;
 /// The ops HTTP surface's default response write deadline, in seconds
 /// (B49; see `Config::http_write_timeout_secs`).
 pub(crate) const DEFAULT_HTTP_WRITE_TIMEOUT_SECS: f64 = 10.0;
+
+/// The ops HTTP surface's default routing deadline, in seconds (B90; see
+/// `Config::http_route_timeout_secs`).
+pub(crate) const DEFAULT_HTTP_ROUTE_TIMEOUT_SECS: f64 = 10.0;
 
 /// The floor of the derived unauthenticated-connection cap
 /// (`unauth_cap_of`): even the smallest deployment gets real headroom for
@@ -681,6 +701,7 @@ impl Default for Config {
             http_listen: String::new(),
             http_max_connections: Some(DEFAULT_HTTP_MAX_CONNECTIONS),
             http_write_timeout_secs: DEFAULT_HTTP_WRITE_TIMEOUT_SECS,
+            http_route_timeout_secs: DEFAULT_HTTP_ROUTE_TIMEOUT_SECS,
             metrics: MetricsConfig::default(),
             game: crate::games::DEFAULT_GAME.into(),
             raw: toml::Table::new(),

@@ -315,6 +315,11 @@ transport_counters! {
     /// left or stopped reading answers nothing). Apart from
     /// `udp_game_probes_unanswered` so that one stays a loss signal.
     udp_game_probes_open_at_end,
+    /// Ops HTTP surface (B90): requests whose routing — the room
+    /// bookkeeper's and the registry's answers (`/rooms`, room open and
+    /// close) — outran `http_route_timeout_secs`; answered `504`, the
+    /// outcome of an open or close unknown.
+    ops_http_routes_timed_out,
 }
 
 impl TransportCounters {

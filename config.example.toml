@@ -484,6 +484,16 @@ keepalive_hz = 1.0
 #http_max_connections = 64
 #http_write_timeout_secs = 10.0
 
+# The ops surface's routing deadline (B90): /rooms and the room
+# open/close wait for the registry's answer (a full registry mailbox
+# included) at most this long; past it the request is answered 504
+# Gateway Timeout — an open or close may still take effect (both are
+# idempotent; GET /rooms tells) — and counted
+# (gsb_transport_ops_http_routes_timed_out_total). Default 10 s: a
+# healthy registry answers in microseconds, so only a stalled one reaches
+# it. 0 turns it off.
+#http_route_timeout_secs = 10.0
+
 # ── Oda başına override'lar: [rooms.<id>] (docs/OPS.md §2, B18) ────────
 # Bir oda (kalabalık bir oda, bir lobi) yukarıdaki ODA DÜZEYİ anahtarlardan
 # kendi değerlerini alabilir: tick_hz, room_control, conn_action,

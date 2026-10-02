@@ -242,6 +242,8 @@ gsb_transport_udp_game_rtt_sum_us sum t=2 mono=true unit="" n=1 | Sum of the gam
   [] 1000..2000 int 62
 gsb_transport_udp_game_probes_open_at_end sum t=2 mono=true unit="" n=1 | Game-band probes still awaiting their report when the session ended: cut off, not lost (a client that left or stopped reading answers nothing), cumulative.
   [] 1000..2000 int 63
+gsb_transport_ops_http_routes_timed_out sum t=2 mono=true unit="" n=1 | Ops HTTP requests whose routing (the room bookkeeper's and the registry's answers: /rooms, room open and close) outran http_route_timeout_secs; answered 504, an open or close may still take effect, cumulative.
+  [] 1000..2000 int 64
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

@@ -17,7 +17,9 @@
 //! survives unchanged. Every wait a peer controls is bounded: the head
 //! read (B47), the response write (`http_write_timeout_secs`, B49) and
 //! the drain; and so is their number — `http_max_connections` live
-//! connection tasks (B49, `limits`).
+//! connection tasks (B49, `limits`). So is the one wait the server's own
+//! state controls: the routing step's answers from the bookkeeper and
+//! the registry (`http_route_timeout_secs`, B90 — a `504` past it).
 //!
 //! Stop (BACKLOG B33): the accept runs through a [`Door`], the one every
 //! game listener closes (B16). `ServerHandle::stop` closes it, the
@@ -210,7 +212,7 @@ async fn accept_loop(
 /// can drive it over an in-memory pipe under a paused clock.
 async fn serve_one<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, ops: OpsHttp) {
     let response = match read_head_in_time(&mut stream).await {
-        Ok(head) => route(&head, &ops).await,
+        Ok(head) => route_in_time(&head, &ops).await,
         Err(HeadError::TooLarge) => Response::text(
             431,
             "Request Header Fields Too Large",

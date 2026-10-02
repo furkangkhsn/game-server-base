@@ -587,8 +587,10 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
 - Admin HTTP auth/TLS — OPS.md NOT-DONE devam
 - Ops HTTP: auth/TLS yok (yukarıda). Kaynak sınırları var — başlık
   okuması (B47), eşzamanlı bağlantı tavanı ve yanıt yazmanın süre sınırı
-  (B49, `http_max_connections` / `http_write_timeout_secs`, OPS §3);
-  kaynak adres başına tavan yok (localhost sözleşmesi)
+  (B49, `http_max_connections` / `http_write_timeout_secs`), registry
+  cevabını bekleyen yönlendirmenin süre sınırı (B90,
+  `http_route_timeout_secs`, aşılırsa `504`; OPS §3); kaynak adres başına
+  tavan yok (localhost sözleşmesi)
 - rUDP crypto — deneysel statü
 - Kaynak adres başına sınırın kapsamadığı evre: rUDP demux'ının kayıttan
   önceki oturum tablosu (§4.3.1 #8, BACKLOG B89; kaydedilmiş rUDP

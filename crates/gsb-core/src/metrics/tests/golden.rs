@@ -84,6 +84,8 @@
 //! `gsb_registry_{leave_verdicts,detach_despawns}_lost_total` after
 //! `gsb_registry_joins_unsent_total` and the labeled
 //! `gsb_registry_close_verdicts_lost_total{reason}` after them.
+//! B90's one transport counter at the end of that line and table
+//! (`ops_http_routes_timed_out`).
 //! D12's server-close reason at the end of both reason lists
 //! (`unauth_source_cap`: the net line's `server_close_<reason>=` and
 //! `gsb_net_server_closes_total{reason}`, the registry line's
