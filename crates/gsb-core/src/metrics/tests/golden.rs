@@ -111,6 +111,9 @@
 //! B5a's sixteen transport counters at the end of that line and table
 //! (`udp_proofs_refused_budget` .. `udp_path_challenges_not_queued`,
 //! the record layer's six `seal_*` refusals among them).
+//! B5b's five transport counters at the end of that line and table
+//! (`udp_rekeys`, `udp_rekeys_unconfirmed`, `udp_stateless_resets_sent`,
+//! `udp_stateless_resets_rate_limited`, `udp_stateless_resets_send_failed`).
 
 use super::*;
 use crate::conn::ServerClose;

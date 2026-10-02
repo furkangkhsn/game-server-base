@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 103] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 108] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -544,6 +544,31 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 103]
         "gsb_transport_udp_path_challenges_not_queued_total",
         "rUDP path challenges the sealed session's writer channel refused (retried on the candidate's next datagram), cumulative.",
         |t| t.udp_path_challenges_not_queued,
+    ),
+    tr(
+        "gsb_transport_udp_rekeys_total",
+        "rUDP server-to-client key updates (the next key generation after the phase's time or record bound, once the client confirmed the current phase), cumulative.",
+        |t| t.udp_rekeys,
+    ),
+    tr(
+        "gsb_transport_udp_rekeys_unconfirmed_total",
+        "rUDP key updates deferred because the client had not acknowledged a datagram of the current phase (at most one per 10 s per session), cumulative.",
+        |t| t.udp_rekeys_unconfirmed,
+    ),
+    tr(
+        "gsb_transport_udp_stateless_resets_sent_total",
+        "rUDP stateless resets sent in answer to records with an unknown connection id (an ended or lost session), each shorter than its trigger, cumulative.",
+        |t| t.udp_stateless_resets_sent,
+    ),
+    tr(
+        "gsb_transport_udp_stateless_resets_rate_limited_total",
+        "rUDP records with an unknown connection id left unanswered because the door's stateless reset budget was empty, cumulative.",
+        |t| t.udp_stateless_resets_rate_limited,
+    ),
+    tr(
+        "gsb_transport_udp_stateless_resets_send_failed_total",
+        "rUDP stateless resets the socket refused, cumulative.",
+        |t| t.udp_stateless_resets_send_failed,
     ),
 ];
 

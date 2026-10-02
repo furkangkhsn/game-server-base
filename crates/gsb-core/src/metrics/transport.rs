@@ -492,6 +492,28 @@ transport_counters! {
     /// writer channel refused (full or closed); retried on the
     /// candidate's next datagram, an interval on.
     udp_path_challenges_not_queued,
+    /// rUDP writer (sealed door, key phases, B5b): server → client key
+    /// updates — the next key generation (Noise REKEY) after the phase's
+    /// time or record bound, once the client confirmed the current phase.
+    udp_rekeys,
+    /// rUDP writer (sealed door, key phases, B5b): due key updates
+    /// deferred because the client had not yet acknowledged a datagram
+    /// of the current phase (counted at most once per 10 s per session;
+    /// the session seals on under its current key and rekeys at the
+    /// first confirmation).
+    udp_rekeys_unconfirmed,
+    /// rUDP demux (sealed door, stateless reset, B5b): resets sent in
+    /// answer to records whose connection id no session holds (a session
+    /// that ended, or one this server lost in a restart) — each shorter
+    /// than its trigger; the client ends its session at once.
+    udp_stateless_resets_sent,
+    /// rUDP demux (sealed door, stateless reset, B5b): records with an
+    /// unknown connection id left unanswered because the door's reset
+    /// budget (`udp_stateless_resets_per_sec`) was empty.
+    udp_stateless_resets_rate_limited,
+    /// rUDP demux (sealed door, stateless reset, B5b): resets the socket
+    /// refused (the client's next datagram triggers another).
+    udp_stateless_resets_send_failed,
 }
 
 impl TransportCounters {
