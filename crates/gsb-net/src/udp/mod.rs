@@ -590,9 +590,11 @@
 //!   carry, each counted (module `congestion`; the server's
 //!   `udp_congestion = "pace"`). The default is off (not yet measured on
 //!   a jittery real path), a client that does not report is never paced,
-//!   and the session's [`PathState`] does not reach the room yet — so a
-//!   game cannot thin its content to the path on its own (the follow-up
-//!   round carries it writer → connection actor → room).
+//!   and the session's [`PathState`] does not reach the room yet. The
+//!   core and the kit carry a path to the game since B103
+//!   (`gsb_core::path`: `ConnIn::Path` → connection actor → room →
+//!   `TickCtx::budget`, the kit's opt-in `SnapshotBudget`; QUIC fills it
+//!   from quinn's statistics); this writer's emission is B103's phase 2.
 //! - **Connection migration is opt-in and unauthenticated.** Since B3
 //!   a session can carry a server-assigned connection id (CID) and move
 //!   to a new client address after path validation (module `path`), so

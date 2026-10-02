@@ -277,7 +277,10 @@ mod logic;
 /// GSNN = the GSNM layout with fifteen more transport counters at the
 /// end of that section (B3's connection migration: `udp_cids_assigned`
 /// .. `udp_migrations_port_only`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4E;
+/// GSNO = the GSNN layout plus each room's `snapshots_withheld` (the
+/// group frames a logic withheld from a member whose path its transport
+/// limits — B103), right after `snapshots`.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4F;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
