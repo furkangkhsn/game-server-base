@@ -348,6 +348,11 @@ where
                     if let Some(at) = p.last_input {
                         self.idle.start(p.player, at);
                     }
+                    // And its path (B103): the sending shard's last
+                    // known state, until the connection sends news.
+                    if let Some(path) = p.path {
+                        self.paths.set(p.player, path);
+                    }
                     self.conns.insert(
                         p.player,
                         RoomConn {

@@ -87,6 +87,7 @@ impl super::ConnectionActor {
             m_metrics_dropped: 0,
             m_last_flush: Instant::now(),
             metrics,
+            path: Default::default(),
         }
     }
 
@@ -102,6 +103,10 @@ impl super::ConnectionActor {
         let mut stopped = false;
         let mut overtaken = None;
         while let Some(msg) = self.inbox.recv().await {
+            // A path state the room's channel could not take is retried
+            // on every message this actor reads (latest wins, B103):
+            // one branch when nothing is owed.
+            self.deliver_path();
             match msg {
                 ConnIn::Frame(frame) => {
                     // Metrics: count this frame's wire bytes (frame body:
@@ -194,6 +199,7 @@ impl super::ConnectionActor {
                     break;
                 }
                 ConnIn::LeftRoom { room } => self.on_left_room(room),
+                ConnIn::Path(state) => self.on_path(state),
                 ConnIn::Shutdown => {
                     // The server is stopping: a best-effort ERROR 14
                     // that never waits on the client, then the end.

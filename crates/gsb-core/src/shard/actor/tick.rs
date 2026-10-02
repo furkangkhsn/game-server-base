@@ -155,6 +155,12 @@ where
                 match r.actions.try_recv() {
                     Ok(a) => {
                         budget -= 1;
+                        // The path marker (B103): the room actor's rule —
+                        // the member's path, never input.
+                        if let Some(path) = crate::path::read_path(&a) {
+                            crate::path::settle(&mut self.paths, player, path);
+                            continue;
+                        }
                         pulled += 1;
                         actions.push(a);
                     }
@@ -274,12 +280,14 @@ where
         //    and allocation-free unless a hook kicks.
         let kicks = KickQueue::default();
         let idle = std::mem::take(&mut self.idle);
+        let paths = std::mem::take(&mut self.paths);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
             idle: IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
+            paths: paths.view(self.config.period()),
         };
 
         // -- Phase 2b — CONVERT, with the cross-seam view (the borrowed
@@ -303,6 +311,7 @@ where
         self.phase_effects_out(t.tick);
         // The first lend is over; MIGRATE reads and writes the clock.
         self.idle = idle;
+        self.paths = paths;
         // -- Phase 3c — KICK (E8): the kicks the input and systems hooks
         //    asked for, applied BEFORE MIGRATE — a kicked member is out
         //    of this shard's membership before the crossings are
@@ -316,12 +325,14 @@ where
         // that read it.
         let borrowed = self.borrowed_view();
         let idle = std::mem::take(&mut self.idle);
+        let paths = std::mem::take(&mut self.paths);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
             idle: IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
+            paths: paths.view(self.config.period()),
         };
         // -- Phase 5b — TEAMS (`docs/CROSS-SHARD.md` §8b): the logic reads
         //    the other shards' team records and hands back this shard's
@@ -335,6 +346,7 @@ where
         // and BROADCAST hooks kicked (a member that crossed in this
         // tick's MIGRATE is no longer this shard's: its kick is a no-op).
         self.idle = idle;
+        self.paths = paths;
         self.apply_kicks(kicks.take());
         true
     }

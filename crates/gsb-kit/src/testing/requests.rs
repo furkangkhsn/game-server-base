@@ -115,6 +115,7 @@ fn assert_forwards<R: GameLogic<World>>(name: &str, mut room: R, game: impl Fn(&
         dt: Duration::from_secs_f64(1.0 / 30.0),
         idle: Default::default(),
         kicks: Default::default(),
+        paths: Default::default(),
     };
     let admission = room.on_join(&mut world, ConnectionId(1));
     let req = RpcRequest {

@@ -63,6 +63,9 @@ where
                     // puts it straight back).
                     let last_input = self.idle.last(p);
                     self.idle.stop(p);
+                    // So does its path (B103): the transport keeps
+                    // measuring the same session wherever it plays.
+                    let path = self.paths.remove(p);
                     // The binding row travels too (the receiving shard
                     // installs its own): the session stays bound to this
                     // player across the move, so control broadcasts still
@@ -88,6 +91,7 @@ where
                         session_epoch: entry.session_epoch,
                         identity: entry.identity,
                         last_input,
+                        path,
                     }))
                 });
                 // The session whose request state dies with a COMMITTED
@@ -167,6 +171,9 @@ where
                             self.binding.insert(p.conn, p.player);
                             if let Some(at) = p.last_input {
                                 self.idle.start(p.player, at);
+                            }
+                            if let Some(path) = p.path {
+                                self.paths.set(p.player, path);
                             }
                             warn!(
                                 room = %self.config.id,

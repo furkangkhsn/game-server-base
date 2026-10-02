@@ -95,6 +95,7 @@ mod gate;
 pub(crate) use gate::InputGate;
 mod kind;
 pub use kind::FrameKind;
+mod path;
 
 pub use actor::ConnectionActor;
 pub use close::ServerClose;
@@ -266,6 +267,14 @@ pub enum ConnIn {
     /// a notice that arrives after the client left and joined again
     /// (a new membership, a new open channel) is stale and ignored.
     LeftRoom { room: RoomId },
+    /// The transport's newest measurement of this connection's path
+    /// (BACKLOG B103, [`crate::path`]): sent by a transport that measures
+    /// one (rUDP, QUIC) only when it is news, never awaited. The actor
+    /// hands it to the room it plays in (latest wins: a state the room's
+    /// channel cannot take now stays owed and is retried on the next
+    /// message this actor reads; a newer one replaces it) and to the next
+    /// room it joins. Nothing goes on the wire; never a verdict.
+    Path(crate::path::PathState),
     /// Server-wide shutdown.
     Shutdown,
     /// Server-wide shutdown, sent to a connection whose verdict the
@@ -295,6 +304,7 @@ impl ConnIn {
             Self::Frame(_)
             | Self::Closed { .. }
             | Self::LeftRoom { .. }
+            | Self::Path(_)
             | Self::Shutdown
             | Self::ShutdownOvertaking(_) => None,
         }

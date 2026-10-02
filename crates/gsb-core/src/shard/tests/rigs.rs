@@ -366,6 +366,7 @@ pub(in crate::shard::tests) fn ghost_migrate(
             session_epoch: 0,
             identity: String::new(),
             last_input: None,
+            path: None,
         })),
     }
 }

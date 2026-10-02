@@ -106,6 +106,14 @@ where
                     match rc.actions.try_recv() {
                         Ok(a) => {
                             budget -= 1;
+                            // The path marker (B103) is the transport's
+                            // news, not the player's input: it sets the
+                            // member's path and never reaches the idle
+                            // stamp or the game (`crate::path`).
+                            if let Some(path) = crate::path::read_path(&a) {
+                                crate::path::settle(&mut self.paths, player, path);
+                                continue;
+                            }
                             pulled += 1;
                             actions.push(a);
                         }

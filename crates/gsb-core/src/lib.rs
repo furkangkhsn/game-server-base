@@ -22,6 +22,8 @@
 //!   deferred-completion machinery the room and the connection share.
 //! - [`source`]: what a per-source limit counts (an IPv4 address, an
 //!   IPv6 /64), shared by the doors and the registry.
+//! - [`path`]: a connection's path state (the congestion signal), carried
+//!   from its transport to the room that plays it (`TickCtx::budget`).
 //!
 //! Design invariants (enforced by `gsb-lint` in every crate):
 //! - actors only ever `await` a single channel receive — no
@@ -35,6 +37,7 @@ pub mod conn;
 pub mod error;
 pub mod id;
 pub mod metrics;
+pub mod path;
 pub mod registry;
 pub mod room;
 pub mod rpc;

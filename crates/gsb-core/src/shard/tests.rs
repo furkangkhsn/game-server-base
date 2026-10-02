@@ -50,6 +50,7 @@ mod keepalive;
 mod kick;
 mod metrics;
 mod migration;
+mod path;
 mod replies;
 mod strip;
 mod takeover;

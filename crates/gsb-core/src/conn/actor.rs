@@ -24,6 +24,7 @@ mod flush;
 mod frame;
 mod input;
 mod lifecycle;
+mod path;
 mod room;
 mod unprocessed;
 mod violation;
@@ -220,4 +221,9 @@ pub struct ConnectionActor {
     /// for it (BACKLOG B30, [`crate::conn::SessionEnd`]); sent once, at
     /// the end of `run`.
     end_notice: Option<crate::conn::EndNotice>,
+    /// The transport's path news for the room this connection plays in
+    /// (BACKLOG B103; `ConnIn::Path`): the newest state, and whether the
+    /// room's channel still owes it. Reset by a join — a new room knows
+    /// nothing yet.
+    path: crate::path::PathSignal,
 }

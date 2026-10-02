@@ -224,6 +224,7 @@ where
         self.binding.remove(&rc.conn);
         self.roster_remove(&player);
         self.idle.stop(player);
+        self.paths.remove(player);
         // The request state goes with the SESSION: in-flight requests
         // are released (their slots free up for other connections) and
         // any queued answer is dropped (a reply to a gone session is not

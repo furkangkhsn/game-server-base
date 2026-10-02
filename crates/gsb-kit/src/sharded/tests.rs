@@ -58,6 +58,7 @@ fn ctx(tick: u64) -> TickCtx<'static> {
         dt: Duration::from_secs_f64(1.0 / 30.0),
         idle: Default::default(),
         kicks: Default::default(),
+        paths: Default::default(),
     }
 }
 

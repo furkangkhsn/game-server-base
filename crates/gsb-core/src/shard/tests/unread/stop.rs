@@ -141,6 +141,7 @@ async fn a_stopping_shard_counts_what_its_inbox_and_effects_hold() {
             session_epoch: 0,
             identity: String::new(),
             last_input: None,
+            path: None,
         })),
     };
     let (join_reply, joined) = oneshot::channel();

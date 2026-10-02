@@ -78,6 +78,14 @@ pub struct RoomActor<W, G, Sp> {
     /// without dragging `G` through every hook signature; stamped by the
     /// READ phase, started/stopped at the same funnels `binding` is.
     pub(in crate::room) idle: IdleClock,
+    /// Each member's path, as its connection actor delivered it (BACKLOG
+    /// B103, [`crate::path`]): set by READ, which diverts the path
+    /// marker off the member's action channel; emptied for a member at
+    /// the funnels that take it off the input-idle clock — its session
+    /// ended or was parked (a resume only ever rebinds a parked row, so
+    /// the new session starts unknown). Non-generic, lent to the game
+    /// through the tick context like `idle`.
+    pub(in crate::room) paths: crate::path::PathTable,
     /// How many input-idle-ceiling warnings this room has emitted. The
     /// guard is `== 0`, so the answer is always 0 or 1: the ceiling is a
     /// standing property of the room, and a room that is shedding idle

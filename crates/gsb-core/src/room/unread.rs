@@ -36,6 +36,11 @@ pub(crate) fn drop_unread(actions: &mut Inbox<Action>) -> Unread {
     actions.close();
     let mut unread = Unread::default();
     while let Ok(a) = actions.try_recv() {
+        // A path marker (B103) is the transport's state for a session
+        // that is gone, not input it sent: nothing was lost.
+        if crate::path::read_path(&a).is_some() {
+            continue;
+        }
         if a.op == RPC_REQ_OP {
             unread.requests += 1;
         } else {

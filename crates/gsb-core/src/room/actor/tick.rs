@@ -82,12 +82,14 @@ where
         //    kicks.
         let kicks = KickQueue::default();
         let idle = std::mem::take(&mut self.idle);
+        let paths = std::mem::take(&mut self.paths);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
             idle: crate::room::IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
+            paths: paths.view(self.config.period()),
         };
         // -- Phase 2a — split the requests out of the pulled actions (the
         //    RPC pattern, see `crate::rpc`). A request is an action
@@ -166,14 +168,17 @@ where
         //    disconnect path takes a member off it), and is lent again
         //    for the broadcast.
         self.idle = idle;
+        self.paths = paths;
         self.apply_kicks(kicks.take());
         let idle = std::mem::take(&mut self.idle);
+        let paths = std::mem::take(&mut self.paths);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
             idle: crate::room::IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
+            paths: paths.view(self.config.period()),
         };
 
         // -- Phase 4 — BROADCAST: one snapshot per group, frozen once and
@@ -185,6 +190,7 @@ where
         // hand the clock back to the actor, then apply what the
         // broadcast-phase hooks kicked.
         self.idle = idle;
+        self.paths = paths;
         self.apply_kicks(kicks.take());
         true
     }

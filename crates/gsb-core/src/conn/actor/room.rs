@@ -85,6 +85,10 @@ impl super::ConnectionActor {
             })) => {
                 self.state = ConnState::InRoom { room };
                 self.actions = Some(actions);
+                // The new room knows nothing of this path: owe it the
+                // newest state the transport sent (B103).
+                self.path.reset();
+                self.deliver_path();
                 // The room's input limit comes with its channel.
                 self.enter_input_rate(input_rate);
                 let _ = self

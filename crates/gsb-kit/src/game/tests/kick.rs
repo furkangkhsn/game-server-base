@@ -55,6 +55,7 @@ fn kicked<L: GameLogic<World>>(mut room: L) -> (Vec<Kick>, PlayerId) {
         dt: Duration::from_secs_f64(1.0 / 30.0),
         idle: Default::default(),
         kicks: queue.kicks(),
+        paths: Default::default(),
     };
     room.update(&mut world, &ctx);
     let got = queue.take();
@@ -116,6 +117,7 @@ fn a_game_that_never_kicks_leaves_the_world_as_it_was() {
         dt: Duration::from_secs_f64(1.0 / 30.0),
         idle: Default::default(),
         kicks: queue.kicks(),
+        paths: Default::default(),
     };
     room.update(&mut world, &ctx);
     assert!(queue.take().is_empty());

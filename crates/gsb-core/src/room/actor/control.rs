@@ -122,6 +122,7 @@ where
                 // (and would let the idle ceiling fire on top of a hold).
                 // A resume restarts the clock.
                 self.idle.stop(player);
+                self.paths.remove(player);
                 // Today's leave semantics for in-flight work (§11 "RPC
                 // pending detach anında"): pending requests drop, late
                 // reports are silently discarded (structural already),

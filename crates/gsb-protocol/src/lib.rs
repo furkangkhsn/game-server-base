@@ -85,6 +85,13 @@ pub mod op {
         /// outbound channel the way `UDP_ACK` does. Payload: the new
         /// address (`[u8 4|6][ip octets][u16 LE port]`).
         pub const UDP_PATH: u16 = 14;
+        /// Server-internal marker, NEVER on the wire (and not a
+        /// message-table message): a connection's path state carried
+        /// from its connection actor to its room on the member's action
+        /// channel (`gsb_core::path`). Reserved here so no wire opcode
+        /// ever takes the number; a client frame with it is refused like
+        /// any unknown base opcode and never reaches a room.
+        pub const MEMBER_PATH: u16 = 15;
     }
 
     /// First opcode reserved for game crates.

@@ -90,6 +90,7 @@ where
             roster_pos: HashMap::new(),
             read_cursor: 0,
             idle: IdleClock::default(),
+            paths: Default::default(),
             idle_ceiling_warns: 0,
             detach_ceiling_warns: 0,
             groups: HashMap::new(),

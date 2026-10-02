@@ -62,6 +62,11 @@ pub struct PlayerMigration {
     /// changes shard. `None` = the player is off the clock (parked or
     /// bot-fed), which the receiving shard reproduces by not starting one.
     pub last_input: Option<std::time::Instant>,
+    /// The player's path state (BACKLOG B103, [`crate::path`]): the
+    /// sending shard's table loses it, the receiving shard's takes it —
+    /// the connection actor sends only news, so a crossing that dropped
+    /// it would leave the member's budget unknown until the next change.
+    pub path: Option<crate::path::PathState>,
 }
 
 /// A migrating entity: the full game state plus the owning player, when

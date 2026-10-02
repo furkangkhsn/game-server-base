@@ -95,6 +95,10 @@ pub struct ShardActor<W, G, St, Sp> {
     /// join/migrate-in/resume, stopped at despawn/migrate-out/detach/AI
     /// handover, stamped by the READ phase.
     pub(in crate::shard) idle: IdleClock,
+    /// Each member's path (BACKLOG B103): the room actor's `paths`,
+    /// mirrored — and handed over with a crossing member
+    /// (`PlayerMigration::path`).
+    pub(in crate::shard) paths: crate::path::PathTable,
     /// How many input-idle-ceiling warnings this shard has emitted —
     /// always 0 or 1 (the room actor's warn-once rule and its rationale).
     pub(in crate::shard) idle_ceiling_warns: u32,

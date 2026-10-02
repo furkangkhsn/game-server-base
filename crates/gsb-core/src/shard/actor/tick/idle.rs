@@ -67,6 +67,7 @@ where
                 // rule): the row has no live input source, so the ceiling
                 // must not fire on top of a hold. Resume restarts it.
                 self.idle.stop(player);
+                self.paths.remove(player);
                 self.drop_conn_request_state(conn);
                 debug!(
                     room = %self.config.id,

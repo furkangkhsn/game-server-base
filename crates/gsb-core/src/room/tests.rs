@@ -27,6 +27,7 @@ mod hold;
 mod idle;
 mod kick;
 mod logic_counters;
+mod path;
 mod paused_clock;
 mod sampling;
 mod shipping;

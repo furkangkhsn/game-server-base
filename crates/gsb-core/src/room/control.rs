@@ -155,11 +155,13 @@ pub enum RoomControl {
 
 /// Per-tick metadata handed to the game logic.
 ///
-/// The lifetime is the actor's two lends: its input-idle clock
+/// The lifetime is the actor's three lends: its input-idle clock
 /// ([`Self::idle`]), so a logic hook can ask "how long since this player
-/// last acted?", and the tick's kick queue ([`Self::kicks`]), so it can
-/// ask that a player be kicked — both without an await, without a
-/// per-player task and without a new method on the logic surface.
+/// last acted?", the tick's kick queue ([`Self::kicks`]), so it can ask
+/// that a player be kicked, and its path table ([`Self::paths`]), so it
+/// can ask how many bytes a member's path takes — all without an await,
+/// without a per-player task and without a new method on the logic
+/// surface.
 #[derive(Debug, Clone, Copy)]
 pub struct TickCtx<'a> {
     pub room: RoomId,
@@ -176,6 +178,12 @@ pub struct TickCtx<'a> {
     /// nothing; a test that wants to read its logic's kicks lends one
     /// from its own [`KickQueue`].
     pub kicks: Kicks<'a>,
+    /// Each member's path, as its transport measured it (BACKLOG B103;
+    /// [`Self::budget`] and [`Self::path`] are the shorthands). A
+    /// hand-built context defaults to the EMPTY view — every path
+    /// unknown; a test lends one from its own
+    /// [`PathTable`](crate::path::PathTable).
+    pub paths: crate::path::PathView<'a>,
 }
 
 impl TickCtx<'_> {
@@ -215,5 +223,22 @@ impl TickCtx<'_> {
     /// gone (or parked) and is a no-op too: one close, the first reason.
     pub fn kick(&self, player: PlayerId, reason: impl Into<String>) {
         self.kicks.kick(player, reason);
+    }
+
+    /// The bytes `player`'s path takes this tick (its transport's paced
+    /// rate over the room's tick period) — what a game that thins its
+    /// content for a congested member plans for. `None`: not limited or
+    /// unknown (not a member, parked, bot-fed, a transport that measures
+    /// nothing, or a path that keeps up) — send as always. Shorthand for
+    /// [`PathView::budget`](crate::path::PathView::budget).
+    pub fn budget(&self, player: PlayerId) -> Option<usize> {
+        self.paths.budget(player)
+    }
+
+    /// `player`'s whole path state ([`crate::path::PathState`]: phase,
+    /// rate, demand, loss, round trip, queue), as its transport last
+    /// measured it; `None` when nothing is known.
+    pub fn path(&self, player: PlayerId) -> Option<crate::path::PathState> {
+        self.paths.path(player)
     }
 }

@@ -261,6 +261,7 @@ async fn ghost_migrate_after_leave_is_rejected() {
                 session_epoch: 0,
                 identity: String::new(),
                 last_input: None,
+                path: None,
             })),
         })
         .await
