@@ -35,7 +35,8 @@ const READ_EVERY: Duration = Duration::from_millis(8);
 
 /// A connected pair with both kernel buffers shrunk (explicit sizes also
 /// switch off autotuning): the kernel wakes a blocked writer only once
-/// about half of what it has queued is gone, so with an autotuned
+/// about a quarter of its send buffer is free again (measured, SECURITY
+/// §3.5 row 6, BACKLOG B15b), so with an autotuned
 /// multi-megabyte send buffer a slow reader would surface as megabyte
 /// bursts seconds apart — a statement about the kernel, not about the
 /// clock under test.
