@@ -571,6 +571,12 @@ pub struct Config {
     /// was written explicitly).
     #[serde(skip)]
     pub raw: toml::Table,
+    /// Where the file wrote each top-level key of [`Self::raw`] (BACKLOG
+    /// F64): a refused top-level key names its `path:line`. Filled by
+    /// [`Config::from_file`]; empty for a config built in code (its
+    /// refusals name no place). Opaque — only the loader fills it.
+    #[serde(skip)]
+    pub origin: crate::config::ConfigOrigin,
 }
 
 /// The built-in default server-wide connection cap (DESIGN §1's design
@@ -654,6 +660,7 @@ impl Default for Config {
             metrics: MetricsConfig::default(),
             game: crate::games::DEFAULT_GAME.into(),
             raw: toml::Table::new(),
+            origin: crate::config::ConfigOrigin::default(),
         }
     }
 }
@@ -688,6 +695,9 @@ impl Config {
             path: path.display().to_string(),
             source: e,
         })?;
+        // Where each top-level key was written, while the text is here
+        // (see `Config::origin`; BACKLOG F64).
+        cfg.origin = crate::config::ConfigOrigin::of_file(path.display().to_string(), &text);
         Ok(cfg)
     }
 }

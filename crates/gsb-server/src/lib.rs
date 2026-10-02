@@ -31,8 +31,8 @@ pub use boot::{
     start_server_metrics, start_server_metrics_with, start_server_with,
 };
 pub use config::{
-    Communication, Config, ConfigError, ListenerEntry, ListenerTransport, MetricsConfig,
-    OtlpSection, RoomOverride, ServerError, Topology, TransportKind, Visibility,
+    Communication, Config, ConfigError, ConfigOrigin, ListenerEntry, ListenerTransport,
+    MetricsConfig, OtlpSection, RoomOverride, ServerError, Topology, TransportKind, Visibility,
 };
 pub use error_chain::error_chain;
 pub use game::{GameError, GameModule, RegistryParts, RegistryTask};

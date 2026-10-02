@@ -422,18 +422,24 @@ Gerisi başlatmayı durdurur (`ServerError::UnknownKey`; ikili F63
 biçiminde basar, çıkış durumu 1):
 
 ```text
-gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not a key of the server, and no game compiled into this build owns it (games' keys — demo: `visibility`, `topology`, …; arena: `arena`; mmo: `mmo`; war: `war`); a key nobody reads is refused, not ignored
+gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean `tick_hz`?): not a key of the server, and no game compiled into this build owns it (games' keys — demo: `visibility`, `topology`, …; arena: `arena`; mmo: `mmo`; war: `war`); a key nobody reads is refused, not ignored
 ```
 
 - **Hata:** anahtarı dosyadaki yazımıyla adlandırır — düz değer
   `` `tik_hz` ``, tablo `` `[room.2]` `` / `` `[metric.otlp]` ``, tablo
   dizisi `` `[[listener]]` `` —, bir ya da iki harf uzaklıkta bilinen bir
   anahtar varsa onu önerir ve derlenmiş oyunların anahtarlarını sayar.
-  **Satır numarası yok:** denetim başlatmada, ham tablo üstünde koşuyor
-  (dosya metni orada yok; `Config`'e alan eklemek genel struct'ı
-  kırardı); bir TOML belgesinde üst düzey anahtar tektir, adı yerini
-  belirler. Bir seferde ilk bilinmeyen anahtar raporlanır (serde'nin
-  `deny_unknown_fields`'ı gibi).
+  **Yeri `dosya:satır` (F64):** denetim başlatmada, konumsuz ham tablo
+  üstünde koşar; dosya metni orada yoktur. O yüzden `Config::from_file`
+  metin elindeyken her üst düzey anahtarın onu İLK yazan satırını
+  (`ad = …`, `[ad]`, `[ad.alt]`, `[[ad]]`, `ad.alt = …`) dosyanın yoluyla
+  birlikte `Config::origin`'e kaydeder; ret `at <yol>:<satır>` der.
+  `origin` opak bir türdür (`ConfigOrigin`, yalnız yükleyici doldurur):
+  `Config { tick_hz: 60.0, ..Config::default() }` literali derlenmeye
+  devam eder (özel alan onu kırardı). Kodla kurulan config'in ve
+  yükledikten sonra koda `raw`'a eklenen anahtarın yeri yoktur: mesaj
+  eskisi gibi, yer kısmı olmadan. Bir seferde ilk bilinmeyen anahtar
+  raporlanır (serde'nin `deny_unknown_fields`'ı gibi).
 - **Kardeş oyun kuralı:** bir dosya bu ikiliye derlenmiş başka bir
   oyunun tablosunu taşıyabilir (demo'yu barındıran sunucu `[arena]`'yı
   kabul eder, demo ona bakmaz — GAME-MODULE G2 sapma 2). **Bu ikiliye

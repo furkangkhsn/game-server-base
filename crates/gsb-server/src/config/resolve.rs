@@ -276,9 +276,10 @@ pub enum ServerError {
     /// a typo, a misspelled table, or a table for a game this build does
     /// not host — refused, never silently ignored.
     #[error(
-        "unknown top-level config key {written}{}: not a key of the server, \
+        "unknown top-level config key {written}{}{}: not a key of the server, \
          and no game compiled into this build owns it (games' keys — \
          {owners}); a key nobody reads is refused, not ignored",
+        written_at(.at),
         did_you_mean(.suggestion)
     )]
     UnknownKey {
@@ -291,12 +292,23 @@ pub enum ServerError {
         suggestion: Option<String>,
         /// The keys each game compiled into this build owns, as listed.
         owners: String,
+        /// Where the file wrote it, `path:line` (BACKLOG F64); `None` for
+        /// a config built in code (or a key put into its `raw` there).
+        at: Option<String>,
     },
 
     /// Game selection or a game module's own configuration failed (see
     /// [`crate::GameError`]).
     #[error(transparent)]
     Game(#[from] crate::GameError),
+}
+
+/// The place part of [`ServerError::UnknownKey`]'s message (F64).
+fn written_at(at: &Option<String>) -> String {
+    match at {
+        Some(place) => format!(" at {place}"),
+        None => String::new(),
+    }
 }
 
 /// The suggestion part of [`ServerError::UnknownKey`]'s message.

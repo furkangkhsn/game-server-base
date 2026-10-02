@@ -11,6 +11,9 @@ pub use axes::*;
 mod metrics;
 pub use metrics::{MetricsConfig, OtlpSection};
 
+mod origin;
+pub use origin::ConfigOrigin;
+
 mod top_keys;
 #[cfg(feature = "game-demo")]
 pub(crate) use top_keys::DEMO_KEYS;

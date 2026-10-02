@@ -16,7 +16,7 @@ use std::fmt;
 
 use serde::de::{self, Visitor};
 
-use crate::{Config, GameModule, ServerError};
+use crate::{Config, ConfigOrigin, GameModule, ServerError};
 
 /// The demo's flat keys (GAME-MODULE §6 decision 1): fields of [`Config`]
 /// that only the demo module reads — its `GameModule::owned_keys`, and
@@ -49,12 +49,33 @@ impl Config {
     pub fn check_top_level_keys(&self, hosted: &dyn GameModule) -> Result<(), ServerError> {
         let mut owners = vec![(hosted.name(), hosted.owned_keys())];
         owners.extend(crate::games::owned_keys());
-        check(&self.raw, &owners)
+        check(&self.raw, &owners).map_err(|e| at(e, &self.origin))
+    }
+}
+
+/// `e` naming where the file wrote its key (BACKLOG F64), when the
+/// config's origin knows it.
+fn at(e: ServerError, origin: &ConfigOrigin) -> ServerError {
+    match e {
+        ServerError::UnknownKey {
+            key,
+            written,
+            suggestion,
+            owners,
+            at: None,
+        } => ServerError::UnknownKey {
+            at: origin.locate(&key),
+            key,
+            written,
+            suggestion,
+            owners,
+        },
+        e => e,
     }
 }
 
 /// The first key of `raw` that is neither the engine's nor in `owners`,
-/// as the startup error.
+/// as the startup error (no place: the table has none — see [`at`]).
 pub(crate) fn check(raw: &toml::Table, owners: &Owners) -> Result<(), ServerError> {
     let owned = |key: &str| owners.iter().any(|(_, keys)| keys.contains(&key));
     let unknown = raw.iter().find(|(k, _)| !is_engine_key(k) && !owned(k));
@@ -66,6 +87,7 @@ pub(crate) fn check(raw: &toml::Table, owners: &Owners) -> Result<(), ServerErro
         written: written(key, value),
         suggestion: closest(key, owners),
         owners: listing(owners),
+        at: None,
     })
 }
 
