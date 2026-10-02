@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1746 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1753 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -247,6 +247,11 @@ başına bir yeniden başlatma, `idle_windows_restarted_late`). Oyunlar
 full/closed kaybını `gsb_core::channel::SendLosses` ile sayar (F65,
 tokio'suz). Toplayıcının yırtık raporu `reports_torn_at_cut_grace` (F70).
 Loadgen teli GSNL. Açık: B99–B102, F77, F78.
+
+**e1 tamam** (CHANGELOG "e1"; B7 düz metin yarısı): `tests/rudp_resume.rs`
++ `rudp_resume/{rig,player,flows,grace}.rs`, RECONNECT §5 sonu. B3/B5
+turları bu yedi testi yeşil tutmalı; B3 kendi beklentisini `flows.rs`'teki
+kapı-başı beklentinin (`Door::drop_close`) yanına ekler.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -950,6 +955,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1746 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1753 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

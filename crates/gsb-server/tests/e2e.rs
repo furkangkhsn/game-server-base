@@ -1630,7 +1630,9 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
 // would ride the idle sweep, seconds of wall clock). The
 // transport-generic mechanics underneath (Detach/Resume/RebindKey) are
 // locked by gsb-core's reconnect suite, and the loadgen churn profile
-// exercises the wire path at profile scale.
+// exercises the wire path at profile scale. The rUDP flow (no FIN: the
+// idle sweep parks, a new port re-handshakes and resumes) is locked end
+// to end in `rudp_resume.rs` (B7, plaintext).
 
 /// Drain `client`'s inbound frames for up to `window`, applying every
 /// world snapshot to `view` (full snapshots replace it). Returns when

@@ -5,6 +5,29 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## e1 — rUDP üstünde resume uçtan uca kilitlendi (B7, düz metin) (`test/e1-rudp-resume`)
+
+- `gsb-server/tests/rudp_resume.rs` (7 test, gerçek sunucu): LEAVE'siz
+  kaybolan rUDP istemcisi (FIN yok → demux'ın boşta süpürmesi,
+  `idle_timeout:1`) park edilir; YENİ porttan, yeni cookie el sıkışmasıyla
+  gelen aynı kimlik AYNI varlığı geri alır — tek odada ve sharded ızgarada
+  (broadcast-resume). Eski oturum hâlâ canlıyken gelen yenisi onu devralır
+  (F32: eskiye ERROR 9 "superseded", yalnız `superseded:1`, park yok,
+  `leaves 0`). Grace dolmuşsa bot'un tuttuğu varlık geri alınır
+  (`detach_expired_ai 1`, `resumes 1`); `grace = 0`'da saydam taze join
+  (yeni varlık, `resumes 0`, registry `leaves 1`). Her sayı sunucunun
+  kendi raporundan tam sabitlenir; kaybolma ve devralma akışları TCP'de
+  yan yana koşar. Gerçek hata bulunmadı. RECONNECT §5 "rUDP üstünde resume
+  (B7, düz metin)": B3 (göç) ve B5 (Noise) bu yediyi yeşil tutar.
+- `e2e.rs`'teki "TCP-only by intent" notu artık `rudp_resume.rs`'e işaret
+  ediyor.
+
+Testler 1746 → 1753 (`otlp` ile 1764 → 1771). Ajanın 8 mutasyonu
+yakalandı; yükte (iki çekirdek, 4 ve 8 `yes`) yeşil. Ebeveyn doğrulaması:
+tam kapılar yeşil; rUDP boşta süpürmesinin kapatmasını kaldırmak dört
+kaybolma testini düşürdü (TCP ve devralma testleri beklendiği gibi
+etkilenmedi).
+
 ## c2 — F72 takılan sürecin idle penceresi, F65 sayan `try_send`, F70 sınırda yırtık rapor (`core/c2-stall-idle`)
 
 - **F72 — geç ateşlenen idle son tarihi sürecin takılmasıdır (kullanıcı
