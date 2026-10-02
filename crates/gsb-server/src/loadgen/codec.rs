@@ -289,7 +289,10 @@ mod logic;
 /// GSNQ = the GSNP layout with sixteen more transport counters at the
 /// end of that section (B5a's sealed rUDP door: `udp_proofs_refused_budget`
 /// .. `udp_path_challenges_not_queued`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E51;
+/// GSNR = the GSNQ layout with five more transport counters at the end
+/// of that section (B5b's key phases and stateless resets: `udp_rekeys`
+/// .. `udp_stateless_resets_send_failed`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E52;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

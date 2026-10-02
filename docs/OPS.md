@@ -1366,7 +1366,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `accepts_forged`, `accepts_unsealed`).
 - **Taşıma kapsamı: anahtar fazları ve stateless reset (B5b).** Satırın
   ve tablonun sonuna 5 `counter`; `RESULT`'ta `transport_<ad>=`; loadgen
-  telinin taşıma bölümü 5 sayaç uzar (sihirli sayı ayrıca atanır).
+  telinin taşıma bölümü 5 sayaç uzar (**GSNR**).
   - Yazıcı: `udp_rekeys` (s→c anahtar güncellemeleri — faz süresi ya da
     kayıt sınırı dolup istemci mevcut fazı onayladıktan sonra),
     `udp_rekeys_unconfirmed` (vadesi gelen ama istemci mevcut fazdan bir
