@@ -101,6 +101,9 @@ async fn start_inner(
     // `http_listen` empty. The watch's initial value is born five periods
     // stale, so `/healthz` answers 503 ("warming up") until the first real
     // report instead of ok from a placeholder nobody produced.
+    // The transport tasks' metrics channel (F35; see the collector
+    // below), made here: the ops surface reports on it too (B49).
+    let (transport_tx, transport_rx) = mpsc::channel::<MetricsEvent>(4096);
     let (metric_sink, http_task, http_addr) = if cfg.http_listen.is_empty() {
         (metric_sink, None, None)
     } else {
@@ -113,6 +116,10 @@ async fn start_inner(
             REPORT_PERIOD,
             template.clone(),
             1..=cfg.room_count,
+            http::OpsGuard {
+                limits: http::OpsLimits::of(&cfg),
+                metrics: Some(transport_tx.clone()),
+            },
         );
         info!(addr = %bound, "http ops surface listening");
         (MetricSink::Watch(report_tx), Some(surface), Some(bound))
@@ -144,11 +151,11 @@ async fn start_inner(
     // waits (bounded) until every one of them has dropped its sender, so
     // it carries every room's and connection's last word. The transport
     // tasks (the doors' pumps, the rUDP demux and writers, the handshake
-    // intakes) send on `transport_tx`: folded the same way, but not
+    // intakes, the ops surface's accept loop) send on `transport_tx`
+    // (made above): folded the same way, but not
     // waited for — a pump ends with its socket, which a silent peer can
     // hold open past the stop. Same capacity, same drop accounting.
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(4096);
-    let (transport_tx, transport_rx) = mpsc::channel::<MetricsEvent>(4096);
     let metrics = tokio::spawn(
         MetricsCollector::new(ticker.subscribe(), metrics_rx, metric_sink, REPORT_PERIOD)
             .with_transport_events(transport_rx)

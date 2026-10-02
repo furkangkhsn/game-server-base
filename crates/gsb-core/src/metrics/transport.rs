@@ -247,6 +247,14 @@ transport_counters! {
     /// the per-source cap, answered with a stateless Retry (prove the
     /// address, then come back) instead of a slot.
     handshakes_retried_per_source,
+    /// Ops HTTP surface (B49): connections closed at once, unread and
+    /// unanswered, because the surface already had `http_max_connections`
+    /// connection tasks live.
+    ops_http_conns_refused,
+    /// Ops HTTP surface (B49): responses whose write (the half-close
+    /// included) outran `http_write_timeout_secs` — a peer that sent its
+    /// request and did not read the answer; the connection was closed.
+    ops_http_writes_timed_out,
 }
 
 impl TransportCounters {

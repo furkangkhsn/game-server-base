@@ -52,6 +52,8 @@ fn surface(cfg: &Config) -> (OpsHttp, mpsc::Receiver<RoomConfig>) {
         rooms,
         period: Duration::from_secs(1),
         room_template: cfg.room_template(),
+        limits: OpsLimits::of(cfg),
+        counters: Default::default(),
     };
     (ops, asked)
 }
@@ -187,3 +189,4 @@ async fn the_metrics_path_serves_the_exposition_only_when_compiled_in() {
 }
 
 mod head_deadline;
+mod limits;

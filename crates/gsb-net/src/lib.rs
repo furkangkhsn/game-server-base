@@ -38,7 +38,7 @@
 mod framed;
 pub mod listen;
 mod metrics;
-pub use metrics::TransportMetrics;
+pub use metrics::{Flusher, TransportMetrics};
 pub mod pump;
 pub mod quic;
 pub mod tcp;

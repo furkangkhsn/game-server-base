@@ -32,9 +32,11 @@ pub type TransportMetrics = Option<mpsc::Sender<MetricsEvent>>;
 /// cadence).
 pub(crate) const FLUSH_EVERY: Duration = Duration::from_millis(500);
 
-/// One transport task's flush state (see the module docs).
+/// One transport task's flush state (see the module docs). Public for
+/// the other long-lived task that reports on the transport channel: the
+/// server's ops HTTP accept loop (B49).
 #[derive(Debug)]
-pub(crate) struct Flusher {
+pub struct Flusher {
     tx: TransportMetrics,
     /// The totals the channel last took.
     flushed: TransportCounters,
@@ -44,7 +46,8 @@ pub(crate) struct Flusher {
 }
 
 impl Flusher {
-    pub(crate) fn new(tx: TransportMetrics) -> Self {
+    /// A flusher sending on `tx` (`None` sends nothing).
+    pub fn new(tx: TransportMetrics) -> Self {
         Self {
             tx,
             flushed: TransportCounters::default(),
@@ -55,14 +58,14 @@ impl Flusher {
 
     /// Whether a periodic flush is due (cheap: checked before the caller
     /// builds its totals).
-    pub(crate) fn due(&self) -> bool {
+    pub fn due(&self) -> bool {
         self.tx.is_some() && self.last.elapsed() >= FLUSH_EVERY
     }
 
     /// Send the growth of `totals` since the last sample the channel took
     /// (nothing when there is none). `last`: the task is ending — the
     /// sample goes out past a full channel.
-    pub(crate) fn flush(&mut self, mut totals: TransportCounters, last: bool) {
+    pub fn flush(&mut self, mut totals: TransportCounters, last: bool) {
         let Some(tx) = &self.tx else {
             return;
         };

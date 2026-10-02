@@ -457,6 +457,18 @@ keepalive_hz = 1.0
 # guard (firewall/ACL), not just good intentions.
 #http_listen = "127.0.0.1:9090"
 
+# The ops surface's two resource limits (B49). http_max_connections: live
+# connection tasks at once; over it a new connection is closed at once,
+# unanswered, and counted (gsb_transport_ops_http_conns_refused_total).
+# Default 64 — a scraper or two, probes and an operator's curl need a
+# handful. http_write_timeout_secs: the deadline on writing ONE response
+# (the whole write, not each chunk); a peer that sent its request and
+# does not read the answer is closed and counted
+# (gsb_transport_ops_http_writes_timed_out_total). Default 10 s, the game
+# doors' write stall. 0 turns either off.
+#http_max_connections = 64
+#http_write_timeout_secs = 10.0
+
 # ── Oda başına override'lar: [rooms.<id>] (docs/OPS.md §2, B18) ────────
 # Bir oda (kalabalık bir oda, bir lobi) yukarıdaki ODA DÜZEYİ anahtarlardan
 # kendi değerlerini alabilir: tick_hz, room_control, conn_action,

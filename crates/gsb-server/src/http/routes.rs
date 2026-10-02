@@ -1,6 +1,7 @@
 //! Routing and the handlers behind each endpoint.
 
 use crate::boot::{registry_close_room, registry_open_room, registry_room_status};
+use crate::http::response::Response;
 use crate::http::*;
 use gsb_core::error::CoreError;
 use gsb_core::id::RoomId;

@@ -532,8 +532,10 @@ tutmaması — önce kırmızı, tek tek mutasyonla (§4.3 "Kilit").
 - mTLS (istemci sertifikası) — ticket-auth yeterli v1'de
 - TLS 0-RTT/session resumption ayarları — varsayılanlar
 - Admin HTTP auth/TLS — OPS.md NOT-DONE devam
-- Ops HTTP'de eşzamanlı bağlantı tavanı ve yanıt yazmaya süre sınırı
-  (başlık okuması B47'den beri sınırlı — OPS §3); localhost sözleşmesi
+- Ops HTTP: auth/TLS yok (yukarıda). Kaynak sınırları var — başlık
+  okuması (B47), eşzamanlı bağlantı tavanı ve yanıt yazmanın süre sınırı
+  (B49, `http_max_connections` / `http_write_timeout_secs`, OPS §3);
+  kaynak adres başına tavan yok (localhost sözleşmesi)
 - rUDP crypto — deneysel statü
 - Kaynak adres başına sınırın kapsamadığı evreler (§4.3.1 #8): düz TCP
   kapısının pre-auth evresi (registry) ve rUDP kapısı (sertleştirme turu)

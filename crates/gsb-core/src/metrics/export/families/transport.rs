@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 46] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 48] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -254,6 +254,17 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 46] 
         "gsb_transport_handshakes_retried_per_source_total",
         "QUIC connections from a source not yet proven its own, at the per-source cap, answered with a stateless Retry instead of a slot, cumulative.",
         |t| t.handshakes_retried_per_source,
+    ),
+    // B49: the ops HTTP surface's two limits.
+    tr(
+        "gsb_transport_ops_http_conns_refused_total",
+        "Connections the ops HTTP surface closed at once, unread and unanswered, at its cap on live connections (http_max_connections), cumulative.",
+        |t| t.ops_http_conns_refused,
+    ),
+    tr(
+        "gsb_transport_ops_http_writes_timed_out_total",
+        "Ops HTTP responses whose write outran http_write_timeout_secs (a peer that did not read its answer); the connection was closed, cumulative.",
+        |t| t.ops_http_writes_timed_out,
     ),
 ];
 

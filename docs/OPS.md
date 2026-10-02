@@ -884,6 +884,20 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
   sebep kendi sayacını alır (B1'in tıkanıklık denetimi bu sayacı kayıp
   sinyali olarak okuyacak). İstemci tarafı karşılığı loadgen
   `retrans_out` (değişmedi).
+- **Taşıma kapsamı: ops HTTP yüzeyinin iki sınırı (B49).** Satırın ve
+  tablonun sonuna (D11'in ikisinden sonra) iki `counter`; `RESULT`'ta
+  `transport_<ad>=` (her satırda; loadgen sunucusunun ops yüzeyi yoksa
+  0). Loadgen teli: taşıma bölümü yine büyür — sihirli sayıyı
+  birleştirme atar. `ops_http_conns_refused`
+  (`gsb_transport_ops_http_conns_refused_total`) — `http_max_connections`
+  canlı görev varken hemen, yanıtsız kapatılan bağlantılar;
+  `ops_http_writes_timed_out` (`gsb_transport_ops_http_writes_timed_out_total`)
+  — yazması `http_write_timeout_secs`'i aşan yanıtlar (bağlantı kapandı).
+  Ops yüzeyi bir taşıma kapısı değil ama aynı `Door`'dan geçen ve aynı
+  taşıma kanalına (`gsb_net::Flusher`) raporlayan bir kapı: accept
+  döngüsü en çok 500 ms'de bir (bir accept'ten sonra) ve kapanırken
+  gönderir; son accept'ten sonraki zaman aşımı sonraki accept'te ya da
+  kapanışta gelir (intake'in kuralı).
 - **Taşıma kapsamı: el sıkışan kapıların kaynak başına sınırı (D11).**
   Satırın ve tablonun sonuna iki `counter`; `RESULT`'ta
   `transport_<ad>=` (her satırda). Loadgen teli: taşıma bölümü
@@ -1142,13 +1156,37 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
   scraper ya da `curl` başlığını bağlanır bağlanmaz tek yazmada yollar —
   yavaş bir hatta bile dürüst istemcinin çok ötesi, sessiz görevin de
   kısa sürede ölmesine yeter.
-  *Sınır dışı kalanlar.* Eşzamanlı ops bağlantısına **tavan yok**: her
-  kabul edilen bağlantı bir görev; süre sınırıyla canlı görev sayısı
-  kabul hızı × (5 sn + yanıt yazma + 300 ms) ile sınırlı, ama sayıyla
-  değil. Yanıt **yazmanın** süre sınırı yok: başlığını gönderip yanıtı
-  hiç okumayan bir eş, soket tamponlarından büyük bir yanıtta (çok odalı
-  `/metrics`) görevini tutar. İkisi de localhost sözleşmesinde (B17)
-  kabul edilir; port dışa açılırsa ele alınır (BACKLOG).
+- **Bağlantı tavanı ve yanıt yazmanın süre sınırı (B49).** B47 yalnız
+  başlık okumasını sınırlamıştı: başlığını gönderip yanıtı hiç okumayan
+  bir eş, soket tamponlarından büyük bir yanıtta (çok odalı `/metrics`)
+  görevini bağlı kaldıkça tutuyordu ve bir eşin açabileceği görev
+  sayısına sınır yoktu. İki sunucu anahtarı (varsayılan AÇIK — ops
+  yüzeyi localhost sözleşmesi, değerler cömert):
+  ```toml
+  http_max_connections = 64      # vars. 64; 0 = tavan yok
+  http_write_timeout_secs = 10.0 # vars. 10 sn; 0 = sınır yok
+  ```
+  (1) **Tavan:** accept döngüsü canlı bağlantı görevi başına bir yuva
+  tutar; tavandaki yeni bağlantı hemen, okunmadan ve yanıtsız kapanır
+  (ret yolunda yazma yok — yavaş okuyan eşe yazmak iş olurdu) ve sayılır
+  (`ops_http_conns_refused`); doymuş dönemin ilk reddi tek `warn`.
+  Gerekçe: yüzeyin çağıranları bir-iki scraper, sağlık yoklaması ve
+  operatörün `curl`'u — bir avuç eşzamanlı bağlantı; 64 büyüklük
+  mertebesi pay ve bir eşin tutabileceği görev (ve yanıt arabelleği)
+  sayısına sınır. (2) **Yazma süre sınırı:** yanıtın TAMAMI (yazma +
+  ardından yarı kapanış) tek `timeout` altında — B47'nin başlık okuması
+  gibi, yazma başına değil; aşılırsa bağlantı düşer (kapanır) ve sayılır
+  (`ops_http_writes_timed_out`, her biri `warn`). Gerekçe: çok megabaytlık
+  bir `/metrics` loopback ya da LAN'da milisaniyede, yavaş bir yönetim
+  hattında saniyelerde geçer; 10 sn oyun kapılarının yazma tıkanması
+  varsayılanı (`write_stall_secs`). Okuyan ama yavaş eş tam yanıtı alır.
+  Böylece bir bağlantı görevi en çok 5 sn (başlık) + yönlendirme + 10 sn
+  (yazma) + 300 ms (boşaltma) yaşar ve aynı anda en çok 64 tanesi.
+  `0` (ya da negatif / sonsuz süre — `write_stall_secs` kuralı) ilgili
+  sınırı kapatır. Katman yok: `[rooms.<id>]` reddeder. *Sınır dışı
+  kalan:* yönlendirmenin kendisi (`/rooms`, oda açma/kapama registry
+  yanıtını bekler) yazma süresine dahil değil; registry'nin cevabı
+  kendi sınırında.
 - Kapanış (B33): accept, oyun dinleyicileriyle aynı `Door`'dan geçer
   (B16). `ServerHandle::stop` kapıyı kapatır, bekleyen accept
   `listener_closed` ile biter, döngü döner ve listener'ı düşürür (port
@@ -1229,6 +1267,18 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
    kırmızı (süre sınırı yokken iki test asılma korumasına takıldı);
    öldürülen mutasyonlar: süre sınırı yok, okuma başına süre, zaman
    aşımına 400, zaman aşımında yanıtsız kapatma, sınırın 100'de biri
+6b. Bağlantı tavanı ve yazma süre sınırı (B49, `http/tests/limits.rs`):
+   paused saatte 64 baytlık boru üstünde isteğini yollayıp hiç okumayan
+   eş tam `http_write_timeout_secs`'te (öncesinde değil) kesilir, sayılır,
+   görevi biter; okuyan yavaş eş yanıtın tamamını alır, sayaç 0; gerçek
+   soketlerle tavan 2'de iki sessiz eş varken üçüncü bağlantı hemen
+   yanıtsız kapanır ve sayılır, bırakılan yuva sonrakine hizmet eder,
+   kapı kapanınca ret toplayıcıya ulaşır; anahtarların çözümü (vars. 64 /
+   10 sn; 0, negatif, sonsuz, NaN = kapalı). `tests/ops_limits.rs`:
+   varsayılanlar, ayrıştırma, `[rooms.<id>]` reddi; sunucu arkasında
+   tavan üstü bağlantı reddi yüzeyin kendi `/metrics`'inde
+   `gsb_transport_ops_http_conns_refused_total` olarak görünür. Önce
+   kırmızı (süre sınırı ve tavan yokken); öldürülen mutasyonlar raporda.
 7. Başlatma hatası (F63, `tests/startup_errors.rs`): gerçek ikililer
    (`CARGO_BIN_EXE_gsb-server`, `…gsb-loadgen`) bir şey bağlamadan
    reddeden config'lerle koşar — girdide bilinmeyen anahtar (anahtar,

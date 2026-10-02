@@ -206,6 +206,10 @@ gsb_transport_handshakes_refused_per_source sum t=2 mono=true unit="" n=1 | Conn
   [] 1000..2000 int 45
 gsb_transport_handshakes_retried_per_source sum t=2 mono=true unit="" n=1 | QUIC connections from a source not yet proven its own, at the per-source cap, answered with a stateless Retry instead of a slot, cumulative.
   [] 1000..2000 int 46
+gsb_transport_ops_http_conns_refused sum t=2 mono=true unit="" n=1 | Connections the ops HTTP surface closed at once, unread and unanswered, at its cap on live connections (http_max_connections), cumulative.
+  [] 1000..2000 int 47
+gsb_transport_ops_http_writes_timed_out sum t=2 mono=true unit="" n=1 | Ops HTTP responses whose write outran http_write_timeout_secs (a peer that did not read its answer); the connection was closed, cumulative.
+  [] 1000..2000 int 48
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

@@ -14,10 +14,10 @@
 //! `head::HEAD_DEADLINE` (else one 408, B47), ignores any body, writes
 //! exactly one response with `Connection: close`, then closes — so no
 //! multiplexed waits are needed anywhere and the actor discipline
-//! survives unchanged. There is no cap on concurrent connections; the
-//! head read and the drain are bounded in time, the one response write
-//! is not (a peer that sends a head and never reads a response larger
-//! than the socket buffers holds its task — OPS §3).
+//! survives unchanged. Every wait a peer controls is bounded: the head
+//! read (B47), the response write (`http_write_timeout_secs`, B49) and
+//! the drain; and so is their number — `http_max_connections` live
+//! connection tasks (B49, `limits`).
 //!
 //! Stop (BACKLOG B33): the accept runs through a [`Door`], the one every
 //! game listener closes (B16). `ServerHandle::stop` closes it, the
@@ -55,8 +55,13 @@ use gsb_net::transport::{Door, is_listener_closed};
 use crate::config::RoomTemplate;
 
 mod head;
+mod limits;
+mod response;
 mod routes;
 use head::*;
+use limits::*;
+pub(crate) use limits::{OpsGuard, OpsLimits};
+use response::Response;
 use routes::*;
 
 #[cfg(test)]
@@ -98,6 +103,10 @@ pub(crate) struct OpsHttp {
     /// template the pre-created rooms come from — the surface never
     /// invents room settings of its own).
     room_template: RoomTemplate,
+    /// The connection cap and the write deadline (B49).
+    limits: OpsLimits,
+    /// What the accept loop and the connection tasks count (B49).
+    counters: Arc<OpsCounters>,
 }
 
 /// The running ops surface: its accept loop and the door that ends it.
@@ -118,7 +127,9 @@ pub(crate) fn spawn(
     period: Duration,
     room_template: RoomTemplate,
     configured_rooms: impl Iterator<Item = u64>,
+    guard: OpsGuard,
 ) -> OpsSurface {
+    let OpsGuard { limits, metrics } = guard;
     let (rooms_tx, rooms_rx) = mpsc::channel::<RoomsMsg>(16);
     // Bounded (the project's backpressure discipline): the bookkeeper is a
     // trivial task, so 16 slots never fill at admin frequency; a full slot
@@ -131,25 +142,56 @@ pub(crate) fn spawn(
         rooms: rooms_tx,
         period,
         room_template,
+        limits,
+        counters: Arc::new(OpsCounters::default()),
     };
     let door = Arc::new(Door::new());
-    let task = tokio::spawn(accept_loop(listener, ops, Arc::clone(&door)));
+    let task = tokio::spawn(accept_loop(listener, ops, Arc::clone(&door), metrics));
     OpsSurface { door, task }
 }
 
 /// The accept loop. Its ONLY awaited source is `accept()` (through the
 /// door, which can only end it) — everything else happens inside
-/// short-lived per-connection tasks. Returns on the closed door.
-async fn accept_loop(listener: TcpListener, ops: OpsHttp, door: Arc<Door>) {
+/// short-lived per-connection tasks, at most `http_max_connections` of
+/// them (B49). Sends the surface's counts to the collector after an
+/// accept (when due) and once more as it ends. Returns on the closed
+/// door.
+async fn accept_loop(
+    listener: TcpListener,
+    ops: OpsHttp,
+    door: Arc<Door>,
+    metrics: gsb_net::TransportMetrics,
+) {
+    let mut flusher = gsb_net::Flusher::new(metrics);
+    // Set by the first refusal of a saturated spell (one warning per
+    // spell, not one per refused connection); cleared by the next slot.
+    let mut saturated = false;
     loop {
         match door.admit(listener.accept()).await {
-            Ok((stream, peer)) => {
-                debug!(%peer, "ops http connection");
-                let ops = ops.clone();
-                tokio::spawn(serve_one(stream, ops));
-            }
+            Ok((stream, peer)) => match ops.counters.try_slot(ops.limits.max_connections) {
+                Some(slot) => {
+                    debug!(%peer, "ops http connection");
+                    saturated = false;
+                    let ops = ops.clone();
+                    tokio::spawn(async move {
+                        let _slot = slot;
+                        serve_one(stream, ops).await;
+                    });
+                }
+                // Refused: the socket closes as it drops, unanswered.
+                None => {
+                    if !std::mem::replace(&mut saturated, true) {
+                        warn!(
+                            max = ?ops.limits.max_connections,
+                            "ops http connections at the cap; refusing new ones"
+                        );
+                    }
+                    debug!(%peer, "ops http connection refused at the cap");
+                }
+            },
             Err(e) if is_listener_closed(&e) => {
                 debug!("ops http door closed; accept loop ends");
+                flusher.flush(ops.counters.totals(), true);
                 return;
             }
             Err(e) => {
@@ -157,6 +199,9 @@ async fn accept_loop(listener: TcpListener, ops: OpsHttp, door: Arc<Door>) {
                 // A persistent error (EMFILE …) must not become a spin loop.
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
+        }
+        if flusher.due() {
+            flusher.flush(ops.counters.totals(), false);
         }
     }
 }
@@ -182,10 +227,28 @@ async fn serve_one<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, ops: OpsHtt
             "request head not received in time\n",
         ),
     };
-    if stream.write_all(&response.serialize()).await.is_err() {
+    let bytes = response.serialize();
+    let write = async {
+        stream.write_all(&bytes).await?;
+        let _ = stream.shutdown().await;
+        Ok::<(), std::io::Error>(())
+    };
+    // One deadline around the whole write (B49): a peer that does not
+    // read its answer cannot hold the task.
+    let written = match ops.limits.write_timeout {
+        Some(deadline) => match tokio::time::timeout(deadline, write).await {
+            Ok(done) => done,
+            Err(_) => {
+                ops.counters.count_write_timeout();
+                warn!(timeout = ?deadline, "ops http response not read in time; closing");
+                return;
+            }
+        },
+        None => write.await,
+    };
+    if written.is_err() {
         return; // the peer left before the answer; nothing to serve anymore
     }
-    let _ = stream.shutdown().await;
     // Best-effort bounded drain (see DRAIN_WINDOW for why it exists).
     let _ = tokio::time::timeout(DRAIN_WINDOW, async {
         let mut sink = [0u8; 512];
@@ -197,51 +260,4 @@ async fn serve_one<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, ops: OpsHtt
         }
     })
     .await;
-}
-
-/// One response: status line + the minimal header set + a text body.
-struct Response {
-    status: u16,
-    reason: &'static str,
-    content_type: &'static str,
-    allow: Option<&'static str>,
-    body: String,
-}
-
-impl Response {
-    fn text(status: u16, reason: &'static str, body: impl Into<String>) -> Self {
-        Self {
-            status,
-            reason,
-            content_type: "text/plain; charset=utf-8",
-            allow: None,
-            body: body.into(),
-        }
-    }
-
-    fn method_not_allowed(allow: &'static str) -> Self {
-        let mut r = Self::text(405, "Method Not Allowed", "method not allowed\n");
-        r.allow = Some(allow);
-        r
-    }
-
-    fn serialize(&self) -> Vec<u8> {
-        use std::fmt::Write as _;
-        let mut head = String::with_capacity(160 + self.body.len());
-        let _ = write!(
-            head,
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-            self.status,
-            self.reason,
-            self.content_type,
-            self.body.len()
-        );
-        if let Some(allow) = self.allow {
-            let _ = write!(head, "Allow: {allow}\r\n");
-        }
-        head.push_str("\r\n");
-        let mut out = head.into_bytes();
-        out.extend_from_slice(self.body.as_bytes());
-        out
-    }
 }

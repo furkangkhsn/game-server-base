@@ -531,6 +531,25 @@ pub struct Config {
     /// as an explicit, network-guarded decision (e.g. `"127.0.0.1:9090"`,
     /// never `"0.0.0.0"`).
     pub http_listen: String,
+    /// **Concurrent connection cap** of the ops HTTP surface (BACKLOG
+    /// B49): over it a new connection is closed at once, unread and
+    /// unanswered, and counted (`ops_http_conns_refused`). Default 64:
+    /// the surface's callers are a scraper or two, health probes and an
+    /// operator's `curl`, each connection living at most the head
+    /// deadline (5 s) + [`Self::http_write_timeout_secs`] + a 300 ms
+    /// drain — an order of magnitude of headroom, and a bound on the
+    /// tasks (and response buffers) one peer can pin. `0` (like the
+    /// other caps) or `None` = no cap.
+    pub http_max_connections: Option<u32>,
+    /// **Response write deadline** of the ops HTTP surface, in seconds
+    /// (BACKLOG B49): the whole response write — one timeout around it,
+    /// not per write — of a peer that sent its request and does not read
+    /// the answer; past it the connection is closed and counted
+    /// (`ops_http_writes_timed_out`). Default 10 s, the game doors' write
+    /// stall: a multi-megabyte `/metrics` crosses a loopback or LAN in
+    /// milliseconds, and even a slow admin link in seconds. `0` (or a
+    /// negative or non-finite value) disables it, as `write_stall_secs`.
+    pub http_write_timeout_secs: f64,
     /// The export layer's push exporters (`[metrics]`, docs/OPS.md §6):
     /// `[metrics.otlp]` pushes every report interval to an OpenTelemetry
     /// collector. Empty (the default) = no push; the log lines and the
@@ -558,6 +577,14 @@ pub struct Config {
 /// goal as a guardrail). Single source of truth for the `Config` default
 /// AND the unauth-cap derivation when `max_connections` is unlimited.
 pub(crate) const DEFAULT_MAX_CONNECTIONS: u64 = 100_000;
+
+/// The ops HTTP surface's default cap on live connections (B49; see
+/// `Config::http_max_connections`).
+pub(crate) const DEFAULT_HTTP_MAX_CONNECTIONS: u32 = 64;
+
+/// The ops HTTP surface's default response write deadline, in seconds
+/// (B49; see `Config::http_write_timeout_secs`).
+pub(crate) const DEFAULT_HTTP_WRITE_TIMEOUT_SECS: f64 = 10.0;
 
 /// The floor of the derived unauthenticated-connection cap
 /// (`unauth_cap_of`): even the smallest deployment gets real headroom for
@@ -622,6 +649,8 @@ impl Default for Config {
             spawn_half_size: DEMO_DEFAULT_SPAWN_HALF,
             disconnect_grace_secs: DEMO_DEFAULT_DISCONNECT_GRACE_SECS,
             http_listen: String::new(),
+            http_max_connections: Some(DEFAULT_HTTP_MAX_CONNECTIONS),
+            http_write_timeout_secs: DEFAULT_HTTP_WRITE_TIMEOUT_SECS,
             metrics: MetricsConfig::default(),
             game: crate::games::DEFAULT_GAME.into(),
             raw: toml::Table::new(),
