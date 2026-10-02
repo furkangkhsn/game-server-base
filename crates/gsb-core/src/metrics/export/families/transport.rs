@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 85] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 86] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -454,6 +454,11 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 85] 
         "gsb_transport_udp_migrations_port_only_total",
         "rUDP migrations that changed the client's port only (a NAT rebinding; the path estimate is kept), cumulative.",
         |t| t.udp_migrations_port_only,
+    ),
+    tr(
+        "gsb_transport_udp_proofs_refused_per_source_total",
+        "Verified rUDP proofs refused because their source held its max_handshakes_per_source pending sessions (no session, no accept; the client re-sends), cumulative.",
+        |t| t.udp_proofs_refused_per_source,
     ),
 ];
 

@@ -47,7 +47,17 @@ impl super::Demux {
                 self.challenges_send_failed += 1;
                 debug!(%peer, %e, "rUDP: challenge send failed");
             }
-        } else if self.cookie.verify(nonce, peer, cookie, slot) {
+        } else if !self.cookie.verify(nonce, peer, cookie, slot) {
+            // Forged, or issued more than one rotation ago (a replay of a
+            // captured proof): drop, count, answer nothing.
+            self.bad_cookie += 1;
+        } else if !self.per_source.admits(peer.ip()) {
+            // The source holds its cap of pending sessions (B89, module
+            // `source`): checked only now, past the cookie, so only a
+            // return-routable source is ever counted or refused. Nothing
+            // is created and no accept goes out; the client's re-sent
+            // proof gets in once a place is free.
+        } else {
             // Proof verified: establish the session. The mailboxes are
             // created HERE (not in the accept loop) so that every
             // post-INIT2 datagram — the client's AUTH included — is
@@ -91,9 +101,10 @@ impl super::Demux {
             .with_peer(peer)
             .with_inbox(endpoint_in_tx, in_rx)
             .with_outbox(out_tx, out_rx);
+            let pending = self.per_source.claim(key, peer.ip());
             match self
                 .end_tx
-                .try_send(Queued::new(endpoint, self.metrics.clone()))
+                .try_send(Queued::new(endpoint, self.metrics.clone(), pending))
             {
                 Ok(()) => {
                     // The accept: the session's cumulative ACK, "send me
@@ -124,10 +135,6 @@ impl super::Demux {
                     self.remove_session(key);
                 }
             }
-        } else {
-            // Forged, or issued more than one rotation ago (a replay of a
-            // captured proof): drop, count, answer nothing.
-            self.bad_cookie += 1;
         }
     }
 

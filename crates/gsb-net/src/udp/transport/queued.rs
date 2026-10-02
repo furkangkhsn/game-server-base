@@ -13,17 +13,25 @@ use crate::metrics::Flusher;
 use crate::transport::Endpoint;
 
 /// A queued endpoint, counted as `udp_sessions_unaccepted_closed` if it
-/// is dropped still holding its endpoint.
+/// is dropped still holding its endpoint. It carries its session's
+/// place in the per-source cap (B89), given back as it goes — taken by
+/// the accept loop or dropped, whichever comes first.
 pub(in crate::udp) struct Queued {
     endpoint: Option<Endpoint>,
     metrics: crate::TransportMetrics,
+    _pending: Option<crate::udp::demux::Pending>,
 }
 
 impl Queued {
-    pub(in crate::udp) fn new(endpoint: Endpoint, metrics: crate::TransportMetrics) -> Self {
+    pub(in crate::udp) fn new(
+        endpoint: Endpoint,
+        metrics: crate::TransportMetrics,
+        pending: Option<crate::udp::demux::Pending>,
+    ) -> Self {
         Self {
             endpoint: Some(endpoint),
             metrics,
+            _pending: pending,
         }
     }
 

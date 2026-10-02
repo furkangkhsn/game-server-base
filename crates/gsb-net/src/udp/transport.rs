@@ -49,6 +49,14 @@ pub struct UdpTransportConfig {
     /// what it was. Pre-crypto a CID is a bearer token — see
     /// `crate::udp` module `path` and `docs/RUDP-SECURITY.md` §7.
     pub migration: bool,
+    /// The per-source cap on pending sessions (BACKLOG B89; the server's
+    /// `max_handshakes_per_source`, D11's key): one source — an IPv4
+    /// address, an IPv6 /64 — holds at most this many sessions the demux
+    /// has established (a verified proof) and the accept loop has not
+    /// taken yet. A verified proof over it creates nothing, gets no
+    /// accept and is counted (`udp_proofs_refused_per_source`); the
+    /// client re-sends it. `None` (the default) or `0`: no cap.
+    pub max_handshakes_per_source: Option<usize>,
 }
 
 impl Default for UdpTransportConfig {
@@ -63,6 +71,7 @@ impl Default for UdpTransportConfig {
             buffers: crate::listen::UdpBuffers::default(),
             congestion: UdpCongestion::Off,
             migration: false,
+            max_handshakes_per_source: None,
         }
     }
 }

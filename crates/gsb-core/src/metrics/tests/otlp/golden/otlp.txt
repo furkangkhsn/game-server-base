@@ -288,6 +288,8 @@ gsb_transport_udp_migrations sum t=2 mono=true unit="" n=1 | rUDP sessions moved
   [] 1000..2000 int 84
 gsb_transport_udp_migrations_port_only sum t=2 mono=true unit="" n=1 | rUDP migrations that changed the client's port only (a NAT rebinding; the path estimate is kept), cumulative.
   [] 1000..2000 int 85
+gsb_transport_udp_proofs_refused_per_source sum t=2 mono=true unit="" n=1 | Verified rUDP proofs refused because their source held its max_handshakes_per_source pending sessions (no session, no accept; the client re-sends), cumulative.
+  [] 1000..2000 int 86
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

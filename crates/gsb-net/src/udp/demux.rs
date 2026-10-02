@@ -21,10 +21,12 @@ mod migrate;
 mod reap;
 mod report;
 mod session;
+mod source;
 mod sweep;
 mod table;
 pub(super) use reap::Reaper;
 pub(super) use session::UdpSession;
+pub(super) use source::Pending;
 pub(super) use table::SessionKey;
 use table::Sessions;
 #[cfg(test)]
@@ -49,6 +51,9 @@ pub(super) struct Demux {
     /// Whether the server grants connection ids (module
     /// `crate::udp::path`; the server's `udp_migration`, default off).
     migration: bool,
+    /// The per-source cap on pending sessions (`source`, BACKLOG B89; the
+    /// server's `max_handshakes_per_source`, default none).
+    per_source: source::PerSource,
     /// Idle deadlines (feature 4): (deadline, session) with lazy
     /// invalidation — an entry is *current* only while it equals
     /// `session.last_seen + idle`; datagrams supersede it (a new entry
@@ -133,6 +138,7 @@ impl Demux {
             idle,
             sessions: Sessions::default(),
             migration: false,
+            per_source: source::PerSource::new(None),
             deadlines: BTreeSet::new(),
             reaper,
             reap_rx,
@@ -217,6 +223,7 @@ pub(super) async fn demux(
     d.metrics = cfg.metrics;
     d.congestion = cfg.congestion;
     d.migration = cfg.migration;
+    d.per_source = source::PerSource::new(cfg.max_handshakes_per_source);
     loop {
         // Arm the read: if any session has an idle deadline pending, the
         // read is bounded by the EARLIEST one (the deadline fires only
@@ -271,6 +278,7 @@ pub(super) async fn demux(
         oversized_in = d.oversized_in,
         bad_datagrams = d.bad_datagrams,
         frag_refused = d.frag_refused,
+        proofs_refused_per_source = d.per_source.refused,
         migrations = d.mig.migrations,
         cid_unknown = d.mig.cid_unknown,
         "rUDP demux stopped"

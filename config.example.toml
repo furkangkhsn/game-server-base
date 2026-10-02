@@ -110,8 +110,12 @@ transport = "tcp"
 # trip or two), not connections. Unset (the default) or 0: no cap — the
 # doors as they were. Size it to the players behind one address (a NAT,
 # a LAN party) who may connect within the same second, with headroom:
-# 8-16 for homes, 32-64 behind a large carrier-grade NAT. Plain "tcp"
-# and "udp" doors ignore it. Server-wide only.
+# 8-16 for homes, 32-64 behind a large carrier-grade NAT. On a "udp"
+# (rUDP) door the cookie exchange holds nothing; there it caps one
+# source's sessions established (a verified proof) and not yet taken by
+# the accept loop: a proof over it creates nothing, gets no accept and is
+# counted (udp_proofs_refused_per_source); the client re-sends. The
+# plain "tcp" door ignores it. Server-wide only.
 #max_handshakes_per_source = 16
 
 # Per-source cap on UNAUTHENTICATED connections, every door (D12). One

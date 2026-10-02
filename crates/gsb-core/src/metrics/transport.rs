@@ -412,6 +412,11 @@ transport_counters! {
     /// rUDP demux (migration): of those, the moves that changed the port
     /// only (a NAT rebinding; the writer keeps the path estimate).
     udp_migrations_port_only,
+    /// rUDP demux (per-source cap, BACKLOG B89): verified proofs refused
+    /// because their source held `max_handshakes_per_source` pending sessions
+    /// (established, not yet taken by the accept loop) — no session, no
+    /// accept; the client re-sends its proof.
+    udp_proofs_refused_per_source,
 }
 
 impl TransportCounters {

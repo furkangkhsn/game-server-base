@@ -475,8 +475,12 @@ pub struct Config {
     /// over it is closed unhandshaken (QUIC: refused, or asked to prove
     /// an unproven address with a Retry) and counted
     /// (`handshakes_refused_per_source`, `handshakes_retried_per_source`).
-    /// Plain TCP has no handshake stage and ignores it, as do rUDP doors
-    /// (their cookie handshake holds no slot).
+    /// Plain TCP has no handshake stage and ignores it. On an rUDP door
+    /// the cookie exchange holds nothing, so the cap is on the state it
+    /// creates (BACKLOG B89): one source's sessions established by a
+    /// verified proof and not yet taken by the accept loop; a proof over
+    /// it creates nothing, gets no accept and is counted
+    /// (`udp_proofs_refused_per_source`) — the client re-sends it.
     ///
     /// `None` (the default) or `0` = no per-source cap: the doors as they
     /// were. Off by default because the right number is the deployment's:

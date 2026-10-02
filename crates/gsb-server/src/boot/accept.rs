@@ -186,6 +186,31 @@ pub(super) async fn run_accept(
     }
 }
 
+/// An rUDP door's configuration from the server's.
+pub(super) fn udp_config(
+    cfg: &Config,
+    idle_timeout: Option<std::time::Duration>,
+    cookie_key: Option<[u8; 16]>,
+    metrics: gsb_net::TransportMetrics,
+) -> UdpTransportConfig {
+    UdpTransportConfig {
+        // The demux pre-creates the mailboxes at handshake: same
+        // capacities as the TCP path (cfg.conn_inbox/conn_out are the
+        // fallbacks `Endpoint::take_*` would use).
+        inbox_capacity: cfg.conn_inbox,
+        outbox_capacity: cfg.conn_out,
+        max_datagram_bytes: cfg.udp_max_datagram_bytes,
+        idle_timeout,
+        cookie_key,
+        metrics,
+        buffers: udp_buffers(cfg),
+        congestion: cfg.udp_congestion.into(),
+        migration: cfg.udp_migration,
+        // The cap on pending sessions per source (B89): D11's key.
+        max_handshakes_per_source: cfg.max_handshakes_per_source.map(|n| n as usize),
+    }
+}
+
 /// Build and bind ONE listener from a validated spec. The transport
 /// instance is per-listener ON PURPOSE even for two entries of the same
 /// kind: each door owns its socket (and, for rUDP, its own demux state),
@@ -197,7 +222,8 @@ pub(super) async fn run_accept(
 /// intakes; B66 — every stream door's pumps, plain TCP's too).
 /// `cfg.listen_backlog`: every TCP-based door's accept backlog (B84;
 /// the UDP doors have no accept queue). `cfg.max_handshakes_per_source`:
-/// every handshaking door's per-source cap (D11).
+/// every handshaking door's per-source cap (D11) — and the rUDP doors'
+/// cap on pending sessions per source (B89).
 /// `cfg.udp_{recv,send}_buffer_bytes`:
 /// every UDP-based door's socket buffers (B4).
 pub(super) async fn bind_listener(
@@ -230,20 +256,7 @@ pub(super) async fn bind_listener(
             },
         }),
         ListenerSpec::Udp { .. } => Arc::new(UdpTransport {
-            config: UdpTransportConfig {
-                // The demux pre-creates the mailboxes at handshake: same
-                // capacities as the TCP path (cfg.conn_inbox/conn_out are
-                // the fallbacks `Endpoint::take_*` would use).
-                inbox_capacity: cfg.conn_inbox,
-                outbox_capacity: cfg.conn_out,
-                max_datagram_bytes: cfg.udp_max_datagram_bytes,
-                idle_timeout,
-                cookie_key,
-                metrics,
-                buffers: udp_buffers(cfg),
-                congestion: cfg.udp_congestion.into(),
-                migration: cfg.udp_migration,
-            },
+            config: udp_config(cfg, idle_timeout, cookie_key, metrics),
         }),
         ListenerSpec::Quic {
             cert_pem, key_pem, ..

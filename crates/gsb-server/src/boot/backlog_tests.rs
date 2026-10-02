@@ -164,3 +164,19 @@ async fn every_udp_door_hands_its_buffers_to_the_builder() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The rUDP door's own keys reach its transport: the per-source cap on
+/// pending sessions (B89, `max_handshakes_per_source`) and migration —
+/// and unset, neither is on.
+#[test]
+fn the_rudp_door_gets_its_per_source_cap_and_migration() {
+    let on = Config {
+        max_handshakes_per_source: Some(3),
+        udp_migration: true,
+        ..Default::default()
+    };
+    let c = super::accept::udp_config(&on, None, None, None);
+    assert_eq!((c.max_handshakes_per_source, c.migration), (Some(3), true));
+    let c = super::accept::udp_config(&Config::default(), None, None, None);
+    assert_eq!((c.max_handshakes_per_source, c.migration), (None, false));
+}

@@ -13,6 +13,8 @@ use tokio::io::AsyncReadExt;
 use tokio::net::{TcpSocket, TcpStream};
 
 mod common;
+#[path = "handshakes_per_source/rudp.rs"]
+mod rudp;
 
 /// Far below the 10 s handshake deadline.
 const PROMPT: Duration = Duration::from_secs(2);
