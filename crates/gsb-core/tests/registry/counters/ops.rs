@@ -35,6 +35,7 @@ async fn joins_and_a_close_the_op_queue_refused_are_counted() {
             out,
             identity: String::new(),
             reply,
+            claims: None,
         })
         .await
         .expect("registry gone");

@@ -42,7 +42,7 @@ fn shards(n: usize) -> (RoomHandle<(), ()>, Vec<Shard>) {
 fn resume(handle: RoomHandle<(), ()>) -> JoinHandle<OpOutcome> {
     tokio::spawn(async move {
         let (out, _gone) = channel(8);
-        Reg::dispatch_resume(CONN, ROOM, &handle, Some(0), 1, "ada".into(), out).await
+        Reg::dispatch_resume(CONN, ROOM, &handle, Some(0), 1, "ada".into(), None, out).await
     })
 }
 

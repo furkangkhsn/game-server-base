@@ -122,7 +122,7 @@ async fn setup() -> (Reg, mpsc::UnboundedReceiver<Ev>) {
 async fn join(reg: &mut Reg) -> EntityId {
     let (out, _out) = channel(64);
     let (reply, seated) = oneshot::channel();
-    reg.on_spawn_player(CONN, ROOM, out, String::new(), reply)
+    reg.on_spawn_player(CONN, ROOM, out, String::new(), None, reply)
         .await;
     let seat = tokio::time::timeout(WAIT, seated).await.expect("answered");
     seat.expect("the join was dropped: a gone dispatcher refused it")

@@ -40,7 +40,8 @@ async fn a_resume_counts_the_old_channels_unread_requests() {
             epoch: 1,
             identity: String::new(),
             out: out_tx.clone(),
-            reply: reply_tx
+            reply: reply_tx,
+            claims: None,
         },
         1
     ));

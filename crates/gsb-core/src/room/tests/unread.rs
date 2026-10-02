@@ -101,6 +101,7 @@ fn join(r: &mut RoomActor<(), (), ()>, conn: u64, who: &str) -> Mailbox<Action> 
         identity: who.to_string(),
         out,
         reply,
+        claims: None,
     });
     tokio_sync_oneshot_peek(reply_rx)
         .expect("sync reply")

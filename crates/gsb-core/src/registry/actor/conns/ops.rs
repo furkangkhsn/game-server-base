@@ -66,6 +66,7 @@ where
                         epoch,
                         out,
                         identity,
+                        claims,
                         input_rate,
                         reply,
                     } => {
@@ -80,6 +81,7 @@ where
                                 shard,
                                 epoch,
                                 identity.clone(),
+                                claims,
                                 out,
                             )
                             .await
@@ -91,6 +93,7 @@ where
                                 shard,
                                 epoch,
                                 identity.clone(),
+                                claims,
                                 out,
                             )
                             .await

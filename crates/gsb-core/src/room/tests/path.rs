@@ -116,6 +116,7 @@ impl Rig {
             identity: format!("id{}", conn.0),
             out: out_tx,
             reply: rtx,
+            claims: None,
         });
         rrx.try_recv().expect("reply").expect("join accepted").1
     }
@@ -252,6 +253,7 @@ fn a_parked_member_has_no_path_and_a_resume_starts_unknown() {
         identity: "id3".into(),
         out: out_tx,
         reply: rtx,
+        claims: None,
     });
     let _new = rrx.try_recv().expect("reply").expect("resumed");
     r.step_at(3, 3);

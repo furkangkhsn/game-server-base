@@ -103,6 +103,7 @@ impl super::ConnectionActor {
                 // rejection (the client presents one — it does not
                 // hold a valid ticket, and the connection stays
                 // alive to retry).
+                self.m_tickets.reject(crate::auth::TicketReason::Missing);
                 self.reply_ticket_error(crate::auth::TicketError::Rejected(
                     "no ticket presented".into(),
                 ))
@@ -136,6 +137,7 @@ impl super::ConnectionActor {
                     // Success: the hook's identity is installed (it
                     // supersedes `Auth.name`) and the ticket pins
                     // the room for the next join.
+                    self.m_tickets.accept();
                     self.ticket = Some(v.clone());
                     self.identity = v.player.clone();
                     self.authenticated();
@@ -168,6 +170,12 @@ impl super::ConnectionActor {
                     // ticket may be re-presented). Never counted
                     // against the violation budget (see
                     // `crate::auth` and the ERROR code docs).
+                    // Counted under its reason (the game's own check
+                    // under its name besides).
+                    match &e {
+                        crate::auth::TicketError::Game(name) => self.m_tickets.reject_game(*name),
+                        e => self.m_tickets.reject(e.reason()),
+                    }
                     self.reply_ticket_error(e).await;
                 }
                 Err(_dropped) => {
@@ -175,7 +183,9 @@ impl super::ConnectionActor {
                     // inside the platform's validator): a
                     // server-side condition (weight 0, like the
                     // "registry gone" arm below) — answered as a
-                    // generic failure, not a violation.
+                    // generic failure, not a violation; counted.
+                    self.m_tickets
+                        .reject(crate::auth::TicketReason::ValidatorLost);
                     let _ = self
                         .send_frame(
                             op::base::ERROR,

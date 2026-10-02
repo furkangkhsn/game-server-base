@@ -253,6 +253,7 @@ async fn own_wins_filter_applies_to_delta_applied_records() {
             identity: String::new(),
             out: out_tx,
             reply: reply_tx,
+            claims: None,
         },
         1,
     ));

@@ -30,6 +30,7 @@ fn final_sample(conn: u64, server_close: Option<ServerClose>) -> ConnSample {
         control_frames_unprocessed: 0,
         server_close,
         last: true,
+        tickets: Default::default(),
     }
 }
 

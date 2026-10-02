@@ -61,6 +61,7 @@ async fn members_per_tick(first: usize) -> [[u32; LAST + 1]; 2] {
         identity: String::new(),
         out,
         reply,
+        claims: None,
     };
     assert!(s[0].handle_msg(join, 1));
     let (_wire, _actions) = joined.await.expect("reply").expect("joined");

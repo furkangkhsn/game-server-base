@@ -134,6 +134,29 @@ pub(super) const SERVER_CLOSES: (&str, &str) = (
      (client-initiated closes are not counted), cumulative.",
 );
 
+/// The ticket-auth families (B21), after the server closes: the
+/// accepted count; ONE refusal counter with a `reason` label per
+/// [`crate::auth::TicketReason`] (zeros included — the set is closed);
+/// the game's own checks with a `check` label per name (present once a
+/// name was counted — the set is the game's); and the names past the
+/// bound (present while non-zero).
+pub(super) const TICKETS_ACCEPTED: (&str, &str) = (
+    "gsb_net_tickets_accepted_total",
+    "Tickets a ticket-auth server accepted (AUTH succeeded), cumulative.",
+);
+pub(super) const TICKETS_REJECTED: (&str, &str) = (
+    "gsb_net_tickets_rejected_total",
+    "Tickets a ticket-auth server refused (ERROR 10, the connection stays alive), by reason, cumulative.",
+);
+pub(super) const TICKET_GAME_REJECTS: (&str, &str) = (
+    "gsb_net_ticket_game_rejects_total",
+    "Tickets the game's own check refused, by the check's name (each also in the reason game of gsb_net_tickets_rejected_total), cumulative.",
+);
+pub(super) const TICKET_GAME_NAMES_DROPPED: (&str, &str) = (
+    "gsb_net_ticket_game_names_dropped_total",
+    "Game ticket refusals whose check name did not fit the bound of 8 names (counted under the reason game, the name lost), cumulative.",
+);
+
 /// The close verdicts the server's stop kept from their connections
 /// (F56): ONE counter with a `reason` label/attribute per
 /// [`crate::conn::ServerClose`] — the reason the connection would have

@@ -95,6 +95,7 @@ fn a_queued_request_goes_when_the_connection_resumes_its_park() {
             identity: "ana".into(),
             out,
             reply: rtx,
+            claims: None,
         });
         let seat = rrx.try_recv().expect("sync").expect("admitted");
         (seat, out_rx)

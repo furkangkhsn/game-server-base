@@ -114,6 +114,12 @@
 //! B5b's five transport counters at the end of that line and table
 //! (`udp_rekeys`, `udp_rekeys_unconfirmed`, `udp_stateless_resets_sent`,
 //! `udp_stateless_resets_rate_limited`, `udp_stateless_resets_send_failed`).
+//! B21's ticket-auth counts (the report carries two accepted, an expired
+//! and a game refusal): the `gsb-metric scope=tickets` line (present once
+//! a ticket-auth server decided an AUTH) and, after the server closes,
+//! `gsb_net_tickets_accepted_total`, `gsb_net_tickets_rejected_total`
+//! (one `reason` per refusal, zeros included) and
+//! `gsb_net_ticket_game_rejects_total` (one `check` per game name).
 
 use super::*;
 use crate::conn::ServerClose;
@@ -262,6 +268,7 @@ pub(super) fn golden_report() -> MetricReport {
         control_frames_unprocessed: 0,
         server_close: None,
         last: false,
+        tickets: Default::default(),
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(2),
@@ -286,6 +293,7 @@ pub(super) fn golden_report() -> MetricReport {
         control_frames_unprocessed: 3,
         server_close: Some(ServerClose::IdleTimeout),
         last: true,
+        tickets: golden_tickets(),
     }));
     // Two transport deltas (B58): every counter distinct, the first one
     // summed across both.
@@ -302,6 +310,18 @@ pub(super) fn golden_report() -> MetricReport {
         .event(),
     );
     acc.report(t1)
+}
+
+/// B21's ticket counts: two accepted, an expired and a game refusal
+/// (`season_pass`) — the `scope=tickets` line, the refusal family's
+/// zeros and the game's named family.
+fn golden_tickets() -> TicketCounts {
+    let mut t = TicketCounts::default();
+    t.accept();
+    t.accept();
+    t.reject(crate::auth::TicketReason::Expired);
+    t.reject_game(crate::auth::GameReason::new("season_pass"));
+    t
 }
 
 /// Both renderings, joined as one text: the lines, a blank line, then

@@ -167,6 +167,7 @@ fn join(
             identity: String::new(),
             out,
             reply,
+            claims: None,
         },
         1,
     ));

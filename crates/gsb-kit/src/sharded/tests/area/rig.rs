@@ -121,6 +121,7 @@ impl Rig {
             out: out_tx,
             identity,
             reply,
+            claims: None,
         };
         self.reg.send(msg).await.expect("registry");
         let Seat {

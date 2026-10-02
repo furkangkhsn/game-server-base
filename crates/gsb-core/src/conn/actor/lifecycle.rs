@@ -70,6 +70,7 @@ impl super::ConnectionActor {
             v_answered: 0,
             v_closing: false,
             m_violations: 0,
+            m_tickets: crate::metrics::TicketCounts::default(),
             auth_attempts: VecDeque::new(),
             last_hb_ack: None,
             m_preauth_hb_extra: 0,

@@ -21,7 +21,8 @@
 use super::proto::{self, metric::Data};
 use crate::metrics::export::families::{
     self, CLOSE_VERDICTS_LOST, Kind, LOGIC_DROPPED, LOGIC_MAX_HELP, LOGIC_SUM_HELP, RoomValue,
-    SERVER_CLOSES,
+    SERVER_CLOSES, TICKET_GAME_NAMES_DROPPED, TICKET_GAME_REJECTS, TICKETS_ACCEPTED,
+    TICKETS_REJECTED,
 };
 use crate::metrics::*;
 
@@ -78,6 +79,7 @@ pub fn request(
     let closes = report.net.server_closes.iter();
     let points = closes.map(|(why, n)| int_point(vec![attr("reason", why.label())], n, at, true));
     m.push(sum(SERVER_CLOSES.0, SERVER_CLOSES.1, points.collect()));
+    tickets(&mut m, &report.net.tickets, at);
     for f in &families::TRANSPORT {
         m.push(scalar(
             f.name,
@@ -181,6 +183,34 @@ fn logic(m: &mut Vec<proto::Metric>, rooms: &[RoomReport], at: Stamp) {
         .collect();
     if !points.is_empty() {
         m.push(gauge(LOGIC_DROPPED.0, LOGIC_DROPPED.1, points));
+    }
+}
+
+/// The ticket-auth families (B21), as the exposition has them: the
+/// accepted count, the refusals by `reason`, the game's checks by
+/// `check` (once counted), the names past the bound (while non-zero).
+fn tickets(m: &mut Vec<proto::Metric>, t: &TicketCounts, at: Stamp) {
+    let (name, help) = TICKETS_ACCEPTED;
+    m.push(scalar(name, Kind::Counter, help, t.accepted(), at));
+    let points = t
+        .reasons()
+        .map(|(why, n)| int_point(vec![attr("reason", why.label())], n, at, true));
+    m.push(sum(
+        TICKETS_REJECTED.0,
+        TICKETS_REJECTED.1,
+        points.collect(),
+    ));
+    if !t.game_slots().is_empty() {
+        let points = t
+            .game_slots()
+            .iter()
+            .map(|(check, n)| int_point(vec![attr("check", check.name())], *n, at, true));
+        let (name, help) = TICKET_GAME_REJECTS;
+        m.push(sum(name, help, points.collect()));
+    }
+    if t.game_dropped() > 0 {
+        let (name, help) = TICKET_GAME_NAMES_DROPPED;
+        m.push(scalar(name, Kind::Counter, help, t.game_dropped(), at));
     }
 }
 

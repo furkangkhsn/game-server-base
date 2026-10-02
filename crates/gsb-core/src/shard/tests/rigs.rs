@@ -166,6 +166,7 @@ impl Harness {
                 identity: String::new(),
                 out: out_tx,
                 reply: reply_tx,
+                claims: None,
             })
             .await
             .expect("shard channel open");
@@ -320,7 +321,8 @@ pub(in crate::shard::tests) async fn join_direct(
                 epoch,
                 identity: String::new(),
                 out: out_tx,
-                reply: reply_tx
+                reply: reply_tx,
+                claims: None,
             },
             tick
         ),

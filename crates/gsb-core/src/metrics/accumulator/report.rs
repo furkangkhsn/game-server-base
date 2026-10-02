@@ -214,6 +214,7 @@ impl MetricAccumulator {
                 actions_unprocessed: self.conn_actions_unprocessed,
                 control_frames_unprocessed: self.conn_control_frames_unprocessed,
                 server_closes: self.conn_server_closes,
+                tickets: self.conn_tickets,
             },
             actions_dropped_top,
             transport: self.transport,

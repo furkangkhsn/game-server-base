@@ -150,6 +150,7 @@ async fn sharded_keepalive_resends_cached_snapshot_to_silent_group() {
             identity: String::new(),
             out: out_tx,
             reply: reply_tx,
+            claims: None,
         },
         1,
     ));

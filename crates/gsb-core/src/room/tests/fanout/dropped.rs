@@ -241,6 +241,7 @@ fn a_resumed_session_starts_without_a_run() {
         identity: "one".into(),
         out,
         reply,
+        claims: None,
     });
     replied.try_recv().expect("sync reply").expect("resumed");
     step(&mut actor, 3);

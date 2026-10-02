@@ -156,6 +156,7 @@ fn accumulator_applies_events_and_computes_rates() {
         control_frames_unprocessed: 0,
         server_close: None,
         last: false,
+        tickets: Default::default(),
     }));
 
     let first = acc.report(t0);
@@ -200,6 +201,7 @@ fn accumulator_applies_events_and_computes_rates() {
         control_frames_unprocessed: 0,
         server_close: None,
         last: true,
+        tickets: Default::default(),
     }));
 
     let second = acc.report(t1);

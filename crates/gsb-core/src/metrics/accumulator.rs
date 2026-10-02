@@ -88,6 +88,8 @@ pub struct MetricAccumulator {
     /// Server-initiated session closes by reason (cumulative; one per
     /// closed session at most, from its final sample).
     conn_server_closes: ServerCloses,
+    /// Ticket-auth outcomes (B21; summed deltas).
+    conn_tickets: TicketCounts,
     /// Cumulative input-action drops per connection (the sender's
     /// attribution: which connection's own input was lost to its full
     /// action channel). The collector owns this state — the connection
@@ -259,6 +261,7 @@ impl MetricAccumulator {
                 if let Some(reason) = c.server_close {
                     self.conn_server_closes.add(reason);
                 }
+                self.conn_tickets.add_all(&c.tickets);
                 if c.last {
                     // The final flush is the connection actor's LAST
                     // emission (its deltas fold above first — a closing

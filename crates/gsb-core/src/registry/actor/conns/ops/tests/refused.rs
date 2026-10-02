@@ -34,6 +34,7 @@ fn join_through(
         identity: String::new(),
         input_rate: None,
         reply,
+        claims: None,
     };
     assert!(ops.try_send(join).is_ok());
     (answer, reports, events)

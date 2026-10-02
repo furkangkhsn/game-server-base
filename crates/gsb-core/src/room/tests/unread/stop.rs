@@ -124,6 +124,7 @@ async fn a_stopping_room_counts_the_ops_left_in_its_control_channel() {
             identity: "q".to_string(),
             out,
             reply: oneshot::channel().0,
+            claims: None,
         },
         RoomControl::Leave {
             conn: ConnectionId(2),

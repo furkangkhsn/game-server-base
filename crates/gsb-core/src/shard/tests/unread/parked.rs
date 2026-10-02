@@ -23,7 +23,8 @@ async fn a_stopping_shard_answers_the_resume_of_its_own_park() {
             epoch: 1,
             identity: "ada".to_string(),
             out: out_tx.clone(),
-            reply: reply_tx
+            reply: reply_tx,
+            claims: None,
         },
         1
     ));

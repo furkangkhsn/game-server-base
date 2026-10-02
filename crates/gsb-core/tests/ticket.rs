@@ -100,6 +100,7 @@ fn validator(good: &'static [u8], player: &'static str, room: u64) -> TicketVali
                 Ok(ValidatedTicket {
                     player: player.into(),
                     room: RoomId(room),
+                    extra: None,
                 })
             } else {
                 Err(TicketError::Rejected("bad ticket".into()))

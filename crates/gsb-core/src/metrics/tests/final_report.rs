@@ -35,6 +35,7 @@ fn conn_final(conn: u64, frames_in: u64) -> ConnSample {
         control_frames_unprocessed: 0,
         server_close: None,
         last: true,
+        tickets: Default::default(),
     }
 }
 

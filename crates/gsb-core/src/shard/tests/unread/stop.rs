@@ -22,7 +22,8 @@ async fn a_stopping_shard_counts_what_it_holds_in_its_final_sample() {
             epoch: 1,
             identity: String::new(),
             out: out_tx,
-            reply: reply_tx
+            reply: reply_tx,
+            claims: None,
         },
         1
     ));
@@ -86,7 +87,8 @@ async fn a_stopping_shard_counts_what_its_inbox_and_effects_hold() {
             epoch: 1,
             identity: String::new(),
             out: out_tx.clone(),
-            reply: reply_tx
+            reply: reply_tx,
+            claims: None,
         },
         1
     ));
@@ -153,6 +155,7 @@ async fn a_stopping_shard_counts_what_its_inbox_and_effects_hold() {
             identity: String::new(),
             out: out_tx.clone(),
             reply: join_reply,
+            claims: None,
         },
         // Nobody parked under "ghost" here: another shard's answer.
         ShardMsg::Resume {

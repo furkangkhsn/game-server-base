@@ -58,8 +58,14 @@ use std::time::Duration;
 
 use crate::id::RoomId;
 
+mod joiner;
+mod reason;
+pub use joiner::Joiner;
+pub use reason::{GameReason, TicketReason};
+
 /// The identity a ticket resolves to: the player identity the platform
-/// encoded in the ticket, and the room the ticket pins.
+/// encoded in the ticket, the room the ticket pins, and — optionally —
+/// the game's own verified claims.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedTicket {
     /// The player identity extracted from the ticket (it supersedes
@@ -68,18 +74,75 @@ pub struct ValidatedTicket {
     /// The room the ticket pins: a later `JOIN_ROOM_REQ` naming a
     /// different room is rejected (ERROR code 11, normal rejection).
     pub room: RoomId,
+    /// The game's own claims the validator verified (a character id, a
+    /// loadout, a party, entitlements …), as opaque bytes the game
+    /// decodes itself — the engine never reads them. They ride the
+    /// identified join to the game's join hooks
+    /// ([`crate::room::GameLogic::on_join_verified`], the sharded room's
+    /// [`crate::registry::HomeRoute`]) as [`Joiner::claims`]. `None`: a
+    /// validator with nothing beyond identity and room (every validator
+    /// before this field existed).
+    ///
+    /// Why bytes and not a typed payload: the validator and the game are
+    /// separate crates that agree on a format (`gsb-ticket` hands over
+    /// the claims' verified JSON), `Bytes` is `Send + Sync`, cheap to
+    /// clone along the join path and keeps this type `Eq` and `Debug`;
+    /// the engine stays format-agnostic.
+    pub extra: Option<bytes::Bytes>,
+}
+
+impl ValidatedTicket {
+    /// Identity and pinned room, no extra claims.
+    pub fn new(player: impl Into<String>, room: RoomId) -> Self {
+        Self {
+            player: player.into(),
+            room,
+            extra: None,
+        }
+    }
+
+    /// The same ticket carrying the game's verified `claims`.
+    pub fn with_extra(mut self, claims: bytes::Bytes) -> Self {
+        self.extra = Some(claims);
+        self
+    }
 }
 
 /// Why a ticket failed validation. `Debug`/`Display` only: the error
 /// text is client-visible (it goes into the ERROR frame's message) and
 /// is a *normal rejection*, never a violation signal.
+///
+/// Every failure is counted under one [`TicketReason`]
+/// (`gsb_net_tickets_rejected_total{reason}`): [`Self::Refused`] names
+/// it, [`Self::Game`] is `game` (and the game's own name in
+/// `gsb_net_ticket_game_rejects_total{check}`), a free-text
+/// [`Self::Rejected`] is `other`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TicketError {
-    /// The validator rejected the ticket (unknown, malformed, expired,
-    /// revoked — the validator decides; the base carries no format).
+    /// The validator rejected the ticket for a reason of its own
+    /// (counted as [`TicketReason::Other`]; a validator that can name the
+    /// reason returns [`Self::Refused`] instead).
     Rejected(String),
     /// The validation did not finish within the hook's timeout.
     TimedOut,
+    /// The validator refused the ticket for a named reason of the
+    /// engine's closed vocabulary.
+    Refused(TicketReason),
+    /// The game's own check refused the ticket (its reason's name is
+    /// counted apart, exactly).
+    Game(GameReason),
+}
+
+impl TicketError {
+    /// The reason this failure is counted under.
+    pub fn reason(&self) -> TicketReason {
+        match self {
+            Self::Rejected(_) => TicketReason::Other,
+            Self::TimedOut => TicketReason::TimedOut,
+            Self::Refused(r) => *r,
+            Self::Game(_) => TicketReason::Game,
+        }
+    }
 }
 
 impl std::fmt::Display for TicketError {
@@ -87,6 +150,8 @@ impl std::fmt::Display for TicketError {
         match self {
             Self::Rejected(reason) => write!(f, "ticket rejected: {reason}"),
             Self::TimedOut => write!(f, "ticket validation timed out"),
+            Self::Refused(r) => write!(f, "ticket rejected: {}", r.label()),
+            Self::Game(g) => write!(f, "ticket rejected by the game: {}", g.name()),
         }
     }
 }

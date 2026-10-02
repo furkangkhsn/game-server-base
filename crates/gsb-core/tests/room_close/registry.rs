@@ -37,6 +37,7 @@ async fn join(tx: &Mailbox<RegistryMsg>, conn: u64, identity: &str) -> Result<En
         out,
         identity: identity.to_string(),
         reply,
+        claims: None,
     })
     .await
     .expect("registry alive");

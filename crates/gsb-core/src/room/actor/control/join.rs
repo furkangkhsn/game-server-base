@@ -21,13 +21,14 @@ where
 {
     /// Admit a connection as a FRESH member: the exact body of the
     /// pre-reconnect `Join` arm (supersede own stale state, cap check,
-    /// `on_join_as`, register, roster, reply) — now shared by the plain
+    /// `on_join_verified`, register, roster, reply) — now shared by the plain
     /// `Join` arm and the resume fallback paths, so the fallback can
     /// never drift from an ordinary join.
     pub(super) fn admit_fresh(
         &mut self,
         conn: ConnectionId,
         identity: String,
+        claims: Option<bytes::Bytes>,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     ) -> bool {
@@ -66,7 +67,10 @@ where
         }
         // The LOGIC mints the stable player identity here (Faz 2) — core
         // never invents player ids.
-        let admission = self.logic.on_join_as(&mut self.world, conn, &identity);
+        // The verified claims (B21) ride the join to the logic only;
+        // the row keeps the identity alone.
+        let joiner = crate::auth::Joiner::new(&identity).with_claims(claims.as_ref());
+        let admission = self.logic.on_join_verified(&mut self.world, conn, &joiner);
         self.m.joins += 1;
         let (act_tx, act_rx) = self.config.action_channel();
         self.binding.insert(conn, admission.player);

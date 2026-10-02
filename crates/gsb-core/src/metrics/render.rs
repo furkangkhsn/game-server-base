@@ -224,6 +224,9 @@ impl MetricReport {
                 .map(|(r, c)| format!(" server_close_{}={c}", r.label()))
                 .collect::<String>()
         ));
+        if !n.tickets.is_empty() {
+            lines.push(tickets_line(&n.tickets));
+        }
         if !self.actions_dropped_top.is_empty() {
             // Attribution of the net-scope `actions_dropped`: which
             // connection's own input was lost to its full action channel
@@ -246,4 +249,26 @@ impl MetricReport {
         lines.push(line);
         lines
     }
+}
+
+/// The ticket-auth line (B21), present once a ticket-auth server decided
+/// an AUTH: the accepted count, every refusal reason as a stable key
+/// (zeros included), then the game's own checks by name (and the names
+/// past the bound, while non-zero).
+fn tickets_line(t: &TicketCounts) -> String {
+    let mut line = format!(
+        "gsb-metric scope=tickets accepted={} rejected={}",
+        t.accepted(),
+        t.rejected_total()
+    );
+    for (r, c) in t.reasons() {
+        let _ = write!(line, " reject_{}={c}", r.label());
+    }
+    for (g, c) in t.game_slots() {
+        let _ = write!(line, " game_{}={c}", g.name());
+    }
+    if t.game_dropped() > 0 {
+        let _ = write!(line, " game_names_dropped={}", t.game_dropped());
+    }
+    line
 }

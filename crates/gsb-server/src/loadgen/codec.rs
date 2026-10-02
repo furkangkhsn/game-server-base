@@ -692,6 +692,10 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
             }
             ServerCloses::from_counts(counts)
         },
+        // Not on this wire (B21, layout unchanged): the load generator's
+        // clients authenticate locally, so a load run's ticket counts are
+        // all zero; the ops surface and the exporters carry them.
+        tickets: Default::default(),
     };
     let n_top = r.u32()?;
     let mut actions_dropped_top = Vec::with_capacity(n_top as usize);

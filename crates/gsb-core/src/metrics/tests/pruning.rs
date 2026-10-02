@@ -78,6 +78,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
             control_frames_unprocessed: 0,
             server_close: None,
             last: false,
+            tickets: Default::default(),
         }));
     }
     let r = acc.report(Instant::now());
@@ -109,6 +110,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         control_frames_unprocessed: 0,
         server_close: None,
         last: true,
+        tickets: Default::default(),
     }));
     // A different connection keeps dropping afterwards.
     acc.apply(MetricsEvent::Conn(ConnSample {
@@ -134,6 +136,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         control_frames_unprocessed: 0,
         server_close: None,
         last: false,
+        tickets: Default::default(),
     }));
     let r = acc.report(Instant::now());
     assert_eq!(
@@ -171,6 +174,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
         control_frames_unprocessed: 0,
         server_close: None,
         last: true,
+        tickets: Default::default(),
     }));
     let r = acc.report(Instant::now());
     assert_eq!(r.net.actions_dropped, 10);

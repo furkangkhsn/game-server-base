@@ -40,6 +40,7 @@ async fn join(tx: &Mailbox<RegistryMsg>, conn: ConnectionId, outs: &mut Vec<Rece
         out,
         identity: String::new(),
         reply,
+        claims: None,
     })
     .await
     .expect("registry alive");

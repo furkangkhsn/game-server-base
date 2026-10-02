@@ -37,6 +37,7 @@ fn resume(actor: &mut RoomActor<(), (), ()>, conn: u64, epoch: u64) -> EntityId 
         identity: "ana".into(),
         out,
         reply,
+        claims: None,
     });
     answer.try_recv().expect("answered").expect("seated").0
 }

@@ -178,6 +178,7 @@ impl H {
                 identity: identity.to_string(),
                 out: out_tx,
                 reply: reply_tx,
+                claims: None,
             })
             .await
             .expect("control alive");

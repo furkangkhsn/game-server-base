@@ -450,6 +450,11 @@ pub struct ConnSample {
     /// 3 — before, a full channel lost it, counted nowhere). Only a
     /// collector that is already gone (the process stopping) loses it.
     pub server_close: Option<ServerClose>,
+    /// The AUTHs this actor decided on a ticket-auth server, accepted or
+    /// refused by reason, delta since the last flush (B21; see
+    /// [`crate::metrics::TicketCounts`]). Always empty on the local-auth
+    /// path.
+    pub tickets: TicketCounts,
     /// True on the actor's final flush (connection closing).
     pub last: bool,
 }

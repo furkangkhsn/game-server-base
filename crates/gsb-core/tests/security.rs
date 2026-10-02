@@ -753,6 +753,7 @@ async fn spawn_as(
         out: out_tx,
         identity: identity.to_string(),
         reply: reply_tx,
+        claims: None,
     })
     .await
     .expect("registry gone");

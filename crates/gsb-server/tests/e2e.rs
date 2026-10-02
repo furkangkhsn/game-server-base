@@ -1415,11 +1415,13 @@ async fn ticket_hook_flow_and_slow_auth_keeps_the_tick_running() {
                     Ok(gsb_core::auth::ValidatedTicket {
                         player: "slow".into(),
                         room: gsb_core::id::RoomId(1),
+                        extra: None,
                     })
                 }
                 b"good" => Ok(gsb_core::auth::ValidatedTicket {
                     player: "neo".into(),
                     room: gsb_core::id::RoomId(1),
+                    extra: None,
                 }),
                 _ => Err(gsb_core::auth::TicketError::Rejected("bad ticket".into())),
             }

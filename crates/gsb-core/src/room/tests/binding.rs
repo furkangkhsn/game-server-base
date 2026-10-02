@@ -143,6 +143,7 @@ fn resume_rekeys_only_the_binding() {
         identity: "ana".into(),
         out: out_tx,
         reply: rtx,
+        claims: None,
     });
     let reply = rrx.try_recv().expect("reply sent synchronously");
     let (entity, _actions) = reply.expect("resume accepted");

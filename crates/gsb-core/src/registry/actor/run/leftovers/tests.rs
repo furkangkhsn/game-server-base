@@ -87,6 +87,7 @@ fn join(conn: u64) -> (RegistryMsg, Joined) {
         out,
         identity: String::new(),
         reply,
+        claims: None,
     };
     (msg, joined)
 }

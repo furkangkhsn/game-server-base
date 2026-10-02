@@ -44,6 +44,7 @@ fn tickets() -> TicketValidator {
                 Some(player) => Ok(ValidatedTicket {
                     player: player.to_string(),
                     room: RoomId(1),
+                    extra: None,
                 }),
                 None => Err(TicketError::Rejected("not a ticket".into())),
             }

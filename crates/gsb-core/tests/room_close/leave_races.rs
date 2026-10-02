@@ -40,6 +40,7 @@ async fn a_join_elsewhere_settles_an_unreported_end() {
         out,
         identity: "ana".into(),
         reply,
+        claims: None,
     })
     .await
     .expect("registry alive");

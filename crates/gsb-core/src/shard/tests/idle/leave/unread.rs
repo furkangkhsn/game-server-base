@@ -21,6 +21,7 @@ fn join_with_actions(
             identity: "ana".to_string(),
             out: out_tx,
             reply: reply_tx,
+            claims: None,
         },
         1,
     ));

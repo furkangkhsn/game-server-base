@@ -289,6 +289,7 @@ async fn spawn(
         // Anonymous: an ordinary fresh join, no ledger lookup.
         identity: String::new(),
         reply: reply_tx,
+        claims: None,
     })
     .await
     .expect("registry gone");

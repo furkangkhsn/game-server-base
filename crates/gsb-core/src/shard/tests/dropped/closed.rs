@@ -19,6 +19,7 @@ async fn two_steps_one_closed_one_full(
                 identity: String::new(),
                 out,
                 reply,
+                claims: None,
             },
             1,
         ));

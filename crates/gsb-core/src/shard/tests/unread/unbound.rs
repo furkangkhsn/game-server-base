@@ -15,7 +15,8 @@ async fn what_an_unbound_connection_sent_is_counted_by_kind_on_the_shard() {
             epoch: 1,
             identity: String::new(),
             out: out_tx,
-            reply: reply_tx
+            reply: reply_tx,
+            claims: None,
         },
         1
     ));

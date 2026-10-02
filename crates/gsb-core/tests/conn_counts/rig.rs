@@ -46,10 +46,24 @@ impl Conn {
         Self::build(64, 64, inbox_cap).0
     }
 
+    /// A fresh connection on a ticket-auth server validating with `auth`.
+    pub fn open_ticketed(auth: TicketAuth) -> Self {
+        Self::build_with(64, 64, 64, Some(auth)).0
+    }
+
     fn build(
         out_cap: usize,
         metrics_cap: usize,
         inbox_cap: usize,
+    ) -> (Self, mpsc::Sender<MetricsEvent>) {
+        Self::build_with(out_cap, metrics_cap, inbox_cap, None)
+    }
+
+    fn build_with(
+        out_cap: usize,
+        metrics_cap: usize,
+        inbox_cap: usize,
+        auth: Option<TicketAuth>,
     ) -> (Self, mpsc::Sender<MetricsEvent>) {
         let (reg_tx, registry) = channel::<RegistryMsg>(64);
         let (inbox, inbox_rx) = channel::<ConnIn>(inbox_cap);
@@ -64,7 +78,7 @@ impl Conn {
             inbox_rx,
             out_tx,
             metrics_tx,
-            None,
+            auth,
         );
         let conn = Self {
             inbox,
@@ -281,6 +295,11 @@ pub fn add(t: ConnSample, s: ConnSample) -> ConnSample {
         requests_unprocessed: t.requests_unprocessed + s.requests_unprocessed,
         actions_unprocessed: t.actions_unprocessed + s.actions_unprocessed,
         control_frames_unprocessed: t.control_frames_unprocessed + s.control_frames_unprocessed,
+        tickets: {
+            let mut sum = t.tickets;
+            sum.add_all(&s.tickets);
+            sum
+        },
         ..s
     }
 }

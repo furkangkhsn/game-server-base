@@ -147,7 +147,7 @@ where
                 // A plain (unidentified) join: the registry routes every
                 // NON-empty identity through `Resume` instead, so this
                 // arm is the anonymous one by construction.
-                self.admit_fresh(conn, String::new(), out, reply)
+                self.admit_fresh(conn, String::new(), None, out, reply)
             }
             RoomControl::Leave { conn, entity } => {
                 // Stale-leave guard: resolve the session through the
@@ -183,6 +183,7 @@ where
                 conn,
                 epoch,
                 identity,
+                claims,
                 out,
                 reply,
             } => {
@@ -191,7 +192,7 @@ where
                 // never resumes (nothing to look up; the local-auth demo
                 // may still send names, an anonymous client cannot).
                 if identity.is_empty() {
-                    return self.admit_fresh(conn, identity, out, reply);
+                    return self.admit_fresh(conn, identity, claims, out, reply);
                 }
                 // The identity still LIVE on another connection (F32): the
                 // old session's detach has not landed yet (or the registry
@@ -224,7 +225,7 @@ where
                                 %player,
                                 "resume rejected: ledger holds a row the table lost"
                             );
-                            return self.admit_fresh(conn, identity, out, reply);
+                            return self.admit_fresh(conn, identity, claims, out, reply);
                         };
                         if !rc.detached {
                             // The player's row is LIVE (a double session of
@@ -237,7 +238,7 @@ where
                                 %player,
                                 "resume rejected: ledger holds a live row"
                             );
-                            return self.admit_fresh(conn, identity, out, reply);
+                            return self.admit_fresh(conn, identity, claims, out, reply);
                         }
                         // Epoch guard (§7): one integer comparison rejects a
                         // delayed duplicate/replay AFTER a newer session
@@ -279,9 +280,9 @@ where
                             "resume rejected stale (hold ended); falling back \
                              to a fresh join"
                         );
-                        self.admit_fresh(conn, identity, out, reply)
+                        self.admit_fresh(conn, identity, claims, out, reply)
                     }
-                    ResumeFound::Never => self.admit_fresh(conn, identity, out, reply),
+                    ResumeFound::Never => self.admit_fresh(conn, identity, claims, out, reply),
                 }
             }
             RoomControl::Shutdown => false,

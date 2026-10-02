@@ -301,6 +301,10 @@ pub struct NetReport {
     /// load measurement whose clients saw no errors can still read here
     /// that the server shed half of them.
     pub server_closes: ServerCloses,
+    /// Ticket-auth outcomes (cumulative, all connections; B21): accepted,
+    /// refused by [`crate::auth::TicketReason`], and the game's own
+    /// checks by name. All zero on a local-auth server.
+    pub tickets: TicketCounts,
 }
 
 /// One periodic report: the server's current numeric state.
@@ -389,6 +393,7 @@ impl MetricReport {
                 actions_unprocessed: 0,
                 control_frames_unprocessed: 0,
                 server_closes: ServerCloses::default(),
+                tickets: TicketCounts::default(),
             },
             actions_dropped_top: Vec::new(),
             transport: TransportCounters::default(),

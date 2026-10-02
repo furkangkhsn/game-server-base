@@ -41,6 +41,7 @@ async fn a_leave_for_another_room_keeps_the_membership() {
         identity: String::new(),
         input_rate: None,
         reply,
+        claims: None,
     };
     assert!(ops.try_send(join).is_ok());
     let (actions, _actions) = channel::<Action>(8);

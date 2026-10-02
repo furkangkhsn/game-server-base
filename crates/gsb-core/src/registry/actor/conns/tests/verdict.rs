@@ -28,7 +28,7 @@ async fn a_gone_dispatcher_s_detach_carries_the_verdict() {
     reg.on_conn_opened(conn, inbox, None).await;
     let (out, _out) = channel(64);
     let (reply, seated) = oneshot::channel();
-    reg.on_spawn_player(conn, room, out, String::new(), reply)
+    reg.on_spawn_player(conn, room, out, String::new(), None, reply)
         .await;
     seated.await.expect("reply").expect("joined");
     match tokio::time::timeout(WAIT, reg.inbox.recv()).await {

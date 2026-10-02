@@ -33,6 +33,7 @@ async fn a_crossing_member_carries_its_path_to_the_next_shard() {
             identity: String::new(),
             out,
             reply,
+            claims: None,
         },
         1,
     ));
@@ -84,6 +85,7 @@ async fn the_shard_s_fan_out_withholds_what_the_logic_withholds() {
                 identity: String::new(),
                 out,
                 reply,
+                claims: None,
             },
             1,
         ));

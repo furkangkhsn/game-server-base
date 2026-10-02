@@ -19,7 +19,8 @@ async fn join_reply(
                 epoch: 1,
                 identity: String::new(),
                 out: out_tx,
-                reply: reply_tx
+                reply: reply_tx,
+                claims: None,
             },
             1
         ),
@@ -91,7 +92,8 @@ async fn a_zero_action_capacity_is_one_slot_not_a_panic() {
             epoch: 1,
             identity: String::new(),
             out: out_tx.clone(),
-            reply: reply_tx
+            reply: reply_tx,
+            claims: None,
         },
         1
     ));

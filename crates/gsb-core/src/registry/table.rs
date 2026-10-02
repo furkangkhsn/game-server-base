@@ -75,6 +75,8 @@ pub(crate) enum RoomOp<St, Sp> {
         out: mpsc::Sender<FrameBatch>,
         /// The resume key; empty = anonymous plain join.
         identity: String,
+        /// The game's verified claims (B21) for the join hook.
+        claims: Option<bytes::Bytes>,
         /// The room's input rate limit, stamped by the registry from the
         /// room's config at dispatch; handed back on the [`Seat`].
         input_rate: Option<InputRate>,

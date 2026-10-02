@@ -159,6 +159,7 @@ impl Rig {
                 out: out_tx,
                 identity: identity.to_string(),
                 reply,
+                claims: None,
             })
             .await
             .expect("registry");

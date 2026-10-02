@@ -30,6 +30,8 @@ use gsb_protocol::{base, base_table, op};
 use prost::Message;
 use tokio::sync::mpsc;
 
+#[path = "join_identity/claims.rs"]
+mod claims;
 #[path = "join_identity/logic.rs"]
 mod logic;
 
@@ -113,6 +115,7 @@ fn hook() -> TicketAuth {
                 b"t-neo" => Ok(ValidatedTicket {
                     player: "neo".into(),
                     room: RoomId(1),
+                    extra: None,
                 }),
                 _ => Err(TicketError::Rejected("unknown ticket".into())),
             }

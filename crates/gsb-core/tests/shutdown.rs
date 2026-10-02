@@ -135,6 +135,7 @@ async fn populate_at(rig: &mut Rig, tick_hz: f64) {
             out,
             identity: String::new(),
             reply,
+            claims: None,
         };
         let tx = rig.tx.clone();
         joins.push(tokio::spawn(async move {

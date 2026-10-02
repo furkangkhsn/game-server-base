@@ -276,6 +276,30 @@ pub trait GameLogic<W>: Send {
         self.on_join(world, conn)
     }
 
+    /// [`Self::on_join_as`] with the joiner's VERIFIED claims besides its
+    /// identity — what the room and the shard actors call on every fresh
+    /// join (B21). `joiner.claims` are the game's own claims the ticket
+    /// validator verified ([`crate::auth::ValidatedTicket::extra`]: a
+    /// character, a loadout, a party, entitlements …), opaque bytes the
+    /// game decodes; `None` on the local-auth path and for a validator
+    /// with no extra claims. A game that places or equips a player from
+    /// what the platform vouched for overrides this instead of trusting
+    /// the client.
+    ///
+    /// Stateful admission checks (the roster, a full team, a player
+    /// kicked from this room) belong here, on the tick; the validator
+    /// only checks what the ticket alone can answer (docs/TICKETS.md).
+    ///
+    /// Default: [`Self::on_join_as`] — the claims are ignored.
+    fn on_join_verified(
+        &mut self,
+        world: &mut W,
+        conn: ConnectionId,
+        joiner: &crate::auth::Joiner<'_>,
+    ) -> Admission {
+        self.on_join_as(world, conn, joiner.identity)
+    }
+
     /// A player left the room: remove its entity (and any per-player
     /// bookkeeping). Keyed by the stable [`PlayerId`] (Faz 2): a leave of
     /// ANY session of this player lands here under the same key.

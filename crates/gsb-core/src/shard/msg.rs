@@ -104,8 +104,11 @@ pub enum ShardMsg<S, B> {
         /// broadcast-resume's transparent fallback, §5), and the
         /// input-idle ceiling has to be able to hand `on_disconnect` a
         /// real resume key. The logic's join hook receives it too
-        /// (`GameLogic::on_join_as`, K4).
+        /// (`GameLogic::on_join_verified`, K4).
         identity: String,
+        /// The game's verified claims (B21, `ValidatedTicket::extra`)
+        /// for the logic's join hook; `None` without a ticket's claims.
+        claims: Option<bytes::Bytes>,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },

@@ -109,6 +109,7 @@ mod render;
 mod report;
 mod sample;
 mod stop;
+mod tickets;
 mod transport;
 mod verdicts;
 
@@ -127,6 +128,7 @@ pub use logic::{
 pub use report::{MetricReport, NetReport, RegistryReport, RoomReport};
 pub use sample::{ConnSample, MatchResultDrop, MetricsEvent, RegistrySample, RoomSample};
 pub use stop::{STOP_COUNT, StopCounts};
+pub use tickets::{TICKET_GAME_REASONS_MAX, TicketCounts};
 pub use transport::{TRANSPORT_COUNT, TransportCounters};
 pub use verdicts::VerdictsLost;
 

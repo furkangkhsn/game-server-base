@@ -36,6 +36,7 @@ where
         room: RoomId,
         out: mpsc::Sender<FrameBatch>,
         identity: String,
+        claims: Option<bytes::Bytes>,
         reply: oneshot::Sender<Result<Seat, CoreError>>,
     ) {
         // A LIVE session of this identity here is taken over (F32).
@@ -89,7 +90,10 @@ where
                 };
                 Some((
                     at_cap,
-                    (group.home)(conn, &identity),
+                    group.home.route(
+                        conn,
+                        &crate::auth::Joiner::new(&identity).with_claims(claims.as_ref()),
+                    ),
                     group.mailboxes.clone(),
                 ))
             }
@@ -144,6 +148,7 @@ where
             epoch: self.next_join_epoch,
             out,
             identity,
+            claims,
             input_rate,
             reply,
         };

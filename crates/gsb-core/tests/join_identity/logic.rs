@@ -1,6 +1,7 @@
 //! The stand-in room / shard logic: its join hook records the identity
 //! it was handed, and its wire ids name the shard that minted them.
 
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, Admission, GameLogic, RoomLogic, TickCtx};
 use gsb_core::shard::{BorderRecord, Migrating, ShardLogic};
@@ -55,6 +56,15 @@ impl GameLogic<()> for IdLogic {
     fn on_join_as(&mut self, w: &mut (), c: ConnectionId, identity: &str) -> Admission {
         let _ = self.seen.send(("join", self.index, identity.to_string()));
         self.on_join(w, c)
+    }
+    /// The verified claims, when the join carries any (B21), reported
+    /// as `("claims", shard, text)` before the identity's `"join"`.
+    fn on_join_verified(&mut self, w: &mut (), c: ConnectionId, j: &Joiner<'_>) -> Admission {
+        if let Some(claims) = j.claims {
+            let text = String::from_utf8_lossy(claims).into_owned();
+            let _ = self.seen.send(("claims", self.index, text));
+        }
+        self.on_join_as(w, c, j.identity)
     }
     fn on_leave(&mut self, _w: &mut (), _p: PlayerId) {}
     fn ingest(&mut self, _w: &mut (), _c: &TickCtx, a: &mut Vec<Action>) {

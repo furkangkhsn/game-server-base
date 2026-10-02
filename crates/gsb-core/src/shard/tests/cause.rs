@@ -160,6 +160,7 @@ impl Rig {
                 identity: identity.to_string(),
                 out,
                 reply,
+                claims: None,
             },
             1,
         ));

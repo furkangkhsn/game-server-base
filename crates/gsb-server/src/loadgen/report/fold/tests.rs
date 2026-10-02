@@ -179,6 +179,7 @@ pub(in crate::report) fn report(rooms: Vec<RoomReport>) -> MetricReport {
             actions_unprocessed: 0,
             control_frames_unprocessed: 0,
             server_closes: Default::default(),
+            tickets: Default::default(),
         },
         actions_dropped_top: Vec::new(),
         transport: Default::default(),

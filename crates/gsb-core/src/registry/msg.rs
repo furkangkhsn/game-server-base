@@ -81,6 +81,11 @@ pub enum RegistryMsg {
         /// of §14.3 (the room falls back to a fresh join transparently
         /// when its ledger does not hold the identity).
         identity: String,
+        /// The game's verified claims (B21, `ValidatedTicket::extra`): they
+        /// ride the join to the room's join hook and the sharded room's
+        /// home router. `None` on the local-auth path and for a validator
+        /// with no extra claims.
+        claims: Option<bytes::Bytes>,
         /// The [`Seat`] the join settles to, or why it was refused.
         reply: oneshot::Sender<Result<Seat, CoreError>>,
     },

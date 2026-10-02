@@ -160,6 +160,7 @@ impl Rig {
             identity: identity.to_string(),
             out: out_tx,
             reply: rtx,
+            claims: None,
         });
         rrx.try_recv().expect("synchronous").expect("join accepted")
     }

@@ -225,6 +225,7 @@ impl Mmo {
                 identity: identity.to_string(),
                 out,
                 reply,
+                claims: None,
             })
             .await
             .expect("shard alive");

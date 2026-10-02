@@ -173,6 +173,7 @@ async fn spawn(
         out, // Anonymous: an ordinary fresh join, no ledger lookup.
         identity: String::new(),
         reply: reply_tx,
+        claims: None,
     })
     .await
     .expect("registry gone");
@@ -335,6 +336,7 @@ async fn destroy_room_notifies_players_and_rejects_new_joins() {
         out: out_tx2, // Anonymous: an ordinary fresh join, no ledger lookup.
         identity: String::new(),
         reply: reply_tx,
+        claims: None,
     })
     .await
     .unwrap();
@@ -401,6 +403,7 @@ async fn spawn_rejected_when_room_is_full() {
         out: out_tx2, // Anonymous: an ordinary fresh join, no ledger lookup.
         identity: String::new(),
         reply: reply_tx,
+        claims: None,
     })
     .await
     .expect("registry gone");

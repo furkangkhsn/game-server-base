@@ -50,6 +50,7 @@ fn a_resumed_session_does_not_inherit_undelivered_answers() {
         identity: "one".into(),
         out,
         reply,
+        claims: None,
     });
     replied.try_recv().expect("sync reply").expect("resumed");
     step(&mut a, 3);

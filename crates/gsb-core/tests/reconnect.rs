@@ -433,6 +433,7 @@ impl RoomH {
                 identity: identity.to_string(),
                 out: out_tx,
                 reply: reply_tx,
+                claims: None,
             })
             .await
             .expect("control alive");
@@ -1065,6 +1066,7 @@ async fn spawn_as(
         out: out_tx,
         identity: identity.to_string(),
         reply: reply_tx,
+        claims: None,
     })
     .await
     .expect("registry gone");
@@ -1918,6 +1920,7 @@ mod shard_test {
                     identity: String::new(),
                     out,
                     reply: reply_tx,
+                    claims: None,
                 })
                 .await
                 .expect("shard alive");

@@ -12,6 +12,7 @@ use crate::metrics::*;
 
 mod closes;
 mod logic;
+mod tickets;
 
 impl MetricReport {
     /// Render as Prometheus text exposition format, version 0.0.4 (the
@@ -55,6 +56,7 @@ impl MetricReport {
             scalar(&mut out, f, &self.net);
         }
         closes::render(&mut out, families::SERVER_CLOSES, &self.net.server_closes);
+        tickets::render(&mut out, &self.net.tickets);
         for f in &families::TRANSPORT {
             scalar(&mut out, f, &self.transport);
         }

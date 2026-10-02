@@ -20,7 +20,7 @@ fn join(handle: RoomHandle<(), ()>) -> JoinHandle<OpOutcome> {
     tokio::spawn(async move {
         let shard = matches!(handle, RoomHandle::Sharded(_)).then_some(0);
         let (out, _gone) = channel(8);
-        Reg::dispatch_plain_join(CONN, ROOM, &handle, shard, 1, String::new(), out).await
+        Reg::dispatch_plain_join(CONN, ROOM, &handle, shard, 1, String::new(), None, out).await
     })
 }
 
@@ -28,7 +28,7 @@ fn join(handle: RoomHandle<(), ()>) -> JoinHandle<OpOutcome> {
 fn resume_single(handle: RoomHandle<(), ()>) -> JoinHandle<OpOutcome> {
     tokio::spawn(async move {
         let (out, _gone) = channel(8);
-        Reg::dispatch_resume(CONN, ROOM, &handle, None, 1, "ada".into(), out).await
+        Reg::dispatch_resume(CONN, ROOM, &handle, None, 1, "ada".into(), None, out).await
     })
 }
 

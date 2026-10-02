@@ -33,6 +33,7 @@ where
     /// on the home shard. Returns the outcome class the dispatcher acts on:
     /// a send the room refused is [`OpOutcome::Refused`] (B75), apart
     /// from a reply dropped after the room took the op.
+    #[allow(clippy::too_many_arguments)] // the join's routing, its joiner, its channel
     pub(super) async fn dispatch_plain_join(
         conn: ConnectionId,
         _room: RoomId,
@@ -40,6 +41,7 @@ where
         shard: Option<usize>,
         epoch: u64,
         identity: String,
+        claims: Option<bytes::Bytes>,
         out: mpsc::Sender<FrameBatch>,
     ) -> OpOutcome {
         let (joined_tx, joined_rx) =
@@ -60,6 +62,7 @@ where
                         conn,
                         epoch,
                         identity,
+                        claims,
                         out,
                         reply: joined_tx,
                     })
@@ -95,6 +98,7 @@ where
     /// all-miss folds into a fallback plain join on the home shard, and a
     /// tripped epoch guard propagates as a rejection (a newer session
     /// already owns the identity).
+    #[allow(clippy::too_many_arguments)] // the join's routing, its joiner, its channel
     pub(super) async fn dispatch_resume(
         conn: ConnectionId,
         room: RoomId,
@@ -102,6 +106,7 @@ where
         shard: Option<usize>,
         epoch: u64,
         identity: String,
+        claims: Option<bytes::Bytes>,
         out: mpsc::Sender<FrameBatch>,
     ) -> OpOutcome {
         match handle {
@@ -113,6 +118,7 @@ where
                         conn,
                         epoch,
                         identity,
+                        claims,
                         out,
                         reply: joined_tx,
                     })
@@ -174,7 +180,8 @@ where
                 // All shards answered "not here" or are gone without the
                 // park: transparent fresh join (§5) through the ordinary
                 // path — the one that counts a stopped room's refusal.
-                Self::dispatch_plain_join(conn, room, handle, shard, epoch, identity, out).await
+                Self::dispatch_plain_join(conn, room, handle, shard, epoch, identity, claims, out)
+                    .await
             }
         }
     }

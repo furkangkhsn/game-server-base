@@ -125,6 +125,8 @@ pub struct ConnectionActor {
     /// Violation events since the last metrics flush (delta, like the
     /// other conn counters) → `NetReport.violations`.
     m_violations: u64,
+    /// This session's ticket-auth outcomes since the last flush (B21).
+    m_tickets: crate::metrics::TicketCounts,
     /// AUTH attempt timestamps inside the current [`AUTH_WINDOW`] (§3.1).
     /// Actor-local, bounded by construction: only ADMITTED attempts are
     /// recorded (at most [`AUTH_ATTEMPTS_PER_WINDOW`] entries, ever), so

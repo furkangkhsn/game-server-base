@@ -186,6 +186,7 @@ pub(super) fn join_and_detach(a: &mut Actor, conn: u64) -> PlayerId {
         identity: identity.clone(),
         out,
         reply,
+        claims: None,
     };
     assert!(a.handle_msg(join, 1));
     let (entity, _actions) = reply_rx.try_recv().expect("sync reply").expect("joined");

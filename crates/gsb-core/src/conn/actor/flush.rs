@@ -50,6 +50,7 @@ impl super::ConnectionActor {
             violations: self.m_violations,
             input_rate_limited: self.m_input_limited,
             server_close,
+            tickets: self.m_tickets,
             last,
         };
         if is_empty(&sample) {
@@ -99,6 +100,7 @@ impl super::ConnectionActor {
         self.m_metrics_dropped = 0;
         self.m_violations = 0;
         self.m_input_limited = 0;
+        self.m_tickets = crate::metrics::TicketCounts::default();
     }
 }
 
@@ -124,4 +126,5 @@ fn is_empty(s: &ConnSample) -> bool {
         && s.violations == 0
         && s.input_rate_limited == 0
         && s.server_close.is_none()
+        && s.tickets.is_empty()
 }

@@ -37,6 +37,7 @@ where
                 conn,
                 epoch,
                 identity,
+                claims,
                 out,
                 reply,
             } => {
@@ -73,7 +74,9 @@ where
                     return true;
                 }
                 // The LOGIC mints the stable player identity (Faz 2).
-                let admission = self.logic.on_join_as(&mut self.world, conn, &identity);
+                // The verified claims (B21) go to the logic's hook only.
+                let joiner = crate::auth::Joiner::new(&identity).with_claims(claims.as_ref());
+                let admission = self.logic.on_join_verified(&mut self.world, conn, &joiner);
                 self.m.joins += 1;
                 let (act_tx, act_rx) = self.config.action_channel();
                 self.conn_epoch.insert(conn, epoch);

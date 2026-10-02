@@ -27,6 +27,7 @@ fn joined_with_path(
             identity: "ana".into(),
             out: out_tx,
             reply: reply_tx,
+            claims: None,
         },
         1,
     ));

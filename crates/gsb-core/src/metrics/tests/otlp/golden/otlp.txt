@@ -120,6 +120,26 @@ gsb_net_server_closes sum t=2 mono=true unit="" n=14 | Sessions the server ended
   [reason=idle_input] 1000..2000 int 0
   [reason=kicked] 1000..2000 int 0
   [reason=unauth_source_cap] 1000..2000 int 0
+gsb_net_tickets_accepted sum t=2 mono=true unit="" n=1 | Tickets a ticket-auth server accepted (AUTH succeeded), cumulative.
+  [] 1000..2000 int 2
+gsb_net_tickets_rejected sum t=2 mono=true unit="" n=15 | Tickets a ticket-auth server refused (ERROR 10, the connection stays alive), by reason, cumulative.
+  [reason=missing] 1000..2000 int 0
+  [reason=malformed] 1000..2000 int 0
+  [reason=unknown_key] 1000..2000 int 0
+  [reason=signature] 1000..2000 int 0
+  [reason=claims] 1000..2000 int 0
+  [reason=expired] 1000..2000 int 1
+  [reason=not_yet_valid] 1000..2000 int 0
+  [reason=lifetime] 1000..2000 int 0
+  [reason=audience] 1000..2000 int 0
+  [reason=replayed] 1000..2000 int 0
+  [reason=replay_unavailable] 1000..2000 int 0
+  [reason=game] 1000..2000 int 1
+  [reason=other] 1000..2000 int 0
+  [reason=timed_out] 1000..2000 int 0
+  [reason=validator_lost] 1000..2000 int 0
+gsb_net_ticket_game_rejects sum t=2 mono=true unit="" n=1 | Tickets the game's own check refused, by the check's name (each also in the reason game of gsb_net_tickets_rejected_total), cumulative.
+  [check=season_pass] 1000..2000 int 1
 gsb_transport_udp_requests_dropped_full sum t=2 mono=true unit="" n=1 | RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.
   [] 1000..2000 int 11
 gsb_transport_udp_actions_dropped_full sum t=2 mono=true unit="" n=1 | Game-band frames the rUDP demux dropped on a session's full inbox, cumulative.

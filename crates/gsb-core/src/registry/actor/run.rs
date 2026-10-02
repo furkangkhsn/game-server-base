@@ -54,8 +54,12 @@ where
                     room,
                     out,
                     identity,
+                    claims,
                     reply,
-                } => self.on_spawn_player(conn, room, out, identity, reply).await,
+                } => {
+                    self.on_spawn_player(conn, room, out, identity, claims, reply)
+                        .await
+                }
                 RegistryMsg::DespawnPlayer { conn } => {
                     // Voluntary leave: the connection stays registered (its
                     // inbox must survive), only the affiliation goes.

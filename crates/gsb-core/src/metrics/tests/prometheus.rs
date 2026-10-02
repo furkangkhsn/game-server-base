@@ -242,6 +242,7 @@ fn input_drops_are_exported_only_at_the_net_scope() {
             control_frames_unprocessed: 0,
             server_close: None,
             last: false,
+            tickets: Default::default(),
         }));
     }
     let report = acc.report(t);

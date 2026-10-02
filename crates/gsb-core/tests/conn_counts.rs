@@ -26,11 +26,15 @@
 //!   carries them.
 //! - `stopped.rs`: what a registry that has already stopped refuses
 //!   (BACKLOG F54) — a join its closed mailbox refused is counted once.
+//! - `tickets.rs`: every AUTH a ticket-auth server decided (B21) —
+//!   accepted, or refused under exactly one reason, the game's own
+//!   check under its name besides.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gsb_core::auth::TicketAuth;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::{ConnIn, ConnectionActor};
 use gsb_core::id::ConnectionId;
@@ -56,6 +60,8 @@ mod rig;
 mod samples;
 #[path = "conn_counts/stopped.rs"]
 mod stopped;
+#[path = "conn_counts/tickets.rs"]
+mod tickets;
 #[path = "conn_counts/unprocessed.rs"]
 mod unprocessed;
 

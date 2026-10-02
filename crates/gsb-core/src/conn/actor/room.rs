@@ -63,6 +63,7 @@ impl super::ConnectionActor {
                 room,
                 out: self.out.clone(),
                 identity: self.identity.clone(),
+                claims: self.ticket.as_ref().and_then(|t| t.extra.clone()),
                 reply: reply_tx,
             })
             .await

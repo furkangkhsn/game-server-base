@@ -184,6 +184,7 @@ async fn a_dropped_batch_is_reported_on_the_shard_too() {
                 identity: String::new(),
                 out,
                 reply,
+                claims: None,
             },
             1,
         ));
@@ -244,6 +245,7 @@ async fn a_resumed_session_starts_without_a_run_on_the_shard() {
             identity: "one".into(),
             out,
             reply,
+            claims: None,
         },
         1,
     ));

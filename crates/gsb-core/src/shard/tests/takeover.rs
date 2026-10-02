@@ -167,6 +167,7 @@ fn a_resume_ahead_of_the_old_session_s_detach_takes_that_session_over() {
             identity: "ana".to_string(),
             out,
             reply,
+            claims: None,
         },
         1,
     ));

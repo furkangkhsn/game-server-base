@@ -170,6 +170,7 @@ fn join(
             identity: identity.to_string(),
             out: out_tx,
             reply: reply_tx,
+            claims: None,
         },
         1,
     ));

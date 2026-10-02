@@ -84,6 +84,7 @@ fn a_zero_capacity_resume_gets_one_slot() {
         identity: "ana".into(),
         out: out_tx,
         reply: rtx,
+        claims: None,
     });
     let (again, actions) = rrx.try_recv().expect("sent").expect("resumed");
     assert_eq!(again, entity, "the parked row came back");

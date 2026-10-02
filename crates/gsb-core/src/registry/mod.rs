@@ -127,7 +127,52 @@ pub enum BuiltRoom<W, G, St, Sp> {
 /// never awaits it. It is consulted only for a FRESH join: an
 /// identified join first asks every shard's park ledger (the resume
 /// broadcast), so a parked player resumes wherever it was parked.
-pub type HomeShard = Arc<dyn Fn(ConnectionId, &str) -> usize + Send + Sync>;
+///
+/// Any `Fn(ConnectionId, &str) -> usize` closure is a router (the
+/// identity only, as before B21); a router that also reads the game's
+/// verified claims ([`crate::auth::Joiner::claims`] — "this character
+/// lives in the north region") is a [`HomeRoute`] of its own, or a
+/// closure wrapped by [`route_verified`].
+pub type HomeShard = Arc<dyn HomeRoute>;
+
+/// A sharded room's join router (see [`HomeShard`]): the joiner →
+/// the index of the shard that owns its spawn point.
+pub trait HomeRoute: Send + Sync {
+    /// The home shard of `joiner` arriving on `conn`.
+    fn route(&self, conn: ConnectionId, joiner: &crate::auth::Joiner<'_>) -> usize;
+}
+
+/// The identity-only router: every `(connection, identity)` closure.
+impl<F> HomeRoute for F
+where
+    F: Fn(ConnectionId, &str) -> usize + Send + Sync,
+{
+    fn route(&self, conn: ConnectionId, joiner: &crate::auth::Joiner<'_>) -> usize {
+        self(conn, joiner.identity)
+    }
+}
+
+/// A router over the whole [`crate::auth::Joiner`] (identity AND the
+/// game's verified claims), as a [`HomeShard`]:
+/// `home_shard: route_verified(|conn, joiner| …)`.
+pub fn route_verified<F>(f: F) -> HomeShard
+where
+    F: Fn(ConnectionId, &crate::auth::Joiner<'_>) -> usize + Send + Sync + 'static,
+{
+    Arc::new(Verified(f))
+}
+
+/// [`route_verified`]'s wrapper.
+struct Verified<F>(F);
+
+impl<F> HomeRoute for Verified<F>
+where
+    F: Fn(ConnectionId, &crate::auth::Joiner<'_>) -> usize + Send + Sync,
+{
+    fn route(&self, conn: ConnectionId, joiner: &crate::auth::Joiner<'_>) -> usize {
+        (self.0)(conn, joiner)
+    }
+}
 
 /// Builds a room's world + logic. Provided by the composition root; the core
 /// never names the concrete game types. `G` is the game logic's group key

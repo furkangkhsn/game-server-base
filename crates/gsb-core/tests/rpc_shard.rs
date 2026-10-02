@@ -282,6 +282,7 @@ impl Harness {
             identity: String::new(),
             out: out_tx,
             reply: reply_tx,
+            claims: None,
         })
         .await
         .expect("shard alive");

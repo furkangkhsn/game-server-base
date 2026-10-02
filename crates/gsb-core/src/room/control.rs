@@ -146,6 +146,11 @@ pub enum RoomControl {
         /// is single-threaded.
         epoch: u64,
         identity: String,
+        /// The game's verified claims (B21, `ValidatedTicket::extra`),
+        /// handed to the logic's join hook when the resume falls back to
+        /// a fresh join; a resume that finds its park never joins. `None`
+        /// without a ticket's claims.
+        claims: Option<bytes::Bytes>,
         out: mpsc::Sender<FrameBatch>,
         reply: oneshot::Sender<Result<(EntityId, Mailbox<Action>), CoreError>>,
     },
