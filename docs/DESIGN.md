@@ -1993,8 +1993,8 @@ komutu (rUDP 1000, katılma fırtınası), yük < 5; "önce" = `09b9254`,
 | önce, varsayılan arabellek | 4441 (önceki koşular 3370–5345) | 1488 · 1479 · 983 | 65/216 · 56/206 · 53/149 | 4 · 3 · 0 | 2228 · 2115 · 2096 / — |
 | sonra, varsayılan arabellek | 4162 (önceki koşular 3863–4502) | 1348 · 1515 · 1405 | 53/755 · 65/769 · 69/756 | 75 · 49 · 114 | 1524 · 1347 · 1618 / 1919 · 2230 · 1452 |
 | sonra, `--udp-recv-buffer 4194304` | 0 | 0 · 16 | 19/51 · 21/59 | 0 · 0 | 0 · 0 / 0 · 0 |
-| B86 + rapor (`b745890`), varsayılan — **yük 47 · 13 · 31** | 4830 · 7115 · 5285 (sunucu soketi, B85: 4053 · 6337 · 4507) | 1533 · 1780 · 1298 | 65/559 · 169/613 · 54/369 | 10 · 68 · 56 | 1748 · 1632 · 1654 / 468 · 1101 · 1857 |
-| B86 + rapor (`b745890`), `--udp-recv-buffer 4194304` — **yük 44 · 53 · 4,9** | 0 · 0 · 0 (B85: 0 · 0 · 0) | 142 · 0 · 0 | 56/100 · 28/53 · 23/60 | 0 · 0 · 0 | 388 · 0 · 0 / 810 · 0 · 0 |
+| B86 + rapor (`29059ca`, `main` 6a00d31 üstünde), varsayılan — yük 4,9 · 4,2 · 3,2 | 4929 · 4974 · 4335 (sunucu soketi, B85: 4151 · 4196 · 3557) | 1281 · 1556 · 1364 | 55/357 · 69/557 · 65/554 | 0 · 0 · 0 | 1648 · 1890 · 1523 / 1848 · 1392 · 1170 |
+| B86 + rapor (`29059ca`), `--udp-recv-buffer 4194304` — yük 4,6 · 3,5 · 2,9 | 0 · 0 · 0 (B85: 0 · 0 · 0) | 0 · 0 · 0 | 23/53 · 23/48 · 25/58 | 0 · 0 · 0 | 0 · 0 · 0 / 0 · 0 · 0 |
 
 Her koşuda `connected = joined = left = 1000`, `server_closes = 0`,
 `snap_total` 230 135–235 820. *Okuma.* (1) **Kaybolan arabellekte
@@ -2096,31 +2096,34 @@ kaldırmak* — AUTH/JOIN düzelir ama connect p99'un ~760 ms'si kalır.
 (e) *Adımlarda geri çekilme yok (sabit 50 ms)* — B2 öncesi; uzun yolda her
 adım RTT/50 kopya yollar, gerçek bir tıkanıklıkta 20 Hz'de döver.
 
-*Ölçüm (2026-10-02, release, `b745890` — B86 + B85 + rapor).* Yukarıdaki
-B2 tablosunun son iki satırı; aynı komut (rUDP 1000 katılma fırtınası,
-iki kol dönüşümlü, üçer koşu). **Dürüst not: makine sakin değildi** —
-altı ajan aynı anda derliyordu; her koşu 10 dk'ya dek yükün 1 dk
-ortalamasının 5'in altına inmesini bekledi, yalnız bir koşuda indi
-(4 MiB, 3. tur: 4,9); diğerleri 13–53 yükte koştu. Sayılar B2'nin
-(yük < 5) satırlarıyla bire bir kıyaslanamaz; ebeveyn birleştirmeden sonra
-sakin makinede yeniden ölçecek. Her koşuda `connected = joined = left =
-1000`, `server_closes = 0`, `snap_total` 227 444–235 151. *Okuma:* (1)
-varsayılan arabellekte connect p99 369–613 ms — B2'nin "sonra" satırının
-755–769 ms'sinin altında, B2 öncesinin 149–216 ms'sinin üstünde; yükün payı
-ayrılamıyor (4 MiB kolunun yük 4,9'daki koşusu 23/60 ms, B2'nin 19/51 ·
-21/59'u bandında). (2) `errors` (loadgen'in JOIN sonucundan önce girdi
-yollaması — B88, diğer hattın işi) 10–68: B2'de 49–114. (3) B85'in
-sayacı sunucu soketinin kaybını ayırıyor: sistem geneli `RcvbufErrors`
-4830–7115'in 4053–6337'si sunucunun soketi, kalan ~700–800'ü loadgen
-çocuklarının istemci soketleri. (4) Rapor: her oturum duyurdu
-(`udp_game_announces_received = 1000`), sonda ~10,6–11 bin, rapor 7,2–8
-bin; `udp_game_datagrams_reported_lost = 0` (465–482 bin oyun
-datagram'ında — loopback'te kayıp yalnız sunucunun ALMA kuyruğunda, yani
-istemci → sunucu yönünde); ortalama sonda turu 2–20 ms (yükle). Bu
-ikilide oturum sonunda açık kalan sondalar da `unanswered`'a giriyordu
-(4 MiB kolunda tam 3000 = oturum başına 3: loadgen LEAVE'den sonra okumayı
-bırakıyor) — bir sonraki commit onları `udp_game_probes_open_at_end`'e
-ayırdı, `unanswered` kayıp sinyali kaldı.
+*Ölçüm (2026-10-02, release, `29059ca` — B86 + B85 + rapor, `main`
+6a00d31'in — B88 düzeltmesi dahil — üstünde).* Yukarıdaki B2 tablosunun son
+iki satırı; aynı komut (rUDP 1000 katılma fırtınası, iki kol dönüşümlü,
+üçer koşu), **her koşudan önce yükün 1 dk ortalaması < 5** (2,9–4,9;
+makinede başka iş yoktu). Her koşuda `connected = joined = left = 1000`,
+`server_closes = 0`, `snap_total` 230 355–234 205, `errors = 0` ve bütün
+`errors_*` anahtarları 0 (`errors_not_in_room` dahil — B88'in düzeltmesi;
+B2'de 49–114). *Okuma:* (1) **B86:** varsayılan arabellekte connect p99
+357–557 ms — B2 sonrasının 755–769 ms'sinden ~%30–50 kısa, ama B2
+öncesinin (sabit 50 ms) 149–216 ms'sinin üstünde: adımlar yine 50 → 100
+→ 200 ms geri çekiliyor, fırtınada üç-dört adım kaybeden istemci
+~350–550 ms bekliyor. Bu kasıtlı: tavan geri çekilmeyi kaldırmadı,
+sınırladı. 4 MiB'de 23–25/48–58 ms — B2'nin 19/51 · 21/59'u bandında, el
+sıkışma yeniden denemesi 0. (2) **Bant devralmıyor:** istemci
+`retrans_out` 1523–1890 (B2 sonrası 1347–1618, öncesi 2096–2228) —
+fırtınada kaybolan kontrol kareleri artık tabandan yenileniyor. (3)
+**B85:** sistem geneli `RcvbufErrors` 4335–4974'ün 3557–4196'sı sunucunun
+soketi (%82–84), kalan ~780 loadgen çocuklarının istemci soketleri. (4)
+**Rapor:** her oturum duyurdu (`udp_game_announces_received = 1000`);
+sonda 10,6–11 bin, rapor 7,4–8 bin; `udp_game_probes_open_at_end` ≈ 3000
+(oturum başına 3: loadgen LEAVE'den sonra okumayı bırakıyor — kesilme,
+kayıp değil), `udp_game_probes_unanswered` varsayılanda 47–174 (sonda ya
+da raporun fırtınada sunucu kuyruğunda kaybı), 4 MiB'de 0;
+`udp_game_datagrams_reported_lost = 0` (457–475 bin oyun datagram'ında —
+loopback'te kayıp yalnız sunucunun ALMA kuyruğunda, istemci → sunucu
+yönünde); ortalama sonda turu 0,7–2,7 ms. Önceki (yük 13–53 altında,
+`b745890`) koşular aynı yönü gösteriyordu (p99 369–613 ms, `errors`
+10–68 — B88 öncesi); bu satırlar onların yerini aldı.
 
 *Testler (önce kırmızı; mutasyonlu).* `rel::rto::tests::
 {a_seed_keeps_the_estimate_and_drops_the_backoff,
