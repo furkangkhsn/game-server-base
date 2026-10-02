@@ -1,4 +1,4 @@
-//! Byte layout of the future SEALED datagram (not wired yet — B5a).
+//! Byte layout of the SEALED datagram (wired into rUDP since B5a).
 //!
 //! ```text
 //! c→s  [kind 1][cid u64 LE 8][counter u64 LE 8][ciphertext ..][tag 16]   overhead 33 B

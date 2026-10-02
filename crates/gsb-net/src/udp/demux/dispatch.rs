@@ -30,6 +30,16 @@ impl super::Demux {
             self.handle_hello(n, from);
             return;
         }
+        if self.seal.is_some() {
+            // A sealed door (B5a, module `record`): after the handshake
+            // every datagram is a SEALED record; anything else is dropped
+            // unread, counted.
+            match kind & !crate::seal::wire::KIND_PHASE_BIT == crate::seal::wire::KIND_SEALED {
+                true => self.handle_sealed(n, from),
+                false => self.seal_counts().datagrams_unsealed += 1,
+            }
+            return;
+        }
         if kind & KIND_CID_TAG != 0 && self.migration {
             self.handle_tagged(n, from);
             return;
@@ -89,7 +99,7 @@ impl super::Demux {
 
     /// One datagram of kind `kind` whose body is `buf[at..n]`, for the
     /// session `key` (`None`: no session at its source address).
-    fn dispatch(&mut self, kind: u8, at: usize, n: usize, key: Option<SessionKey>) {
+    pub(super) fn dispatch(&mut self, kind: u8, at: usize, n: usize, key: Option<SessionKey>) {
         let body = n - at;
         match kind {
             KIND_ACK => {

@@ -11,6 +11,19 @@ impl UdpClient {
     /// datagram, or the FRAG that completed a message — so the awaiting
     /// loop can return it immediately; REL/ACK/HELLO return `false`.
     pub(super) fn process_datagram(&mut self, d: &[u8]) -> bool {
+        if !self.sealed() {
+            return self.process_inner(d);
+        }
+        // A sealed session (module `seal`): only a record that opens is
+        // read, and what it carries is the plaintext door's datagram.
+        match self.open_record(d) {
+            Some(inner) => self.process_inner(&inner),
+            None => false,
+        }
+    }
+
+    /// [`Self::process_datagram`] on the plaintext (or opened) datagram.
+    fn process_inner(&mut self, d: &[u8]) -> bool {
         if d.is_empty() {
             return false;
         }
@@ -55,8 +68,9 @@ impl UdpClient {
                             }
                             self.in_expected = self.in_expected.wrapping_add(1);
                         }
-                        let ack = self.wire(encode_ack(self.in_expected));
-                        let _ = self.sock.try_send_to(&ack, self.peer);
+                        if let Some(ack) = self.wire(encode_ack(self.in_expected)) {
+                            let _ = self.sock.try_send_to(&ack, self.peer);
+                        }
                     }
                     std::cmp::Ordering::Less => {
                         // The server retransmitted a frame already ACKed:
@@ -64,8 +78,9 @@ impl UdpClient {
                         // re-ACK; never re-deliver (control runs exactly
                         // once, in order).
                         self.stats.dup_in += 1;
-                        let ack = self.wire(encode_ack(self.in_expected));
-                        let _ = self.sock.try_send_to(&ack, self.peer);
+                        if let Some(ack) = self.wire(encode_ack(self.in_expected)) {
+                            let _ = self.sock.try_send_to(&ack, self.peer);
+                        }
                     }
                     std::cmp::Ordering::Greater => {
                         if self.in_oob.len() < OOB_CAP {
@@ -115,6 +130,11 @@ impl UdpClient {
         match self.rel.poll(now) {
             Due::Dead(_) => self.declare_rel_dead(),
             Due::Resend(datagram) => {
+                // The band keeps the inner datagram: on a sealed session
+                // every re-send is a fresh record (module `seal`).
+                let Some(datagram) = self.wire(datagram.to_vec()) else {
+                    return;
+                };
                 if self.sock.try_send_to(&datagram, self.peer).is_ok() {
                     self.rel.resent(now);
                     self.stats.retrans_out += 1;

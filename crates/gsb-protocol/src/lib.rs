@@ -92,6 +92,16 @@ pub mod op {
         /// ever takes the number; a client frame with it is refused like
         /// any unknown base opcode and never reaches a room.
         pub const MEMBER_PATH: u16 = 15;
+        /// rUDP transport-level marker (NOT a message-table message, and
+        /// never on the wire as an opcode): on a sealed door (B5a) the
+        /// shared demux's request that a session's writer — the only
+        /// owner of the session's server → client record sealer — seal
+        /// and send a transport datagram the demux produced (the reliable
+        /// band's cumulative ACK, a path challenge), riding the outbound
+        /// channel the way `UDP_ACK` does. Payload: the destination (`0`
+        /// = the session's current address, else the `UDP_PATH` address
+        /// encoding) followed by the plaintext inner datagram.
+        pub const UDP_SEND: u16 = 16;
     }
 
     /// First opcode reserved for game crates.

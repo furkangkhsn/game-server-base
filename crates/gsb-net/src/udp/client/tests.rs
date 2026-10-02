@@ -52,6 +52,7 @@ async fn detached_with(config: UdpClientConfig) -> (UdpClient, UdpSocket) {
         reasm: Reassembly::default(),
         reports: super::report::Reports::new(config),
         path: super::migrate::Migration::new(config.migration),
+        seal: super::seal::Seal::new(config.server_key),
     };
     (client, sink)
 }

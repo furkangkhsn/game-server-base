@@ -17,10 +17,13 @@
 //!
 //! Without crypto a CID is a **bearer token**: an on-path sniffer that
 //! reads one can answer the challenge from its own address and steer the
-//! server → client stream to itself. So the server grants CIDs only when
-//! its `udp_migration` is on (default off: the door as it was, byte for
-//! byte). After B5a (the sealed record layer) the challenge is encrypted
-//! and the default turns on.
+//! server → client stream to itself. So a plaintext door grants CIDs only
+//! when its `udp_migration` is on (default off there: the door as it was,
+//! byte for byte). A sealed door (B5a, module `crate::udp::sealed`)
+//! always grants one — inside the encrypted message 2; it routes every
+//! c→s record — and follows an address change only for a record that
+//! opened and is the newest (`demux::record`), with a sealed challenge
+//! and response; the server's migration default is on there.
 //!
 //! ## Wire (additive — `docs/DESIGN.md` §5)
 //!

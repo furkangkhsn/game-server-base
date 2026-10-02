@@ -46,9 +46,37 @@ impl super::Demux {
             udp_migrations_port_only: self.mig.migrations_port_only,
             udp_proofs_refused_per_source: self.per_source.refused,
             udp_pending_source_moves_kept: self.per_source.moves_kept,
-            ..Default::default()
+            ..self.seal_totals()
         };
         self.flusher.flush(totals, last);
+    }
+
+    /// A sealed door's counters (B5a, module `record`; zero on a
+    /// plaintext door).
+    pub(super) fn seal_totals(&self) -> TransportCounters {
+        let Some(seal) = &self.seal else {
+            return TransportCounters::default();
+        };
+        let (c, r) = (&seal.counts, &seal.counts.refused);
+        TransportCounters {
+            udp_proofs_refused_budget: seal.budget.refused,
+            udp_proofs_refused_plaintext: c.proofs_refused_plaintext,
+            udp_handshakes_malformed: c.handshakes_malformed,
+            udp_handshakes_failed_decrypt: c.handshakes_failed_decrypt,
+            udp_handshakes_failed_internal: c.handshakes_failed_internal,
+            udp_datagrams_unsealed: c.datagrams_unsealed,
+            seal_integrity_limit: r[0],
+            seal_malformed: r[1],
+            seal_too_old: r[2],
+            seal_replayed: r[3],
+            seal_wrong_phase: r[4],
+            seal_forged: r[5],
+            udp_sessions_ended_seal_limit: c.sessions_ended_limit,
+            udp_path_candidates_not_newest: c.candidates_not_newest,
+            udp_acks_not_queued: c.acks_not_queued,
+            udp_path_challenges_not_queued: c.challenges_not_queued,
+            ..Default::default()
+        }
     }
 }
 

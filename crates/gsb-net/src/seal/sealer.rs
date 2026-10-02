@@ -117,7 +117,7 @@ impl Sealer {
     }
 
     #[cfg(test)]
-    pub(super) fn set_next_counter_for_test(&mut self, next: u64) {
+    pub(crate) fn set_next_counter_for_test(&mut self, next: u64) {
         self.next = next;
     }
 }

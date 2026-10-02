@@ -50,6 +50,12 @@ impl super::UdpWriter {
             self.apply_path(&frame);
             return None;
         }
+        if frame.op == op::base::UDP_SEND {
+            // A sealed door's: a datagram of the demux's to seal and send
+            // (module `seal`).
+            self.apply_send(&frame);
+            return None;
+        }
         if !is_control(frame.op) {
             // The game band: RAW, or FRAG when over the budget.
             self.send_game(&frame).await;
@@ -79,9 +85,13 @@ impl super::UdpWriter {
         None
     }
 
-    /// Put one datagram on the socket (`control`: the reliable band's).
+    /// Put one datagram on the socket (`control`: the reliable band's) —
+    /// sealed first on a sealed door (module `seal`).
     pub(super) async fn send(&mut self, datagram: &[u8], control: bool) {
-        match self.sock.send_to(datagram, self.peer).await {
+        let Some(datagram) = self.wire(datagram) else {
+            return; // the record counter ran out: the session is ending
+        };
+        match self.sock.send_to(&datagram, self.peer).await {
             // A game datagram on the wire: the feedback's sent count.
             Ok(_) if !control => self.feedback.game_sent(datagram.len()),
             // A control one: the paced game band yields its bytes.
@@ -116,12 +126,13 @@ impl super::UdpWriter {
 
 /// Whether an outbound frame is one of the SESSION's (a game or control
 /// frame the room or the connection sent), not the demux's piggybacked
-/// inbound ACK, game-band report or path change — transport messages for
-/// this writer, which the loss counters leave out (B66, B73).
+/// inbound ACK, game-band report, path change or send request —
+/// transport messages for this writer, which the loss counters leave out
+/// (B66, B73).
 pub(super) fn is_session_frame(frame: &FrameBody) -> bool {
     !matches!(
         frame.op,
-        op::base::UDP_ACK | op::base::UDP_REPORT | op::base::UDP_PATH
+        op::base::UDP_ACK | op::base::UDP_REPORT | op::base::UDP_PATH | op::base::UDP_SEND
     )
 }
 

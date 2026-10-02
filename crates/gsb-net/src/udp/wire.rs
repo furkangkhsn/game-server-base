@@ -82,7 +82,9 @@ pub(super) fn tag(cid: u64, d: &[u8]) -> Vec<u8> {
     t
 }
 
-/// Encode a PATH_RESPONSE (client → server, always tagged).
+/// Encode a PATH_RESPONSE (client → server, always tagged; the client
+/// builds it through its `wire` — the tests spell it out).
+#[cfg(test)]
 pub(super) fn encode_path_response(cid: u64, nonce: u64) -> Vec<u8> {
     let mut d = Vec::with_capacity(17);
     d.push(KIND_PATH_RESPONSE | KIND_CID_TAG);

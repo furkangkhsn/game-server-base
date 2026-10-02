@@ -18,14 +18,16 @@ mod flush;
 mod handshake;
 mod inbound;
 mod migrate;
+mod noise;
 mod reap;
+mod record;
 mod report;
 mod session;
 mod source;
 mod sweep;
 mod table;
 pub(super) use reap::Reaper;
-pub(super) use session::UdpSession;
+pub(super) use session::{SessionSeal, UdpSession};
 pub(super) use source::Pending;
 pub(super) use table::SessionKey;
 use table::Sessions;
@@ -113,6 +115,9 @@ pub(super) struct Demux {
     metrics: crate::TransportMetrics,
     /// The writers' congestion response (module `crate::udp::congestion`).
     congestion: UdpCongestion,
+    /// The sealed door's state (module `crate::udp::sealed`, B5a): `None`
+    /// on a plaintext door.
+    seal: Option<crate::udp::sealed::DoorSeal>,
 }
 
 impl Demux {
@@ -172,6 +177,7 @@ impl Demux {
             flusher: crate::metrics::Flusher::new(None),
             metrics: None,
             congestion: UdpCongestion::Off,
+            seal: None,
         }
     }
 
@@ -209,6 +215,7 @@ pub(super) async fn demux(
     end_tx: Sender<Queued>,
     cookie: CookieKey,
     cfg: UdpTransportConfig,
+    seal: Option<crate::udp::sealed::DoorSeal>,
 ) {
     let mut d = Demux::new(
         sock,
@@ -224,6 +231,7 @@ pub(super) async fn demux(
     d.congestion = cfg.congestion;
     d.migration = cfg.migration;
     d.per_source = source::PerSource::new(cfg.max_handshakes_per_source);
+    d.seal = seal;
     loop {
         // Arm the read: if any session has an idle deadline pending, the
         // read is bounded by the EARLIEST one (the deadline fires only
@@ -281,6 +289,9 @@ pub(super) async fn demux(
         proofs_refused_per_source = d.per_source.refused,
         migrations = d.mig.migrations,
         cid_unknown = d.mig.cid_unknown,
+        sealed = d.seal.is_some(),
+        proofs_refused_budget = d.seal.as_ref().map(|s| s.budget.refused),
+        seal_forged = d.seal.as_ref().map(|s| s.counts.refused[5]),
         "rUDP demux stopped"
     );
 }

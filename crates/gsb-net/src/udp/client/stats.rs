@@ -61,4 +61,25 @@ pub struct UdpClientStats {
     /// Path challenges ignored: this session has no connection id (a
     /// server challenges only one that has).
     pub path_challenges_ignored: u64,
+    /// The record layer (B5a; a sealed client only): accepts whose Noise
+    /// message 2 did not authenticate (forged, or for another handshake) —
+    /// ignored, the handshake keeps waiting for the genuine one.
+    pub accepts_forged: u64,
+    /// Accepts WITHOUT a message 2 — a plaintext door answering a sealed
+    /// client (or a forged one): refused; the handshake ends in
+    /// `ConnectionRefused` at the deadline if nothing better came.
+    pub accepts_unsealed: u64,
+    /// Datagrams from the server that were not SEALED records on a sealed
+    /// session, dropped unread.
+    pub unsealed_dropped: u64,
+    /// Records refused, one counter per `seal::Refusal` name (`seal_*`).
+    pub seal_integrity_limit: u64,
+    pub seal_malformed: u64,
+    pub seal_too_old: u64,
+    pub seal_replayed: u64,
+    pub seal_wrong_phase: u64,
+    pub seal_forged: u64,
+    /// Sends refused because the record counter ran out (2^62): the
+    /// session was declared over.
+    pub seal_exhausted: u64,
 }

@@ -242,7 +242,8 @@
 //!
 //! **The kind byte map** (final since B3; BACKLOG B109): `0x00..=0x3F`
 //! plaintext kinds (`0..=8` used); `0x40..=0x7F` the SEALED record of
-//! `crate::seal` (`0x40 | key phase`, `0x41`; not wired until B5a);
+//! `crate::seal` (`0x40 | key phase`, `0x41`; a sealed door's every
+//! session datagram since B5a — module `sealed`);
 //! `0x80..=0xBF` a plaintext kind `k` with the CID tag bit
 //! ([`KIND_CID_TAG`]) — client → server only, after the server granted a
 //! CID; `0xC0..=0xFF` unused (a SEALED record carries its CID in its own
@@ -594,22 +595,24 @@
 //!   reaches the connection actor as `ConnIn::Path` (the core's
 //!   [`PathState`]), the room as `TickCtx::budget`, and a kit room that
 //!   opted in thins with `SnapshotBudget`; with it off nothing is told.
-//! - **Connection migration is opt-in and unauthenticated.** Since B3
-//!   a session can carry a server-assigned connection id (CID) and move
-//!   to a new client address after path validation (module `path`), so
-//!   a NAT rebinding or a Wi-Fi ↔ cellular handover keeps the session.
-//!   Without crypto the CID is a bearer token — whoever sniffs it can
-//!   answer a challenge and steer the server → client stream — so it is
-//!   off by default (`udp_migration`); with it off, an address change
-//!   is still a new handshake and a resume. It defaults on once the
-//!   record layer is wired (B5a, `docs/RUDP-SECURITY.md` §7).
-//! - **No crypto layer**, declared out of scope for v1 rather than
-//!   pending: the cookie is an anti-spoofing measure, not a security
-//!   boundary (nothing is signed or encrypted). Fragmentation, once
-//!   listed here, now exists for the game band (see "MTU"); a FRAG
-//!   datagram is as forgeable as a RAW one, and the client's reassembly
-//!   bounds are what keep a forged stream from costing it more than
-//!   64 KiB.
+//! - **Connection migration** (B3, module `path`): a session carries a
+//!   server-assigned connection id (CID) and moves to a new client
+//!   address after path validation, so a NAT rebinding or a Wi-Fi ↔
+//!   cellular handover keeps it. On a plaintext door the CID is a bearer
+//!   token — whoever sniffs it can answer a challenge and steer the
+//!   server → client stream — so it stays opt-in there; on a sealed door
+//!   only an authenticated, newest record starts a validation and the
+//!   challenge is sealed (B5a, `docs/RUDP-SECURITY.md` §7), and the
+//!   server turns it on by default.
+//! - **The record layer** (B5a, module `sealed`; `docs/RUDP-SECURITY.md`):
+//!   a sealed door — the server's production default — runs Noise NK
+//!   inside the cookie handshake and seals every session datagram both
+//!   ways (ChaCha20-Poly1305, a replay window, key phases). A plaintext
+//!   door (the explicit dev/LAN switch) signs and encrypts nothing: there
+//!   the cookie is an anti-spoofing measure, not a security boundary, and
+//!   a FRAG datagram is as forgeable as a RAW one (the client's reassembly
+//!   bounds keep a forged stream from costing it more than 64 KiB). Still
+//!   open (B5b): the rekey policy, the stateless reset, CID rotation.
 
 mod client;
 mod congestion;
@@ -620,6 +623,7 @@ mod frag;
 mod kernel;
 mod path;
 mod rel;
+mod sealed;
 mod transport;
 mod wire;
 mod writer;
@@ -629,6 +633,7 @@ mod tests;
 
 pub use client::{UdpClient, UdpClientConfig, UdpClientStats};
 pub use congestion::{PathPhase, PathState, UdpCongestion};
+pub use sealed::{DEFAULT_HANDSHAKES_PER_SEC, UdpSecurity};
 pub use transport::{UdpTransport, UdpTransportConfig};
 
 // Re-homed internals: each lives in the module that owns its concern,
@@ -639,10 +644,13 @@ use feedback::{ANNOUNCE_EVERY, ANNOUNCE_MAX, Feedback, Report};
 use frag::{FRAG_MAX_COUNT, Reassembly, split};
 use rel::{Due, HANDSHAKE_MAX_RTO, MAX_RTO, RelSend, Rto};
 use transport::Queued;
+#[cfg(test)]
+use wire::encode_path_response;
 use wire::{
-    body_of, encode_accept, encode_ack, encode_hello, encode_path_challenge, encode_path_response,
-    encode_probe, encode_proof, encode_raw, encode_rel, encode_report, parse_two_u32, tag, u64_at,
+    body_of, encode_accept, encode_ack, encode_hello, encode_path_challenge, encode_probe,
+    encode_proof, encode_raw, encode_rel, encode_report, parse_two_u32, tag, u64_at,
 };
+#[cfg(test)]
 use writer::udp_pump_spawner;
 
 use std::time::Duration;

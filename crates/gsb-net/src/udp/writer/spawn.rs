@@ -16,8 +16,9 @@ use crate::transport::PumpSpawner;
 use crate::udp::*;
 
 /// What a session's writer is spawned with besides its channels: the
-/// shared socket, the peer, the datagram budget, the demux's reap pass
-/// and the metrics channel.
+/// shared socket, the peer, the datagram budget, the demux's reap pass,
+/// the metrics channel and — on a sealed door — the session's record
+/// sealer.
 pub(in crate::udp) struct Link {
     pub(in crate::udp) sock: Arc<UdpSocket>,
     pub(in crate::udp) peer: SocketAddr,
@@ -26,10 +27,15 @@ pub(in crate::udp) struct Link {
     pub(in crate::udp) metrics: crate::TransportMetrics,
     /// The door's congestion response (module `crate::udp::congestion`).
     pub(in crate::udp) congestion: UdpCongestion,
+    /// The session's server → client record sealer on a sealed door (B5a,
+    /// module `crate::udp::sealed`): every datagram this writer sends is
+    /// sealed by it. `None`: a plaintext door.
+    pub(in crate::udp) sealer: Option<crate::seal::Sealer>,
 }
 
 /// The per-session outbound pump spawner: ONLY a writer task (the reader
 /// is the shared demux, owned by the listener).
+#[cfg(test)]
 pub(in crate::udp) fn udp_pump_spawner(
     sock: Arc<UdpSocket>,
     peer: SocketAddr,
@@ -38,14 +44,20 @@ pub(in crate::udp) fn udp_pump_spawner(
     metrics: crate::TransportMetrics,
     congestion: UdpCongestion,
 ) -> PumpSpawner {
-    let link = Link {
+    udp_link_spawner(Link {
         sock,
         peer,
         max_datagram,
         reaper,
         metrics,
         congestion,
-    };
+        sealer: None,
+    })
+}
+
+/// [`udp_pump_spawner`] from a whole [`Link`] (the demux's: a sealed
+/// session's writer gets its sealer).
+pub(in crate::udp) fn udp_link_spawner(link: Link) -> PumpSpawner {
     Box::new(
         move |conn: ConnectionId,
               in_tx: Mailbox<ConnIn>,
@@ -76,13 +88,19 @@ impl UdpWriter {
         out_rx: Inbox<FrameBatch>,
     ) -> Self {
         let verdict = Some(crate::pump::verdict::Verdict::reserve(in_tx.clone(), true));
+        // A sealed writer's budget is the INNER datagram's: the record's
+        // header and tag ride on top, within the door's budget.
+        let max_datagram = match link.sealer {
+            Some(_) => link.max_datagram - crate::seal::wire::OVERHEAD_S2C,
+            None => link.max_datagram,
+        };
         Self {
             conn,
             sock: link.sock,
             peer: link.peer,
             in_tx,
             out_rx,
-            max_datagram: link.max_datagram,
+            max_datagram,
             seq: 0,
             // No sample yet: the server's handshake is stateless, so its
             // first sample is its first control frame's ACK (or, for a
@@ -106,9 +124,14 @@ impl UdpWriter {
             verdicts_deferred: 0,
             flusher: crate::metrics::Flusher::new(link.metrics),
             feedback: Feedback::new(Instant::now()),
-            pace: super::pace::Pace::new(link.congestion, link.max_datagram, Instant::now()),
+            pace: super::pace::Pace::new(link.congestion, max_datagram, Instant::now()),
             path_changes: 0,
             path_resets: 0,
+            sealer: link.sealer,
+            seal_exhausted: false,
+            ended_seal_limit: 0,
+            sends_ack_failed: 0,
+            sends_challenge_failed: 0,
         }
     }
 }

@@ -35,6 +35,27 @@ pub(in crate::udp) struct UdpSession {
     /// Inbound frames dropped on a full (bounded) session mailbox.
     pub(super) inbox_full: u64,
     pub(super) inbox_full_warned: bool,
+    /// The record layer's receive half on a sealed door (B5a; `None` on a
+    /// plaintext one).
+    pub(super) seal: Option<SessionSeal>,
+}
+
+/// A sealed session's receive state: its `Opener`, and the accept
+/// datagram kept for a re-sent proof until the session's first record
+/// opens (the client holds the session then, and never re-sends).
+pub(in crate::udp) struct SessionSeal {
+    pub(super) opener: crate::seal::Opener,
+    pub(super) accept: Option<Box<[u8]>>,
+}
+
+/// No key material: the counters only.
+impl std::fmt::Debug for SessionSeal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionSeal")
+            .field("forged", &self.opener.forged())
+            .field("accept_kept", &self.accept.is_some())
+            .finish()
+    }
 }
 
 impl UdpSession {
@@ -60,6 +81,7 @@ impl UdpSession {
             dup_in: 0,
             inbox_full: 0,
             inbox_full_warned: false,
+            seal: None,
         }
     }
 }

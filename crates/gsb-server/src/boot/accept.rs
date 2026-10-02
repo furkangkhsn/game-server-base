@@ -208,6 +208,7 @@ pub(super) fn udp_config(
         migration: cfg.udp_migration,
         // The cap on pending sessions per source (B89): D11's key.
         max_handshakes_per_source: cfg.max_handshakes_per_source.map(|n| n as usize),
+        ..UdpTransportConfig::default()
     }
 }
 

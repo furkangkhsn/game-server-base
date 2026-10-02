@@ -1,8 +1,9 @@
-//! rUDP record protection core — sans-IO, deterministic, NOT wired yet.
+//! rUDP record protection core — sans-IO, deterministic.
 //!
 //! The design is docs/RUDP-SECURITY.md; this module is its crypto core
-//! (round x1). rUDP does not call it yet: B5a wires the handshake into
-//! the proof/accept step and the record layer around the datagrams.
+//! (round x1). B5a wired it into rUDP (`crate::udp`, module `sealed`):
+//! the handshake rides the cookie proof/accept, the record layer wraps
+//! every session datagram of a sealed door. This module stays sans-IO.
 //!
 //! - **Handshake** ([`Initiator`], [`Msg1`]): Noise
 //!   `NK_25519_ChaChaPoly_BLAKE2s` via `snow` (RustCrypto only, no

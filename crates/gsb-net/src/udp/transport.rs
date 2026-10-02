@@ -57,6 +57,20 @@ pub struct UdpTransportConfig {
     /// accept and is counted (`udp_proofs_refused_per_source`); the
     /// client re-sends it. `None` (the default) or `0`: no cap.
     pub max_handshakes_per_source: Option<usize>,
+    /// The record layer (B5a, `crate::udp` module `sealed`):
+    /// [`UdpSecurity::Sealed`] runs Noise NK in the cookie handshake and
+    /// seals every session datagram under the given static key;
+    /// [`UdpSecurity::Plaintext`] (this struct's default — a library
+    /// cannot invent a server's identity) is the door before B5a. The
+    /// server's own default is sealed (its `udp_security`).
+    pub security: UdpSecurity,
+    /// The sealed door's global handshake budget (B119; the server's
+    /// `udp_handshakes_per_sec`): Diffie-Hellmans per second the demux
+    /// runs, a token bucket checked after the cookie and the per-source
+    /// cap. A verified proof over it creates nothing and is counted
+    /// (`udp_proofs_refused_budget`); the client re-sends it. `None` or
+    /// `0`: no budget. Default [`DEFAULT_HANDSHAKES_PER_SEC`].
+    pub handshakes_per_sec: Option<u32>,
 }
 
 impl Default for UdpTransportConfig {
@@ -72,6 +86,8 @@ impl Default for UdpTransportConfig {
             congestion: UdpCongestion::Off,
             migration: false,
             max_handshakes_per_source: None,
+            security: UdpSecurity::Plaintext,
+            handshakes_per_sec: Some(DEFAULT_HANDSHAKES_PER_SEC),
         }
     }
 }
@@ -130,9 +146,27 @@ impl Transport for UdpTransport {
                     ))
                 })?,
             };
+            // A sealed door's state (B5a): its per-door reset-token key is
+            // drawn here, so an entropy failure refuses the bind like the
+            // cookie key's.
+            let seal = match &self.config.security {
+                UdpSecurity::Sealed(k) => Some(crate::udp::sealed::DoorSeal::new(
+                    k.clone(),
+                    self.config.handshakes_per_sec,
+                )?),
+                UdpSecurity::Plaintext => None,
+            };
+            // Only the PUBLIC key is ever logged (the clients pin it).
+            let public = self.config.security.public_key().map(hex);
             let kernel = kernel::spawn(&sock, &self.config.metrics);
-            let demux = tokio::spawn(demux(sock.clone(), end_tx, key, self.config.clone()));
-            info!(%addr, %key_source, "rUDP transport bound (shared demux started)");
+            let demux = tokio::spawn(demux(sock.clone(), end_tx, key, self.config.clone(), seal));
+            info!(
+                %addr,
+                %key_source,
+                sealed = public.is_some(),
+                public_key = public.as_deref().unwrap_or("-"),
+                "rUDP transport bound (shared demux started)"
+            );
             Ok(Arc::new(UdpListenerHandle {
                 sock,
                 end_rx,
@@ -142,6 +176,11 @@ impl Transport for UdpTransport {
             }) as Arc<dyn Listener>)
         })
     }
+}
+
+/// Lowercase hex of a public key (the bind log's).
+fn hex(b: [u8; crate::seal::KEY_LEN]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 /// The door's one socket: bound with the configured kernel buffers, and

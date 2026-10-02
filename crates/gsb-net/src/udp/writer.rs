@@ -83,6 +83,18 @@ pub(super) struct UdpWriter {
     /// ones to a new IP, which reset the path estimate (RFC 9000 §9.4).
     path_changes: u64,
     path_resets: u64,
+    /// The record layer's send half on a sealed door (B5a, module
+    /// `seal`): every datagram to the peer is sealed by it. `None`: a
+    /// plaintext door.
+    sealer: Option<crate::seal::Sealer>,
+    /// The sealer's counter ran out (2^62): the session ends at the next
+    /// turn of the loop (`udp_sessions_ended_seal_limit`).
+    seal_exhausted: bool,
+    ended_seal_limit: u64,
+    /// The demux's `UDP_SEND` requests the socket refused, by what they
+    /// carried: a cumulative ACK or a path challenge.
+    sends_ack_failed: u64,
+    sends_challenge_failed: u64,
 }
 
 impl UdpWriter {
@@ -123,6 +135,10 @@ impl UdpWriter {
             }
             if fatal.is_none() && !self.reap_signalled {
                 self.probe_pass();
+            }
+            if fatal.is_none() && self.seal_exhausted {
+                self.die_sealed();
+                break;
             }
             if let Some(reason) = fatal {
                 self.die(reason);
@@ -209,7 +225,9 @@ mod send;
 /// The writer's birth: the spawner the demux hands each endpoint, and
 /// the writer it builds. A CHILD module too.
 mod spawn;
+#[cfg(test)]
 pub(super) use spawn::udp_pump_spawner;
+pub(super) use spawn::{Link, udp_link_spawner};
 
 /// The game band's feedback: the probe pass and the client's reports
 /// (module `crate::udp::feedback`). A CHILD module too.
@@ -222,6 +240,11 @@ mod pace;
 /// Connection migration, writer side: the path change the demux
 /// announces (module `crate::udp::path`). A CHILD module too.
 mod path;
+
+/// The record layer, writer side (B5a, module `crate::udp::sealed`):
+/// sealing every outgoing datagram, and the demux's `UDP_SEND`
+/// requests. A CHILD module too.
+mod seal;
 
 #[cfg(test)]
 mod tests;

@@ -74,8 +74,9 @@ pub struct StaticKey {
 }
 
 impl StaticKey {
-    /// From configured private key bytes (B5a reads them from config; a
-    /// missing key is a startup error there, never a plaintext fallback).
+    /// From configured private key bytes (the server reads them from its
+    /// config since B5a — `udp_static_key`; a missing key is a startup
+    /// error there, never a plaintext fallback).
     pub fn from_private(private: [u8; KEY_LEN]) -> Result<Self, HandshakeError> {
         let mut dh = DefaultResolver
             .resolve_dh(&DHChoice::Curve25519)
@@ -108,8 +109,25 @@ impl StaticKey {
         self.public
     }
 
+    /// The private half, wiped when the returned value drops: to write a
+    /// key file or an ephemeral test/load-run configuration. Never log it
+    /// (this type's `Debug` prints the public half only).
+    pub fn private_bytes(&self) -> Zeroizing<[u8; KEY_LEN]> {
+        Zeroizing::new(*self.private)
+    }
+
     pub(super) fn private(&self) -> &[u8] {
         &self.private[..]
+    }
+}
+
+/// Only the public half: a `Debug` that printed the private key would be
+/// a leak waiting for a log line.
+impl std::fmt::Debug for StaticKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticKey")
+            .field("public", &self.public)
+            .finish_non_exhaustive()
     }
 }
 

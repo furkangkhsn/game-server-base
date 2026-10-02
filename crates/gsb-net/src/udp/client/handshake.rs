@@ -5,6 +5,7 @@
 //! [`super::UdpClient`]'s private state directly.
 
 use super::*;
+use crate::udp::sealed::{SEALED_ACCEPT_LEN, context, encode_sealed_proof};
 
 impl UdpClient {
     /// Run the handshake on this (not yet established) client.
@@ -40,16 +41,13 @@ impl UdpClient {
         // it was re-sent: Karn's rule, its answer is no sample).
         let mut rto = Rto::default();
         let mut first_sent: Option<tokio::time::Instant>;
+        // A sealed client's Noise initiator (module `seal`): built once,
+        // for the first cookie; every proof re-send carries ITS message 1.
+        let mut noise: Option<crate::seal::Initiator> = None;
         loop {
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    match cookie {
-                        None => "rUDP handshake: no challenge within the deadline",
-                        Some(_) => "rUDP handshake: the server never accepted the proof",
-                    },
-                ));
+                return Err(self.gave_up(cookie.is_some()));
             }
             if resend {
                 match cookie {
@@ -63,9 +61,10 @@ impl UdpClient {
             }
             // The proof carries the capability byte (module `migrate`); the
             // challenge request never does.
-            let hello = match cookie {
-                None => encode_hello(nonce, 0),
-                Some(c) => encode_proof(nonce, c, self.path.caps()),
+            let hello = match (cookie, &noise) {
+                (None, _) => encode_hello(nonce, 0),
+                (Some(c), Some(ini)) => encode_sealed_proof(nonce, c, self.path.caps(), ini.msg1()),
+                (Some(c), None) => encode_proof(nonce, c, self.path.caps()),
             };
             self.sock.send_to(&hello, self.peer).await?;
             // Unless an answer moves us to the next step, the same step is
@@ -83,7 +82,16 @@ impl UdpClient {
                     (KIND_HELLO, None) if n >= 18 && self.buf[1..9] == nonce.to_le_bytes() => {
                         // The challenge: the proof is the next step, sent
                         // at once (not a re-send).
-                        cookie = Some(u64::from_le_bytes(self.buf[9..17].try_into().unwrap()));
+                        let c = u64::from_le_bytes(self.buf[9..17].try_into().unwrap());
+                        cookie = Some(c);
+                        if let Some(key) = self.seal.key {
+                            // NK message 1, bound to this cookie exchange.
+                            let ini = crate::seal::Initiator::new(&key, &context(nonce, c), &[])
+                                .map_err(|e| {
+                                    std::io::Error::other(format!("rUDP handshake: Noise: {e:?}"))
+                                })?;
+                            noise = Some(ini);
+                        }
                         if let Some(sent) = first_sent {
                             rto.sample(sent.elapsed());
                         }
@@ -93,6 +101,25 @@ impl UdpClient {
                     // A duplicate or late challenge, or a HELLO for
                     // another nonce: the first cookie stands.
                     (KIND_HELLO, _) => {}
+                    // A sealed client: only the accept whose message 2
+                    // authenticates is the server's word (module `seal`).
+                    (_, Some(_)) if noise.is_some() => {
+                        let d = self.buf[..n].to_vec();
+                        let Some(ini) = noise.as_mut() else { continue };
+                        let Some((accept, session)) = self.sealed_accept(ini, &d) else {
+                            continue; // refused, counted: keep waiting
+                        };
+                        if let Some(sent) = first_sent {
+                            rto.sample(sent.elapsed());
+                        }
+                        self.rel = RelSend::new(Instant::now(), rto.seed());
+                        self.set_cid(accept.cid);
+                        let (sealer, opener) = session.into_halves();
+                        self.seal.install(sealer, opener);
+                        self.established = true;
+                        self.announce(Instant::now());
+                        return Ok(());
+                    }
                     (_, Some(_)) => {
                         if let Some(sent) = first_sent {
                             rto.sample(sent.elapsed());
@@ -118,6 +145,54 @@ impl UdpClient {
                 }
             }
         }
+    }
+}
+
+impl UdpClient {
+    /// A datagram during a sealed client's proof step: the session's keys
+    /// when it is the accept with a message 2 that authenticates; `None`
+    /// otherwise — a forged message 2 (counted, the initiator still
+    /// usable: a third party cannot end the handshake), an accept without
+    /// one (a plaintext door, counted), anything else (no session yet).
+    fn sealed_accept(
+        &mut self,
+        ini: &mut crate::seal::Initiator,
+        d: &[u8],
+    ) -> Option<(crate::seal::Accept, crate::seal::Session)> {
+        if d.first() != Some(&KIND_ACK) {
+            return None;
+        }
+        if d.len() != SEALED_ACCEPT_LEN {
+            self.stats.accepts_unsealed += 1;
+            return None;
+        }
+        match ini.finish(&d[5..]) {
+            Ok(done) => Some(done),
+            Err(_) => {
+                self.stats.accepts_forged += 1;
+                None
+            }
+        }
+    }
+
+    /// The handshake's give-up: `TimedOut`, unless a sealed client was
+    /// answered only by plaintext accepts — then the door is not sealed,
+    /// and it says so (`ConnectionRefused`).
+    fn gave_up(&self, had_cookie: bool) -> std::io::Error {
+        if self.stats.accepts_unsealed > 0 {
+            return std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "rUDP handshake: the server answered without the sealed handshake \
+                 (a plaintext door? this client pinned a server key)",
+            );
+        }
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            match had_cookie {
+                false => "rUDP handshake: no challenge within the deadline",
+                true => "rUDP handshake: the server never accepted the proof",
+            },
+        )
     }
 }
 

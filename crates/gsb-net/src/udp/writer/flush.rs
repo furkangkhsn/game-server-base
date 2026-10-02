@@ -21,6 +21,12 @@ impl super::UdpWriter {
             udp_frames_unsent: self.unsent,
             writer_verdicts_deferred: self.verdicts_deferred,
             udp_control_retransmits_timeout: self.retransmits,
+            // A sealed door's (B5a): the demux's ACKs and challenges this
+            // writer sealed and the socket refused, and its own end at the
+            // record counter's limit.
+            udp_acks_send_failed: self.sends_ack_failed,
+            udp_path_challenges_send_failed: self.sends_challenge_failed,
+            udp_sessions_ended_seal_limit: self.ended_seal_limit,
             ..self.feedback_totals()
         };
         self.flusher.flush(totals, last);

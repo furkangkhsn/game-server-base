@@ -38,6 +38,7 @@ async fn writer_with_inbox(
         reaper,
         metrics: None,
         congestion,
+        sealer: None,
     };
     let (in_tx, inbox) = channel::<ConnIn>(capacity);
     let (_out_tx, out_rx) = channel::<FrameBatch>(8);

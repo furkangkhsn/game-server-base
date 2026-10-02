@@ -34,7 +34,10 @@ impl super::UdpWriter {
             return;
         }
         let (id, echo) = self.feedback.next_probe();
-        match self.sock.try_send_to(&encode_probe(id, echo), self.peer) {
+        let Some(probe) = self.wire(&encode_probe(id, echo)).map(|d| d.into_owned()) else {
+            return; // the record counter ran out: ending
+        };
+        match self.sock.try_send_to(&probe, self.peer) {
             // A whole ring unanswered: silence (B91), and for a paced
             // session the timeout response.
             Ok(_) if self.feedback.probe_sent(now) => self.pace_silence(now),

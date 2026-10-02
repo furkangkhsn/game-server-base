@@ -24,6 +24,14 @@ pub struct UdpClientConfig {
     /// nothing: the client never tags). `false` is the client before B3,
     /// byte for byte.
     pub migration: bool,
+    /// The server's static public key, pinned (B5a; `docs/RUDP-SECURITY.md`
+    /// decision 3 — the platform hands it out with the ticket and the
+    /// address). `Some`: the handshake runs Noise NK and the session is
+    /// sealed; a server that answers without it (a plaintext door) is
+    /// refused — counted, `ConnectionRefused` at the deadline. `None` (the
+    /// default): a plaintext client, for a door whose `udp_security` is
+    /// `"plaintext"` (dev/LAN) — a sealed door refuses it.
+    pub server_key: Option<[u8; crate::seal::KEY_LEN]>,
 }
 
 impl Default for UdpClientConfig {
@@ -31,6 +39,7 @@ impl Default for UdpClientConfig {
         Self {
             game_reports: true,
             migration: true,
+            server_key: None,
         }
     }
 }
@@ -79,7 +88,9 @@ impl UdpClient {
         }
         self.reports.announces += 1;
         self.reports.announced_at = Some(now);
-        let d = self.wire(encode_report(0, self.reports.received));
+        let Some(d) = self.wire(encode_report(0, self.reports.received)) else {
+            return;
+        };
         match self.sock.try_send_to(&d, self.peer) {
             Ok(_) => self.stats.announces_sent += 1,
             Err(_) => self.stats.reports_send_failed += 1,
@@ -100,7 +111,9 @@ impl UdpClient {
             return;
         }
         self.reports.probed = true;
-        let d = self.wire(encode_report(id, self.reports.received));
+        let Some(d) = self.wire(encode_report(id, self.reports.received)) else {
+            return;
+        };
         match self.sock.try_send_to(&d, self.peer) {
             Ok(_) => self.stats.reports_sent += 1,
             Err(_) => self.stats.reports_send_failed += 1,

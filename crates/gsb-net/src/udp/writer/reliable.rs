@@ -42,6 +42,11 @@ impl super::UdpWriter {
                 ));
             }
             Due::Resend(datagram) => {
+                // Sealed afresh on every send (module `seal`): a new record
+                // counter, never a replayed one.
+                let Some(datagram) = self.wire(&datagram).map(|d| d.into_owned()) else {
+                    return None; // the record counter ran out: ending
+                };
                 if self.sock.try_send_to(&datagram, self.peer).is_ok() {
                     self.rel.resent(now);
                     self.retransmits += 1;
@@ -83,10 +88,16 @@ impl super::UdpWriter {
         // `outbound_dead`. The notice is in the mailbox BEFORE the run
         // loop closes the outbound channel. (A closed mailbox: the actor
         // is already gone — nothing to tell.)
-        let notice = ConnIn::ServerClosed {
+        self.post_verdict(ConnIn::ServerClosed {
             cause: gsb_core::conn::ServerClose::RelDead,
             reason,
-        };
+        });
+    }
+
+    /// Deliver a death notice into the slot reserved at the writer's
+    /// birth (or defer it past the close — counted). Shared by the band's
+    /// death and the record layer's (module `seal`).
+    pub(super) fn post_verdict(&mut self, notice: ConnIn) {
         let verdict = self
             .verdict
             .take()

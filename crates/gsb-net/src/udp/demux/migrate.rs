@@ -115,26 +115,38 @@ impl super::Demux {
         self.challenge(key, now);
     }
 
-    /// Send the session's challenge if one is due and affordable.
+    /// Send the session's challenge if one is due and affordable. On a
+    /// sealed door it is a sealed record (its size counts against the
+    /// budget), and the session's writer seals and sends it (module
+    /// `record`).
     pub(super) fn challenge(&mut self, key: SessionKey, now: Instant) {
-        let Some(p) = self.sessions.get_mut(key).and_then(|s| s.path.as_mut()) else {
+        let sealed = self.seal.is_some();
+        let bytes = match sealed {
+            true => CHALLENGE_LEN + crate::seal::wire::OVERHEAD_S2C,
+            false => CHALLENGE_LEN,
+        };
+        let Some(p) = self.sessions.get(key).and_then(|s| s.path) else {
             return;
         };
         if !p.challenge_due(now) {
             return;
         }
-        if !p.affordable(CHALLENGE_LEN) {
+        if !p.affordable(bytes) {
             self.mig.amplification_capped += 1;
             return;
         }
-        let taken = self
-            .sock
-            .try_send_to(&encode_path_challenge(p.nonce), p.addr)
-            .is_ok();
-        p.challenged(CHALLENGE_LEN, taken, now);
-        match taken {
-            true => self.mig.challenges_sent += 1,
-            false => self.mig.challenges_send_failed += 1,
+        let challenge = encode_path_challenge(p.nonce);
+        let taken = match sealed {
+            true => self.queue_send(key, Some(p.addr), &challenge),
+            false => self.sock.try_send_to(&challenge, p.addr).is_ok(),
+        };
+        if let Some(p) = self.sessions.get_mut(key).and_then(|s| s.path.as_mut()) {
+            p.challenged(bytes, taken, now);
+        }
+        match (taken, sealed) {
+            (true, _) => self.mig.challenges_sent += 1,
+            (false, true) => self.seal_counts().challenges_not_queued += 1,
+            (false, false) => self.mig.challenges_send_failed += 1,
         }
     }
 

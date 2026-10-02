@@ -178,7 +178,7 @@ impl Opener {
     }
 
     #[cfg(test)]
-    pub(super) fn set_forged_for_test(&mut self, forged: u64) {
+    pub(crate) fn set_forged_for_test(&mut self, forged: u64) {
         self.forged = forged;
     }
 }

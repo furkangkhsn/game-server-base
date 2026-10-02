@@ -15,7 +15,7 @@ pub(super) struct Migration {
     want: bool,
     /// The CID the server granted (`None`: not asked, or an older server
     /// or one whose migration is off — the client never tags then).
-    cid: Option<u64>,
+    pub(super) cid: Option<u64>,
 }
 
 impl Migration {
@@ -45,13 +45,9 @@ impl UdpClient {
         self.path.cid
     }
 
-    /// A client → server datagram as it goes on the wire: tagged with the
-    /// CID once there is one, untouched otherwise.
-    pub(super) fn wire(&self, d: Vec<u8>) -> Vec<u8> {
-        match self.path.cid {
-            Some(cid) => tag(cid, &d),
-            None => d,
-        }
+    /// The CID of a sealed session (it came inside the server's message 2).
+    pub(super) fn set_cid(&mut self, cid: u64) {
+        self.path.cid = Some(cid);
     }
 
     /// The server's accept (`d`, the handshake's evidence): the CID after
@@ -68,14 +64,19 @@ impl UdpClient {
     /// to this client works. A client without a CID ignores it (counted:
     /// a server only challenges a session that has one).
     pub(super) fn on_path_challenge(&mut self, d: &[u8]) {
-        let (Some(cid), Some(nonce)) = (self.path.cid, u64_at(d, 1)) else {
+        let (Some(_), Some(nonce)) = (self.path.cid, u64_at(d, 1)) else {
             self.stats.path_challenges_ignored += 1;
             return;
         };
-        match self
-            .sock
-            .try_send_to(&encode_path_response(cid, nonce), self.peer)
-        {
+        // `[8][nonce]`, through `wire`: tagged on a plaintext session
+        // (`[0x88][cid][nonce]`, the 17-byte response), sealed on a sealed
+        // one (where only the key holder can have read the nonce).
+        let mut inner = vec![KIND_PATH_RESPONSE];
+        inner.extend_from_slice(&nonce.to_le_bytes());
+        let Some(response) = self.wire(inner) else {
+            return;
+        };
+        match self.sock.try_send_to(&response, self.peer) {
             Ok(_) => self.stats.path_challenges_answered += 1,
             Err(_) => self.stats.path_responses_send_failed += 1,
         }
@@ -95,7 +96,7 @@ impl UdpClient {
     /// CID ([`Self::migratable`]): such a session cannot move — the
     /// caller reconnects and resumes instead.
     pub async fn rebind(&mut self) -> std::io::Result<SocketAddr> {
-        let Some(cid) = self.path.cid else {
+        let Some(_) = self.path.cid else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "rUDP rebind: the server granted no connection id \
@@ -105,7 +106,9 @@ impl UdpClient {
         let ip = self.sock.local_addr()?.ip();
         self.sock = UdpSocket::bind(SocketAddr::new(ip, 0)).await?;
         self.stats.rebinds += 1;
-        let nudge = tag(cid, &encode_ack(self.in_expected));
+        let nudge = self
+            .wire(encode_ack(self.in_expected))
+            .ok_or_else(super::exhausted)?;
         self.sock.send_to(&nudge, self.peer).await?;
         self.sock.local_addr()
     }

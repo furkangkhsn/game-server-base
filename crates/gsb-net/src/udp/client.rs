@@ -48,6 +48,9 @@ pub struct UdpClient {
     /// Connection migration: the CID asked for and granted (module
     /// `migrate`).
     path: migrate::Migration,
+    /// The record layer (module `seal`, B5a): the pinned server key and,
+    /// once the handshake finished, the two record halves.
+    seal: seal::Seal,
 }
 
 impl UdpClient {
@@ -77,7 +80,7 @@ impl UdpClient {
         Self::connect_within_with(addr, within, UdpClientConfig::default()).await
     }
 
-    async fn connect_within_with(
+    pub(in crate::udp) async fn connect_within_with(
         addr: SocketAddr,
         within: Duration,
         config: UdpClientConfig,
@@ -106,6 +109,7 @@ impl UdpClient {
             reasm: Reassembly::default(),
             reports: report::Reports::new(config),
             path: migrate::Migration::new(config.migration),
+            seal: seal::Seal::new(config.server_key),
         };
         client.handshake(nonce, within).await?;
         Ok(client)
@@ -194,12 +198,16 @@ impl UdpClient {
             // datagram) — without this, its first control frame after a
             // quiet spell would inherit a clock stamped at the last ACK
             // and the band would "die" on the next pass.
+            // The band keeps the INNER datagram: every (re)send goes
+            // through `wire` — on a sealed session a fresh record each time.
             self.out_seq = self.out_seq.wrapping_add(1);
-            let dg = Bytes::from(self.wire(encode_rel(self.out_seq, &frame)));
-            self.rel.push(self.out_seq, dg.clone(), Instant::now());
+            let inner = encode_rel(self.out_seq, &frame);
+            self.rel
+                .push(self.out_seq, Bytes::from(inner.clone()), Instant::now());
+            let dg = self.wire(inner).ok_or_else(exhausted)?;
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         } else {
-            let dg = self.wire(encode_raw(&frame));
+            let dg = self.wire(encode_raw(&frame)).ok_or_else(exhausted)?;
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         }
     }
@@ -269,10 +277,17 @@ impl UdpClient {
     }
 }
 
+/// The error of a send whose record counter ran out (the session is
+/// over: [`UdpClient::is_established`] is `false`).
+fn exhausted() -> std::io::Error {
+    std::io::Error::other("rUDP record layer: the session's record counter is exhausted")
+}
+
 mod handshake;
 mod io;
 mod migrate;
 mod report;
+mod seal;
 mod stats;
 pub use report::UdpClientConfig;
 pub use stats::UdpClientStats;

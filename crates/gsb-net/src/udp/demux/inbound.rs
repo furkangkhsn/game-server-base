@@ -144,12 +144,22 @@ impl super::Demux {
             }
         }
         if let Some(next) = ack_to {
-            self.send_ack(peer, next);
+            self.send_ack(key, peer, next);
         }
     }
 
-    pub(super) fn send_ack(&mut self, peer: SocketAddr, next: u32) {
+    /// The reliable band's cumulative ACK to `key`'s client at `peer`. On
+    /// a sealed door the session's writer seals and sends it (module
+    /// `record`: one owner of the record counter); a refusal is counted
+    /// and the client's re-send asks again.
+    pub(super) fn send_ack(&mut self, key: SessionKey, peer: SocketAddr, next: u32) {
         let ack = encode_ack(next);
+        if self.seal.is_some() {
+            if !self.queue_send(key, None, &ack) {
+                self.seal_counts().acks_not_queued += 1;
+            }
+            return;
+        }
         if let Err(e) = self.sock.try_send_to(&ack, peer) {
             self.acks_send_failed += 1;
             debug!(%peer, %e, "rUDP: ack send failed (best-effort)");
