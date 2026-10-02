@@ -10,9 +10,12 @@
 //! client never sees its NAT rebind, so EVERY c→s datagram names its
 //! session by CID; s→c needs none (QUIC's zero-length CID idea).
 
-/// Kind byte of a SEALED datagram, key phase bit clear. Plaintext kinds
-/// use 0..=8 today and B3 reserves the 0x80 bit as its CID tag, so 0x40
-/// collides with neither; B5a confirms the final value with B3's layout.
+/// Kind byte of a SEALED datagram, key phase bit clear. Final since B3
+/// (BACKLOG B109): plaintext kinds are `0x00..=0x3F` (0..=8 used), SEALED
+/// `0x40..=0x7F`, a CID-tagged plaintext kind `0x80..=0xBF`; a SEALED
+/// c→s record carries its CID at the tagged datagram's offset (bytes
+/// 1..9) and never takes the tag. The ranges are asserted at compile time
+/// in `crate::udp`.
 pub const KIND_SEALED: u8 = 0x40;
 /// The key phase bit inside the kind byte (QUIC's KEY_PHASE idea).
 pub const KIND_PHASE_BIT: u8 = 0x01;

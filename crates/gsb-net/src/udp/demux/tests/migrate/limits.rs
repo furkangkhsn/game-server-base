@@ -91,7 +91,9 @@ async fn tagged_kinds_a_client_never_sends_make_no_candidate() {
 #[tokio::test]
 async fn a_new_ip_is_not_a_port_only_move() {
     let mut r = rig(4).await;
-    let far = UdpSocket::bind("127.0.0.2:0").await.expect("loopback alias");
+    let far = UdpSocket::bind("127.0.0.2:0")
+        .await
+        .expect("loopback alias");
     let to = addr(&far);
     feed(&mut r.d, to, &raw(b"x"));
     let nonce = nonce_of(&got(&far).await.unwrap());
