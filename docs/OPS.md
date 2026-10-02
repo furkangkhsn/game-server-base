@@ -604,7 +604,8 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `fights_peak` — MAX), savaş demosu `war_kills`; savaş ve MMO demoları,
   vuruş beslemesi (`set_combat_feed`) takılıysa, beslemenin alamadığı
   vuruşları `combat_hits_dropped_full` (besleme dolu) ve
-  `combat_hits_dropped_closed` (okuyucu gitmiş) olarak (B81) — bu ikisi
+  `combat_hits_dropped_closed` (okuyucu gitmiş) olarak (B81; F65'ten beri
+  çekirdeğin tokio'suz `channel::SendLosses`'ıyla sayılır) — bu ikisi
   F17'nin kuralıyla yalnız sıfırdan büyükken konur (düşürmeyen bir
   beslemenin satırı öncekiyle aynı). `/rooms` sayaç listelemez (yalnız
   oda id'leri), değişmedi.

@@ -2,7 +2,8 @@
 //!
 //! Everything between actors flows through bounded `mpsc` channels. Bounded
 //! capacity is the backpressure mechanism: a slow consumer makes the sender
-//! park (or, for fire-and-forget fan-out, drop via `try_send`).
+//! park (or, for fire-and-forget fan-out, drop via `try_send` — counted by
+//! cause with [`SendLosses`]).
 
 use tokio::sync::mpsc;
 
@@ -62,3 +63,62 @@ pub fn post_where<T: Send + 'static>(tx: &Mailbox<T>, msg: T) -> Posted {
         }
     }
 }
+
+/// What [`try_send`] did with a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrySend {
+    /// The mailbox took it.
+    Sent,
+    /// The mailbox was full (its reader is behind): the message is
+    /// dropped.
+    Full,
+    /// The reader is gone: the message is dropped.
+    Closed,
+}
+
+/// Offer `msg` to `tx` without waiting, and say what happened: the
+/// fire-and-forget send (an observability feed, a fan-out) whose loss a
+/// caller wants to count by cause — full (the reader is behind) apart
+/// from closed (the reader is gone), the core's split ("every loss
+/// counted", BACKLOG B32). A message not taken is dropped, never kept or
+/// retried. Needs no runtime: it never spawns and never awaits, so a
+/// room's tick body or a game's logic can call it — and a game can name
+/// the causes without naming the channel's own error type (F65).
+pub fn try_send<T>(tx: &Mailbox<T>, msg: T) -> TrySend {
+    match tx.try_send(msg) {
+        Ok(()) => TrySend::Sent,
+        Err(mpsc::error::TrySendError::Full(_)) => TrySend::Full,
+        Err(mpsc::error::TrySendError::Closed(_)) => TrySend::Closed,
+    }
+}
+
+/// [`try_send`] with its losses counted: the two counts a game puts on
+/// its counters (e.g. the logic-counter seam, F9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SendLosses {
+    /// Messages dropped on a full mailbox.
+    pub full: u64,
+    /// Messages dropped because the reader was gone.
+    pub closed: u64,
+}
+
+impl SendLosses {
+    /// [`try_send`], counting a message not taken by its cause.
+    pub fn try_send<T>(&mut self, tx: &Mailbox<T>, msg: T) -> TrySend {
+        let sent = try_send(tx, msg);
+        match sent {
+            TrySend::Sent => {}
+            TrySend::Full => self.full += 1,
+            TrySend::Closed => self.closed += 1,
+        }
+        sent
+    }
+
+    /// Every message not taken.
+    pub fn total(&self) -> u64 {
+        self.full + self.closed
+    }
+}
+
+#[cfg(test)]
+mod tests;

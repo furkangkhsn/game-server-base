@@ -3,7 +3,8 @@
 //! and every hit it cannot take is COUNTED, by why, on the logic-counter
 //! seam (F9): [`HITS_DROPPED_FULL`] (the feed was full: its reader fell
 //! behind), [`HITS_DROPPED_CLOSED`] (its reader is gone) — the core's
-//! full/closed split. The bound is the caller's: the capacity of the
+//! full/closed split, counted by the core's `channel::SendLosses` (F65:
+//! no direct tokio dependency to name the causes). The bound is the caller's: the capacity of the
 //! mailbox it hands `set_combat_feed`. A reader that keeps up with the
 //! room's hits drops nothing; the count is how a too-small bound shows.
 //!
@@ -12,9 +13,8 @@
 //! a hit reports exactly what it did before, and one with no feed has
 //! nothing to drop.
 
-use gsb_core::channel::Mailbox;
+use gsb_core::channel::{Mailbox, SendLosses};
 use gsb_core::metrics::{LogicCounter, LogicCounters};
-use tokio::sync::mpsc::error::TrySendError;
 
 use super::Hit;
 
@@ -35,8 +35,7 @@ pub const HITS_DROPPED_CLOSED: LogicCounter = LogicCounter::sum(
 #[derive(Default)]
 pub(crate) struct Feed {
     tx: Option<Mailbox<Hit>>,
-    dropped_full: u64,
-    dropped_closed: u64,
+    lost: SendLosses,
 }
 
 impl Feed {
@@ -48,18 +47,14 @@ impl Feed {
     /// Publish `hit`; a hit the feed cannot take is counted, not kept.
     pub(super) fn publish(&mut self, hit: Hit) {
         let Some(tx) = &self.tx else { return };
-        match tx.try_send(hit) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => self.dropped_full += 1,
-            Err(TrySendError::Closed(_)) => self.dropped_closed += 1,
-        }
+        self.lost.try_send(tx, hit);
     }
 
     /// Put the loss counts that are non-zero (module docs).
     pub(crate) fn counters(&self, out: &mut LogicCounters) {
         let counts = [
-            (&HITS_DROPPED_FULL, self.dropped_full),
-            (&HITS_DROPPED_CLOSED, self.dropped_closed),
+            (&HITS_DROPPED_FULL, self.lost.full),
+            (&HITS_DROPPED_CLOSED, self.lost.closed),
         ];
         for (counter, n) in counts {
             if n > 0 {

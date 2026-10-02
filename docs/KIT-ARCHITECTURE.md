@@ -4086,6 +4086,16 @@ sebebine göre sayıyor — `combat_hits_dropped_full` /
 yüzden düşürmeyen odanın sayaç kümesi aynı kalır (MMO'nun altı
 `crystal_*`'ı, savaşın `war_kills`'i). Sınır çağıranın (verdiği
 posta kutusunun kapasitesi); sayaç, küçük bir sınırın görünür yüzü.
+**F65 (sonra):** iki demo sebebi artık çekirdeğin sayan, tokio'suz
+yardımcısıyla ayırıyor — `gsb_core::channel::SendLosses::try_send`
+(sonuç `channel::TrySend::{Sent, Full, Closed}`; alınmayan mesaj atılır,
+sebebine göre `full` / `closed` sayılır; bekleme yok, spawn yok, runtime
+gerekmez — tick gövdesinden çağrılabilir). Sayımı kendisi yapmak
+istemeyen oyun yalnız sonucu döndüren `channel::try_send`'i kullanır.
+Böylece "her kaybı say" için full/closed ayrımı isteyen oyun `tokio`'yu
+doğrudan bağımlılık yapıp `TrySendError`'u adlandırmak zorunda değil:
+iki demonun normal `tokio` bağımlılığı kalktı (dev-bağımlılık olarak
+paused-saat testleri için duruyor), `Cargo.lock` değişmedi.
 
 **Kararlar ve elenenler.**
 - *Statik `const` bildirim + örnekte okuma* seçildi; elenen: çalışma
