@@ -29,7 +29,7 @@ use gsb_kit::team::{Team, TeamMember};
 use prost::Message;
 
 use crate::codec::{WarCodec, WarWire, to_dm, wire_faction};
-use crate::combat::{Combat, Hit};
+use crate::combat::{Combat, Feed, Hit};
 use crate::components::{Kind, MoveTarget, Unit};
 use crate::migrate::{self, WarMig};
 use crate::realm::Realm;
@@ -57,7 +57,7 @@ impl WarGame {
             systems: Systems::new(index),
             combat: Combat {
                 shard: index,
-                feed: None,
+                feed: Feed::default(),
                 kills: 0,
             },
             codec: WarCodec,
@@ -70,9 +70,10 @@ impl WarGame {
     }
 
     /// Publish every hit this shard applies on `feed` (the kill feed —
-    /// `try_send`, a full feed drops; it is observability, not play).
+    /// `try_send`, observability, not play: a hit it cannot take is
+    /// dropped and counted, [`crate::combat::HITS_DROPPED_FULL`]).
     pub fn set_combat_feed(&mut self, feed: Mailbox<Hit>) {
-        self.combat.feed = Some(feed);
+        self.combat.feed.attach(feed);
     }
 }
 
@@ -170,10 +171,10 @@ impl Game for WarGame {
         true
     }
 
-    /// The war's own counter: the kills this shard's combat applied
-    /// ([`crate::combat::KILLS`]).
+    /// The war's counters: [`crate::combat::KILLS`], then the feed's non-zero losses.
     fn counters(&self, _world: &World, out: &mut LogicCounters) {
         out.put(&crate::combat::KILLS, self.combat.kills);
+        self.combat.feed.counters(out);
     }
 }
 

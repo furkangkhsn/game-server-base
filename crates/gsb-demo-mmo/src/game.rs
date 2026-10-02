@@ -32,6 +32,7 @@ use std::sync::Arc;
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::channel::Mailbox;
 use gsb_core::id::{ConnectionId, PlayerId};
+use gsb_core::metrics::LogicCounters;
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::game::{Game, InputSeq, ShardGame};
@@ -39,7 +40,7 @@ use gsb_kit::sharded::Seam;
 use prost::Message;
 
 use crate::codec::{MmoCodec, MmoWire, to_dm};
-use crate::combat::{Combat, Hit};
+use crate::combat::{Combat, Feed, Hit};
 use crate::components::{InCombat, Kind, MoveTarget, Pos3, RunSpeed, Vitals};
 use crate::migrate::{self, MmoMig};
 use crate::realm::Realm;
@@ -71,7 +72,7 @@ impl MmoGame {
             systems: Systems::default(),
             combat: Combat {
                 shard: index,
-                feed: None,
+                feed: Feed::default(),
             },
             codec: MmoCodec,
         }
@@ -83,9 +84,10 @@ impl MmoGame {
     }
 
     /// Publish every hit this shard applies on `feed` (the kill feed —
-    /// `try_send`, a full feed drops; it is observability, not play).
+    /// `try_send`, observability, not play: a hit it cannot take is
+    /// dropped and counted, [`crate::combat::HITS_DROPPED_FULL`]).
     pub fn set_combat_feed(&mut self, feed: Mailbox<Hit>) {
-        self.combat.feed = Some(feed);
+        self.combat.feed.attach(feed);
     }
 }
 
@@ -172,7 +174,8 @@ impl Game for MmoGame {
         players: &HashMap<PlayerId, Entity>,
         seq: &mut InputSeq,
     ) {
-        input::ingest(players, world, actions, seq, ctx.tick, &self.combat, None);
+        let combat = &mut self.combat;
+        input::ingest(players, world, actions, seq, ctx.tick, combat, None);
     }
 
     fn systems(&mut self, world: &mut World, ctx: &TickCtx) {
@@ -188,6 +191,13 @@ impl Game for MmoGame {
         !world
             .get_entity(entity)
             .is_ok_and(|e| e.contains::<InCombat>())
+    }
+
+    /// The MMO's own counters: the hits its kill feed dropped, once
+    /// non-zero ([`crate::combat::HITS_DROPPED_FULL`] /
+    /// [`crate::combat::HITS_DROPPED_CLOSED`]).
+    fn counters(&self, _world: &World, out: &mut LogicCounters) {
+        self.combat.feed.counters(out);
     }
 }
 
@@ -213,7 +223,7 @@ impl ShardGame for MmoGame {
         seq: &mut InputSeq,
         seam: &mut Seam<'_, '_, MmoWire>,
     ) {
-        let combat = &self.combat;
+        let combat = &mut self.combat;
         input::ingest(players, world, actions, seq, ctx.tick, combat, Some(seam));
     }
 

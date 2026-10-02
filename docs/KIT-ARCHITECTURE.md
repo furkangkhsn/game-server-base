@@ -4070,7 +4070,14 @@ Sayaçlar `Crystal`'ın yeni `stats`'ı (`crystal/counters.rs`) ve
 
 **Kullanan:** savaş demosu `war_kills` (öldürücü darbeyi uygulayan —
 kurbanın sahibi — shard sayar, oda genelinde öldürme başına bir kez;
-`Combat::strike` `&mut`). Diğer demolar dokunulmadı.
+`Combat::strike` `&mut`). Diğer demolar dokunulmadı. **B81 (sonra):**
+savaş ve MMO, vuruş beslemesinin (`try_send`) alamadığı her vuruşu
+sebebine göre sayıyor — `combat_hits_dropped_full` /
+`combat_hits_dropped_closed` (`combat/feed.rs`); F17'nin
+`logic_counters_dropped` kuralıyla yalnız sıfırdan büyükken konur, bu
+yüzden düşürmeyen odanın sayaç kümesi aynı kalır (MMO'nun altı
+`crystal_*`'ı, savaşın `war_kills`'i). Sınır çağıranın (verdiği
+posta kutusunun kapasitesi); sayaç, küçük bir sınırın görünür yüzü.
 
 **Kararlar ve elenenler.**
 - *Statik `const` bildirim + örnekte okuma* seçildi; elenen: çalışma

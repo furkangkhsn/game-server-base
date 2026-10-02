@@ -523,8 +523,13 @@ gsb-server: unknown top-level config key `tik_hz` (did you mean `tick_hz`?): not
   `metrics::tests::golden` önceki kodun ürettiği metne sabit). Bugün
   bildirenler: sharded kit odaları crystallization açıksa altı
   `crystal_*` (`moves`, `release_quiet/band/partner`, `untracked`,
-  `fights_peak` — MAX), savaş demosu `war_kills`. `/rooms` sayaç
-  listelemez (yalnız oda id'leri), değişmedi.
+  `fights_peak` — MAX), savaş demosu `war_kills`; savaş ve MMO demoları,
+  vuruş beslemesi (`set_combat_feed`) takılıysa, beslemenin alamadığı
+  vuruşları `combat_hits_dropped_full` (besleme dolu) ve
+  `combat_hits_dropped_closed` (okuyucu gitmiş) olarak (B81) — bu ikisi
+  F17'nin kuralıyla yalnız sıfırdan büyükken konur (düşürmeyen bir
+  beslemenin satırı öncekiyle aynı). `/rooms` sayaç listelemez (yalnız
+  oda id'leri), değişmedi.
 - **Sunucu kapanışları: `idle_input` (E6).** `server_closes` ailesine
   (`gsb_net_server_closes_total{reason}`, OTLP'de `gsb_net_server_closes`)
   SONA eklenen etiket: odanın girdi-boşta tavanı `afk_action = disconnect`

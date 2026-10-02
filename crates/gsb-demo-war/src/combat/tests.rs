@@ -171,3 +171,41 @@ fn without_a_seam_attacks_reach_the_same_local_targets() {
     let struck = PLAYER_HP - ATTACK_DAMAGE;
     assert_eq!(hps, [PLAYER_HP, struck, PLAYER_HP, PLAYER_HP]);
 }
+
+/// `shard`'s logic counter `name` (F9), as its sample would carry it.
+fn counted(shard: &crate::WarShard, world: &World, name: &str) -> Option<u64> {
+    let mut out = gsb_core::metrics::LogicCounters::new();
+    shard.logic_counters(world, &mut out);
+    out.get(name)
+}
+
+/// The kill feed (BACKLOG B81): a hit the feed cannot take is counted
+/// by why — full (`combat_hits_dropped_full`) or its reader gone
+/// (`combat_hits_dropped_closed`) — on the logic-counter seam (F9),
+/// next to `war_kills`; a count is put once it is non-zero.
+#[test]
+fn a_dropped_hit_is_counted_full_or_closed() {
+    let mut world = World::new();
+    let mut shard = war_shard(3, &realm());
+    let (feed, hits) = gsb_core::channel::channel(1);
+    shard.game_mut().set_combat_feed(feed);
+    let a = shard.on_join_as(&mut world, ConnectionId(1), "a");
+    let b = shard.on_join_as(&mut world, ConnectionId(2), "b");
+    let mut stage = stage(5);
+    let mut strike = |shard: &mut crate::WarShard, world: &mut World, n| {
+        let mut actions: Vec<Action> = (0..n).map(|_| attack(1, a.player, b.entity)).collect();
+        shard.ingest_seam(world, &ctx(5), &mut actions, &mut stage.seam());
+    };
+    let (full, closed) = ("combat_hits_dropped_full", "combat_hits_dropped_closed");
+    strike(&mut shard, &mut world, 1);
+    assert_eq!(counted(&shard, &world, full), None, "nothing dropped yet");
+    strike(&mut shard, &mut world, 2);
+    assert_eq!(hits.len(), 1, "the feed holds one hit");
+    assert_eq!(counted(&shard, &world, full), Some(2));
+    assert_eq!(counted(&shard, &world, closed), None);
+    drop(hits);
+    strike(&mut shard, &mut world, 1); // the fourth blow fells `b`: one hit
+    assert_eq!(counted(&shard, &world, full), Some(2));
+    assert_eq!(counted(&shard, &world, closed), Some(1));
+    assert_eq!(counted(&shard, &world, "war_kills"), Some(1));
+}

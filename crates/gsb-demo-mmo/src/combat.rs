@@ -11,10 +11,11 @@
 //!
 //! Kill credit: every landed hit is published, with the attacker's wire
 //! identity, on the optional combat feed ([`Hit`]) by the shard that
-//! applied it — the authority credits the kill.
+//! applied it — the authority credits the kill. A hit the feed cannot
+//! take is counted (`feed`: [`HITS_DROPPED_FULL`],
+//! [`HITS_DROPPED_CLOSED`] — the game's own metric counters).
 
 use bevy_ecs::prelude::{Entity, World};
-use gsb_core::channel::Mailbox;
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::identity::WireId;
 use gsb_kit::sharded::Seam;
@@ -23,6 +24,11 @@ use crate::codec::{MmoWire, from_dm};
 use crate::components::{InCombat, Kind, MoveTarget, Pos3, Vitals};
 use crate::effect::MmoEffect;
 use crate::world::{ATTACK_DAMAGE, ATTACK_RANGE, COMBAT_TICKS, PLAYER_HP, nearest_waystone};
+
+mod feed;
+
+pub(crate) use feed::Feed;
+pub use feed::{HITS_DROPPED_CLOSED, HITS_DROPPED_FULL};
 
 /// The owner refuses a strike older than this (ticks since the attacker
 /// swung): a melee hit that took longer to arrive is not a hit. The
@@ -56,16 +62,17 @@ fn pos_of(w: &MmoWire) -> Pos3 {
     Pos3::new(from_dm(w.x), from_dm(w.y), from_dm(w.z))
 }
 
-/// One shard's combat state: its index and the optional kill feed.
+/// One shard's combat state: its index and the optional kill feed
+/// (with its loss counts).
 pub(crate) struct Combat {
     pub(crate) shard: usize,
-    pub(crate) feed: Option<Mailbox<Hit>>,
+    pub(crate) feed: Feed,
 }
 
 impl Combat {
     /// `attacker` (this shard's entity) attacks wire id `target`.
     pub(crate) fn attack(
-        &self,
+        &mut self,
         world: &mut World,
         seam: Option<&mut Seam<'_, '_, MmoWire>>,
         attacker: Entity,
@@ -122,7 +129,7 @@ impl Combat {
     /// against the attacker's position as THIS shard sees it, when it
     /// does) is refused; the damage is capped.
     pub(crate) fn apply_remote(
-        &self,
+        &mut self,
         world: &mut World,
         target: Entity,
         effect: &RemoteEffect,
@@ -156,7 +163,7 @@ impl Combat {
     /// Land `damage` on `victim` (this shard's entity) from `attacker`
     /// (a wire id); `false` when there was nothing to hit.
     fn strike(
-        &self,
+        &mut self,
         world: &mut World,
         victim: Entity,
         attacker: u64,
@@ -183,17 +190,14 @@ impl Combat {
         } else if killed {
             world.despawn(victim);
         }
-        if let Some(feed) = &self.feed {
-            // An observability feed, not gameplay: a full feed drops.
-            let _ = feed.try_send(Hit {
-                shard: self.shard,
-                attacker,
-                target,
-                hp,
-                killed,
-                tick,
-            });
-        }
+        self.feed.publish(Hit {
+            shard: self.shard,
+            attacker,
+            target,
+            hp,
+            killed,
+            tick,
+        });
         true
     }
 }
@@ -218,3 +222,6 @@ fn defeat(world: &mut World, player: Entity) {
         v.hp = PLAYER_HP;
     }
 }
+
+#[cfg(test)]
+mod tests;

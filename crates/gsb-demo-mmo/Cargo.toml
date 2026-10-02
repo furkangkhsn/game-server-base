@@ -18,6 +18,8 @@ bevy_ecs = { workspace = true }
 prost = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+# The combat feed tells a full mailbox from a closed one (`try_send`).
+tokio = { workspace = true }
 
 [build-dependencies]
 gsb-lint = { workspace = true }

@@ -18,11 +18,11 @@
 //! applied it — the authority, once. The same shard counts the kill
 //! ([`KILLS`], the game's own metric counter: `logic_war_kills=` on its
 //! `gsb-metric` line, `gsb_room_logic_war_kills_total` in the
-//! exposition). Towers and capture points cannot be
-//! struck (the game keeps its fight between players).
+//! exposition), and every hit the feed could not take (`feed`:
+//! [`HITS_DROPPED_FULL`], [`HITS_DROPPED_CLOSED`]). Towers and capture
+//! points cannot be struck (the game keeps its fight between players).
 
 use bevy_ecs::prelude::{Entity, World};
-use gsb_core::channel::Mailbox;
 use gsb_core::metrics::LogicCounter;
 use gsb_core::shard::{EffectOutcome, RemoteEffect};
 use gsb_kit::identity::WireId;
@@ -33,8 +33,11 @@ use crate::components::{Kind, MoveTarget, Pos3, Unit};
 use crate::effect::WarEffect;
 use crate::world::{ATTACK_DAMAGE, ATTACK_RANGE, PLAYER_HP, base};
 
+mod feed;
 mod foe;
 
+pub(crate) use feed::Feed;
+pub use feed::{HITS_DROPPED_CLOSED, HITS_DROPPED_FULL};
 use foe::{Foe, local_foe};
 
 /// The owner refuses a strike older than this (ticks since the attacker
@@ -76,11 +79,11 @@ pub const KILLS: LogicCounter = LogicCounter::sum(
     "Players felled, counted by the shard that applied the killing blow, cumulative.",
 );
 
-/// One shard's combat state: its index, the optional kill feed and the
-/// kill count.
+/// One shard's combat state: its index, the optional kill feed (with
+/// its loss counts) and the kill count.
 pub(crate) struct Combat {
     pub(crate) shard: usize,
-    pub(crate) feed: Option<Mailbox<Hit>>,
+    pub(crate) feed: Feed,
     /// Players this shard felled, cumulative ([`KILLS`]).
     pub(crate) kills: u64,
 }
@@ -204,17 +207,14 @@ impl Combat {
             self.kills += 1;
             respawn(world, victim, faction);
         }
-        if let Some(feed) = &self.feed {
-            // An observability feed, not gameplay: a full feed drops.
-            let _ = feed.try_send(Hit {
-                shard: self.shard,
-                attacker,
-                target,
-                hp,
-                killed,
-                tick,
-            });
-        }
+        self.feed.publish(Hit {
+            shard: self.shard,
+            attacker,
+            target,
+            hp,
+            killed,
+            tick,
+        });
         true
     }
 }
