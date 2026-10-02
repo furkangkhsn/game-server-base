@@ -5,6 +5,52 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## B5a — Noise kayıt katmanı rUDP'ye bağlandı; mühürlü kip varsayılan (`net/b5a-seal-wire`)
+
+- **El sıkışma (0 ek RTT):** NK msg1 proof'ta caps baytından sonra (67 B),
+  msg2 accept'te (`ACK{1}` + msg2, 77 B); msg2'nin şifreli yükü CID
+  (mühürlü kapıda her oturuma — kayıtların yönlendirme anahtarı) ve
+  ayrılmış reset jetonu. Prologue bağlamı HELLO nonce'u + çerez. Sıra:
+  çerez → msg1 boyu → kaynak sınırı (B89) → **küresel DH bütçesi** (B119,
+  `udp_handshakes_per_sec`, vars. 1000/sn — kullanıcı kararı 2026-10-02,
+  kova 50 ms; 0 = yok) → CID → DH; her ret kendi adıyla sayılı.
+  İdempotent proof: saklanan accept, ikinci DH yok.
+- **Kayıt:** her oturum datagramı iki yönde SEALED; iç datagram düz metin
+  kapınınkinin aynısı. `Opener` demux'ta, `Sealer` yazıcıda; demux'ın kendi
+  ACK'i ve PATH_CHALLENGE'ı yazıcıya `UDP_SEND` (op 16) ile — tek sayaç
+  sahibi, kilit yok. Yeniden gönderim yeni sayaçla mühürlenir. Her ret
+  `seal_*` adıyla; bütünlük sınırı/sayaç tavanı oturumu kapatır
+  (`stream_rejected`, `udp_sessions_ended_seal_limit`).
+- **Göç:** yeni adresten gelen kayıt yalnız açıldıysa VE en yeniyse
+  doğrulama başlatır (koklanan CID'li sahte kayıt başlatamaz);
+  challenge/yanıt şifreli. B112: `udp_migration` artık opsiyonel —
+  mühürlü kapıda vars. açık, düz metinde kapalı.
+- **Kimlik:** `udp_security = "sealed"|"plaintext"` (vars. sealed; düz
+  metin geliştirme/LAN anahtarı, açılışta uyarı), `udp_static_key` (64 hex)
+  / `udp_static_key_file`; yoksa/bozuksa başlamaz, anahtar hiçbir yere
+  yazılmaz (`Debug` yalnız açık yarı); açık yarı bind'de loglanır,
+  `ServerHandle::udp_public_key`. İstemci `UdpClientConfig::server_key`,
+  `gsb_client::connect::udp(addr, key)`. Testler çalışma anında anahtar
+  üretir (`gsb_server::ephemeral_udp_key`); depoda anahtar yok. Yük üreteci
+  `--udp-security`, `--udp-server-key`, `--udp-handshakes-per-sec`;
+  SERVING satırında `udp_key=`.
+- **Uyumluluk kırılması (bilinçli, karar 6):** düz metin istemci mühürlü
+  kapıda reddedilir (`udp_proofs_refused_plaintext`), mühürlü istemci düz
+  metin kapıda `ConnectionRefused`; yanlış anahtar `udp_handshakes_failed_decrypt`.
+- **B7 kapandı:** `rudp_resume.rs`'in her rUDP akışı mühürlü ve düz metin
+  kapıda (16 test).
+- 16 yeni taşıma sayacı; iki golden + OTLP bilerek güncellendi. Loadgen
+  teli **GSNQ** (ebeveyn atadı).
+- Ölçüm (yük 11–38, makine meşguldü): el sıkışma 130–136 µs; demux
+  datagram başına düz ~135 ns / mühürlü ~1,3 µs (açma +1,17 µs) → 100k ×
+  10 dg/sn'de tek demux yetmez (~60–70 bin oturum tavanı, B123); fırtına
+  (4 MiB) düz p99 0,08–0,13 sn, mühürlü 1000/sn'de 1,0–1,4 sn (bütçe),
+  bütçesiz ~0,3 sn.
+
+Testler 1916 → 1958 (`otlp` ile 1934 → 1976; ignored 3 → 4: demux CPU
+sondası). 11 mutasyonun 11'i yakalandı. Ebeveyn doğrulaması: tam kapılar
+yeşil; `StaticKey`'in `Debug`'ına özel anahtarı eklemek testi düşürdü.
+
 ## u89 — B89 + B113: rUDP kapısında kaynak başına bekleyen oturum sınırı, göçte kaynak; B110 ölçümü (`net/b89-udp-source-on-main`)
 
 - **B89 — rUDP kapısında kaynak başına sınır (isteğe bağlı).** Çerez el
