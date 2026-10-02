@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1620 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1638 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -175,6 +175,13 @@ tam kapıları ebeveyn sırayla koşar (kullanıcı kuralı).
 sayılıyor (`combat_hits_dropped_{full,closed}`, F17 kuralıyla yalnız >0);
 MMO `Seam::find` + `Target` görünümüyle (savaşın deseni). Tel ve pinli
 özetler değişmedi. Açık: F65 (`gsb_core::channel`'da sayan `try_send`).
+
+**s1 tamam** (CHANGELOG "s1"): `max_handshakes_per_source` (vars. kapalı;
+IPv4 adresi / IPv6 /64; QUIC'te kanıtlanmamış kaynak ayrı sayılır ve
+sınırda Retry alır), ops HTTP `http_max_connections` (64) +
+`http_write_timeout_secs` (10 sn). Dört yeni `gsb_transport_*` sayacı,
+loadgen teli GSNG. Açık: B89 (rUDP kapısında kaynak sınırı), D12 (düz
+TCP pre-auth), B90 (ops yönlendirmesinin süresi).
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -878,6 +885,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1620 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1638 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

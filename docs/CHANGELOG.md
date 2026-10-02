@@ -5,6 +5,47 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## s1 — D11 + B49: kapıların kaynak sınırları (`sec/s1-door-limits`)
+
+- **D11 — kaynak adres başına el sıkışma sınırı (isteğe bağlı).** Yeni
+  sunucu anahtarı `max_handshakes_per_source` (vars. yok = sınır yok; `0`
+  da yok): bir kaynak (IPv4 adresi; IPv6'da /64 öneki; IPv4'e eşlenmiş
+  IPv6 adresi IPv4 adresi sayılır) WS, TLS ve QUIC kapısının uçuştaki el
+  sıkışma yuvalarından en çok bu kadarını tutar. Sınır üstü WS/TLS
+  bağlantısı el sıkışmasız kapanır ve `handshakes_refused_per_source`
+  sayılır (kapının kendi sınırının reddi `handshakes_refused`'ta kalır).
+  QUIC'te adres Retry jetonuyla kanıtlanana dek sahte olabilir:
+  kanıtlanmamış kaynak aynı adresin kanıtlanmışından ayrı sayılır,
+  sınırdaki kanıtlanmamış bağlantı reddedilmez, durumsuz Retry alır
+  (`handshakes_retried_per_source`) — sahte Initial'larla kurbanın
+  sayısını doldurmak kurbanı reddettiremez. Tablo kapının kabul görevinde
+  (kilitsiz; bırakılan yuva kaynağını kuyrukla geri yollar), girdisi
+  yalnız yuva tutan kaynak için yaşar: kapı sınırını aşamaz. Varsayılan
+  kapalı: NAT arkasındaki oyuncular adres paylaşır, testler ve loadgen
+  tek loopback adresinden bağlanır. Düz TCP (el sıkışma evresi yok, D12)
+  ve rUDP (durumsuz çerez, B89) kapsam dışı. SECURITY §4.3.1, OPS §2/§3.
+- **B49 — ops HTTP'de bağlantı tavanı ve yanıt yazmanın süre sınırı.**
+  `http_max_connections` (vars. 64; `0` = yok): tavandaki yeni bağlantı
+  hemen, okunmadan ve yanıtsız kapanır, `ops_http_conns_refused` sayılır.
+  `http_write_timeout_secs` (vars. 10 sn; `0` = yok): yanıtın tamamının
+  yazması tek süre sınırı altında; aşılırsa bağlantı kapanır,
+  `ops_http_writes_timed_out` sayılır; okuyan yavaş eş tam yanıtı alır.
+  Bağlantı görevi en çok 5 sn + yönlendirme + 10 sn + 300 ms yaşar, aynı
+  anda en çok 64 tane. Sayaçlar accept döngüsünden taşıma kanalına
+  (`gsb_net::Flusher` artık genel). OPS §2/§3/§4, SECURITY §6.
+- Dört yeni taşıma sayacı tablonun sonunda; iki golden bilerek
+  güncellendi, `otlp::cross` yeşil. Loadgen teli **GSNG** (ebeveyn
+  birleştirmede atadı); `RESULT`'ta `transport_<ad>=`. İstemci teli
+  değişmedi.
+
+Testler 1620 → 1638 (`otlp` ile 1638 → 1656): `transport::intake::source`
+(6), `tls::tests::per_source`, `quic::tests::per_source`,
+`tests/handshakes_per_source.rs` (3), `http::tests::limits` (4),
+`tests/ops_limits.rs` (3). Eski davranışa dönen mutasyonlar testleri
+düşürüyor; D11'in 12, B49'un 12 mutasyonu yakalandı. Ebeveyn doğrulaması:
+tam kapılar ebeveynde (yük ~60'ta yeşil); IPv6 önekini /48'e genişletmek
+iki testi düşürdü.
+
 ## g1 — B81, F26: demo muharebe beslemesi sayılıyor; MMO `Seam::find`'a geçti (`demo/g1-combat`)
 
 - **B81 — her düşen vuruş sayılıyor.** Savaş ve MMO'nun vuruş beslemesi
