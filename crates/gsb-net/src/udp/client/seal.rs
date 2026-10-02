@@ -73,6 +73,12 @@ impl Seal {
     pub(super) fn send_half(&mut self) -> Option<&mut SendHalf> {
         self.sealer.as_mut()
     }
+
+    /// The opener (tests).
+    #[cfg(test)]
+    pub(super) fn opener(&mut self) -> Option<&mut Opener> {
+        self.opener.as_mut()
+    }
 }
 
 impl UdpClient {
@@ -87,6 +93,9 @@ impl UdpClient {
     /// `migrate`), untouched otherwise. `None` once the record counter is
     /// exhausted (2^62): the session is over (the band declared dead).
     pub(super) fn wire(&mut self, d: Vec<u8>) -> Option<Vec<u8>> {
+        if self.end.is_some() {
+            return None; // over (module `end`): nothing goes out
+        }
         if let Some(sealer) = self.seal.sealer.as_mut() {
             let mut out = Vec::with_capacity(d.len() + crate::seal::wire::OVERHEAD_C2S);
             let sealed = sealer.seal(&d, &mut out, Instant::now());
@@ -94,7 +103,7 @@ impl UdpClient {
                 (sealer.rekeys, sealer.unconfirmed);
             if sealed.is_err() {
                 self.stats.seal_exhausted += 1;
-                self.declare_rel_dead();
+                self.end_session(UdpEnd::SealLimit);
                 return None;
             }
             return Some(out);
@@ -133,7 +142,7 @@ impl UdpClient {
                     Refusal::Forged => &mut s.seal_forged,
                 } += 1;
                 if r == Refusal::IntegrityLimit {
-                    self.declare_rel_dead();
+                    self.end_session(UdpEnd::SealLimit);
                 }
                 None
             }
@@ -158,7 +167,7 @@ impl UdpClient {
         self.stats.stateless_resets_received += 1;
         // The server no longer holds the session: what is outstanding is
         // never delivered (`gave_up`), and the caller sees the end.
-        self.declare_rel_dead();
+        self.end_session(UdpEnd::Reset);
         true
     }
 }

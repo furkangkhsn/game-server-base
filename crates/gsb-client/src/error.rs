@@ -13,7 +13,9 @@ use prost::Message;
 /// as [`ErrorCode::Unspecified`], to be handled like `Other`; `raw` keeps
 /// the number as sent, so it can still be reported. Whether the
 /// connection survives is NOT inferred from the code — the transport
-/// reports that (`Recv::Closed`, or silence on rUDP).
+/// reports that (`Recv::Closed` on every door; on rUDP once the client
+/// itself declared the session over — a server that only goes quiet is
+/// silence until then).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerError {
     pub code: ErrorCode,

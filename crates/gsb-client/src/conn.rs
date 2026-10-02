@@ -25,11 +25,14 @@ pub type BoxWrite = Box<dyn AsyncWrite + Unpin + Send>;
 pub enum Recv {
     /// The next frame.
     Frame(FrameBody),
-    /// The stream ended at a frame boundary (EOF; on WebSocket also the
-    /// server's close frame, read back with [`Conn::ws_close`] — a unit
-    /// variant, as every door's end is one). Never on rUDP: UDP
-    /// has no FIN — a session's end there is silence (and, from a gsb
-    /// server that closes it, the `ERROR` frame before it).
+    /// The session ended, after every frame received before its end was
+    /// returned: a stream's EOF at a frame boundary (on WebSocket also
+    /// the server's close frame, read back with [`Conn::ws_close`] — a
+    /// unit variant, as every door's end is one); on rUDP, which has no
+    /// FIN, the client's own verdict (B128) — its reliable band died, a
+    /// stateless reset came, or a record-layer limit was crossed
+    /// ([`gsb_net::udp::UdpClient::ended`] says which). Every read after
+    /// it is `Closed` again, at once.
     Closed,
     /// Nothing within the window.
     Quiet,
@@ -73,7 +76,8 @@ impl Conn {
         Self::Udp(Box::new(client))
     }
 
-    /// Whether this is rUDP — the one transport without EOF.
+    /// Whether this is rUDP — the one transport without EOF (its end is
+    /// the client's own verdict, still reported as [`Recv::Closed`]).
     pub fn is_udp(&self) -> bool {
         matches!(self, Self::Udp(_))
     }
@@ -112,7 +116,8 @@ impl Conn {
 
     /// Send one frame (stream: written and flushed; rUDP: the control
     /// band for base opcodes, the lossy band for the game band — the
-    /// client half's own split).
+    /// client half's own split). On an rUDP session that has ended it is
+    /// `Err` (`NotConnected`), as a write after a stream's end fails.
     pub async fn send(&mut self, op: u16, payload: &[u8]) -> io::Result<()> {
         match self {
             Self::Stream { tx, .. } => tx.send(op, payload).await,
@@ -138,7 +143,10 @@ impl Conn {
     /// refused frame (over the size guard, too short; a WebSocket
     /// protocol violation) is `Err`; so is an rUDP socket error. On
     /// WebSocket a ping read meanwhile is answered here, inside the
-    /// window (cancel-safe: an unfinished pong stays queued).
+    /// window (cancel-safe: an unfinished pong stays queued). The end of
+    /// the session is [`Recv::Closed`] on every door — on rUDP once the
+    /// frames received before it are drained, and without waiting the
+    /// window (`gsb_net::udp::UdpClient::recv_frame`).
     pub async fn recv(&mut self, window: Duration) -> io::Result<Recv> {
         match self {
             Self::Stream { rx, tx } => match tokio::time::timeout(window, next(rx, tx)).await {
@@ -149,6 +157,8 @@ impl Conn {
             },
             Self::Udp(c) => Ok(match c.recv_frame(window).await? {
                 Some(f) => Recv::Frame(f),
+                // Drained and over (B128): the rUDP end, as an EOF.
+                None if !c.is_established() => Recv::Closed,
                 None => Recv::Quiet,
             }),
         }
@@ -185,3 +195,6 @@ async fn next(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

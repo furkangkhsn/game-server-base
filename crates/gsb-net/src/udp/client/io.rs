@@ -128,9 +128,12 @@ impl UdpClient {
     /// the direction silently); the band as a whole dies when the
     /// cumulative ACK has not advanced at all for [`REL_NO_ACK_FATAL`].
     pub(super) fn retransmit_pass(&mut self) {
+        if self.end.is_some() {
+            return; // over: nothing is re-sent or announced
+        }
         let now = Instant::now();
         match self.rel.poll(now) {
-            Due::Dead(_) => self.declare_rel_dead(),
+            Due::Dead(_) => self.end_session(UdpEnd::RelDead),
             Due::Resend(datagram) => {
                 // The band keeps the inner datagram: on a sealed session
                 // every re-send is a fresh record (module `seal`).
@@ -146,14 +149,5 @@ impl UdpClient {
         }
         // The game band's feedback: re-announce while no probe came.
         self.announce(now);
-    }
-
-    /// The client's half of the session-fatal rule: count what will never
-    /// be delivered and flip the liveness flag. There is no actor here to
-    /// tear down — the caller sees [`UdpClient::is_established`] go
-    /// `false` and decides (reconnect, report, exit).
-    pub(super) fn declare_rel_dead(&mut self) {
-        self.stats.gave_up += self.rel.abandon();
-        self.established = false;
     }
 }

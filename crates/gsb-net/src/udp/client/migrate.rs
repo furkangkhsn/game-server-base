@@ -96,6 +96,9 @@ impl UdpClient {
     /// CID ([`Self::migratable`]): such a session cannot move — the
     /// caller reconnects and resumes instead.
     pub async fn rebind(&mut self) -> std::io::Result<SocketAddr> {
+        if self.end.is_some() {
+            return Err(self.ended_error());
+        }
         let Some(_) = self.path.cid else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,

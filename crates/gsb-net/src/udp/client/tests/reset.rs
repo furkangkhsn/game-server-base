@@ -10,7 +10,7 @@ use crate::seal::{RESET_LEN_MAX, ResetToken, reset_datagram};
 
 /// A sealed client holding `token`, its server's sealer for genuine
 /// records.
-async fn sealed(token: ResetToken) -> (UdpClient, UdpSocket, crate::seal::Sealer) {
+pub(super) async fn sealed(token: ResetToken) -> (UdpClient, UdpSocket, crate::seal::Sealer) {
     let (ss, _, cs, co) = session_pair();
     let config = UdpClientConfig {
         server_key: Some([1; 32]),

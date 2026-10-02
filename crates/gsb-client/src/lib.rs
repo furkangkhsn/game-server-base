@@ -9,7 +9,10 @@
 //!   the QUIC bi-stream), a WebSocket carrying the same frames one per
 //!   message, or the rUDP client half of `gsb_net` — with one `send` /
 //!   bounded `recv` for all of them ([`connect`], [`tls`], [`quic`],
-//!   [`ws`] open one).
+//!   [`ws`] open one); a session's end is [`Recv::Closed`] on each,
+//!   after the frames received before it (on rUDP, which has no FIN,
+//!   the client's own verdict: its reliable band died, a stateless
+//!   reset, a record-layer limit).
 //! - [`session`]: the base protocol's steps — AUTH (with or without a
 //!   ticket), JOIN, HEARTBEAT, LEAVE, the resume key — as plain async
 //!   functions; an `ERROR` frame comes back as a typed [`ServerError`]

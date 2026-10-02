@@ -41,6 +41,7 @@ async fn detached_with(config: UdpClientConfig) -> (UdpClient, UdpSocket) {
         sock,
         peer,
         established: true,
+        end: None,
         in_expected: 1,
         in_oob: HashMap::new(),
         pending: VecDeque::new(),
@@ -316,6 +317,7 @@ async fn a_busy_game_band_does_not_starve_the_retransmit() {
     }
 }
 
+mod end;
 mod migrate;
 mod report;
 mod reset;

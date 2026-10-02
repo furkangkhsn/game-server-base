@@ -13,6 +13,9 @@ pub struct UdpClientStats {
     pub dup_in: u64,
     /// Inbound REL frames dropped on a full out-of-order window.
     pub oob_dropped: u64,
+    /// Inbound REL frames still waiting behind a gap when the session
+    /// ended (B128): received, but never deliverable in order.
+    pub oob_at_end: u64,
     /// Outbound REL frames still outstanding when the reliable band was
     /// declared dead (see the module docs, "The REL liveness bound"). A
     /// frame is never abandoned on its own age — the whole band dies at

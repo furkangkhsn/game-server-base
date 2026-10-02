@@ -21,6 +21,8 @@ pub struct UdpClient {
     sock: UdpSocket,
     peer: SocketAddr,
     established: bool,
+    /// Why the session ended, once it has (module `end`, B128).
+    end: Option<UdpEnd>,
     /// Inbound reliable state (server→client).
     in_expected: u32,
     in_oob: HashMap<u32, Vec<u8>>,
@@ -102,6 +104,7 @@ impl UdpClient {
             peer: addr,
             // Not until the server says so: `handshake` flips it.
             established: false,
+            end: None,
             in_expected: 1,
             in_oob: HashMap::new(),
             pending: VecDeque::new(),
@@ -131,10 +134,12 @@ impl UdpClient {
     }
 
     /// Whether the session is live: the handshake completed and the
-    /// reliable band has not been declared dead. This is the client's
-    /// liveness API — UDP has no EOF, so the flip from `true` to `false`
-    /// is the only "the session is over" signal a caller gets (the
-    /// server's equivalent is the connection actor's teardown).
+    /// session has not ended ([`Self::ended`] says why it did — the
+    /// reliable band's death, a stateless reset, a record-layer limit).
+    /// UDP has no EOF: the flip to `false` is the client's own verdict,
+    /// and [`Self::recv_frame`] reports it as soon as the frames received
+    /// before it are drained (module `end`; `gsb_client::Conn::recv`
+    /// turns it into `Recv::Closed`).
     pub fn is_established(&self) -> bool {
         self.established
     }
@@ -160,13 +165,17 @@ impl UdpClient {
     /// Send one application frame: control band (reliable, sequenced) or
     /// game band (RAW, loss-tolerant) — the same split as the server.
     pub async fn send_frame(&mut self, op: u16, payload: impl Into<Bytes>) -> std::io::Result<()> {
+        if self.end.is_some() {
+            // Over (module `end`): refused, nothing counted again.
+            return Err(self.ended_error());
+        }
         let frame = FrameBody::new(op, payload.into());
         if is_control(op) {
             if self.rel.len() >= RETRANSIT_CAP {
                 // The memory bound of the module docs, mirrored: this many
                 // control frames outstanding with nothing confirmed is the
                 // same death as the no-ACK clock arriving early.
-                self.declare_rel_dead();
+                self.end_session(UdpEnd::RelDead);
                 return Err(std::io::Error::other(
                     "rUDP reliable control band is dead (retransmit queue full, no ACK progress)",
                 ));
@@ -198,9 +207,11 @@ impl UdpClient {
     /// ticks and after every datagram) — reliable delivery without any
     /// multiplexing.
     ///
-    /// Returns `Ok(None)` when the window elapses with no frame (NOT an
-    /// error: UDP has no EOF — the caller probes liveness explicitly when
-    /// it needs the "session gone" distinction).
+    /// Returns `Ok(None)` when the window elapses with no frame, and —
+    /// at once, without waiting or reading the socket — once the session
+    /// has ended and the frames received before its end are drained
+    /// (module `end`, B128): [`Self::is_established`] tells the two
+    /// apart (`false`: the end, as a stream's EOF).
     pub async fn recv_frame(&mut self, wait: Duration) -> std::io::Result<Option<FrameBody>> {
         // A REL frame that is already ordered is returned immediately
         // (no wait, no syscall).
@@ -214,6 +225,10 @@ impl UdpClient {
         }
         let deadline = Instant::now() + wait;
         loop {
+            // Drained and over: the end, at once (nothing more is read).
+            if self.end.is_some() {
+                return Ok(None);
+            }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 return Ok(None);
             };
@@ -258,12 +273,14 @@ impl UdpClient {
     }
 }
 
+mod end;
 mod handshake;
 mod io;
 mod migrate;
 mod report;
 mod seal;
 mod stats;
+pub use end::UdpEnd;
 pub use report::UdpClientConfig;
 pub use stats::UdpClientStats;
 
