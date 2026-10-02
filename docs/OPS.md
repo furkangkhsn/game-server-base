@@ -265,6 +265,35 @@ udp_send_buffer_bytes = 1048576   # vars. yok = sistem varsayılanı
   (demux onu hiç görmez); ölçüm: DESIGN §6 "UDP kapılarının soket
   arabellekleri".
 
+**Sunucu düzeyi: rUDP tıkanıklık tepkisi `udp_congestion` (BACKLOG B1,
+rUDP sertleştirme 3).** Her rUDP kapısının yazıcıları — düz anahtardan
+türeyen kapı ya da `[[listeners]]`'ın her `udp` girdisi.
+
+```toml
+udp_congestion = "pace"   # vars. "off"
+```
+
+- **`"off"` (varsayılan):** her yazıcı her kareyi anında yollar — kapı
+  anahtardan önceki gibi, bayt bayt.
+- **`"pace"`:** raporlayan (varsayılan `UdpClient`) ve yolu odanın
+  gönderdiğini taşıyamayan oturum, yolun tahmini hızına göre hızlanır;
+  50 ms içinde gönderilemeyen EN ESKİ oyun bandı kareleri düşer ve
+  sayılır (§3 "Taşıma kapsamı: rUDP tıkanıklık tepkisi"). Kontrol bandı
+  asla hızlanmaz/düşmez. Raporlamayan istemci (eski, `game_reports:
+  false`) hiç hızlanmaz — `"off"`'takiyle aynı baytlar. Yolu yetişen
+  oturum da anında gönderir; tek fark sinyalden sonra sondaların 250
+  ms'ye sıklaşması. İçeriği inceltmek (daha az varlık, düşük hız) oyunun
+  kararıdır; taşıma yalnız ölçer ve hızlar (DESIGN §6 "Tıkanıklık
+  tepkisi").
+- **Ne zaman açılır:** istemcilerin bir kısmı darboğazlı yoldaysa (mobil,
+  zayıf ev bağlantısı) ve `udp_game_datagrams_reported_lost` /
+  `reported_sent` oranı ya da sonda turu (`udp_game_rtt_sum_us ÷
+  udp_game_rtt_samples`) yükseliyorsa. Açıkken `udp_game_paced_episodes`
+  hızlanan oturumları, `udp_game_frames_dropped_paced` ÷
+  `udp_game_frames_queued_paced` düşürülen payı verir.
+- **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` ve `[[listeners]]`
+  girdisi reddeder. Bilinmeyen değer ayrıştırma hatası.
+
 **Sunucu düzeyi: kaynak başına el sıkışma sınırı
 `max_handshakes_per_source` (BACKLOG D11).** El sıkışan her kapının —
 WS, TLS, QUIC; düz anahtarlardan türeyen kapı ya da `[[listeners]]`'ın
@@ -1089,6 +1118,28 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   sıçraması artık takılmanın değil gerçek sessizliğin işaretidir. Log:
   pump başına bir `info`, süpürme başına bir `warn` (oturum sayısıyla).
   Demux'ın duruş satırı bunu taşımaz (sayaç tek seferlik örnekle gider).
+- **Taşıma kapsamı: rUDP tıkanıklık tepkisi (rUDP sertleştirme 3, B1).**
+  Satırın ve tablonun sonuna 5 `counter` (F72'ninkinden sonra); loadgen
+  telinin transport bölümü 5 sayaç uzar — **GSNM** —, `RESULT`'ta
+  `transport_<ad>=` (her satırda). Yalnız
+  `udp_congestion = "pace"` iken artar (§2):
+  `udp_game_frames_queued_paced` (hızlanan bir oturumun hızlama
+  kuyruğunda bekleyen oyun bandı karesi — yolun tahmini hızı odanın
+  gönderdiğinin altındaydı; her biri sonra gönderilir, düşer ya da
+  gönderilmeden kalır), `udp_game_frames_dropped_paced` (kuyruğun bütçesi
+  — tahmini hız × 50 ms — daha yeni karelerle dolunca düşen EN ESKİ kare;
+  parçalı kare bütün olarak; en yenisi ve parçası tele çıkmış olan asla),
+  `udp_game_frames_unsent_paced` (oturum taşıma için biterken — yazıcı
+  durdu, REL bandı öldü ya da oturum bitti — kuyrukta kalan, hiç ya da
+  yarım gönderilmiş kare); defter: `queued = gönderilen + dropped +
+  unsent`. `udp_game_paced_episodes` (bir oturumun oyun bandının hızlanmaya
+  başladığı kez: açık oturumda üst üste iki sinyal — kayıp ya da ayakta
+  kuyruk), `udp_game_paced_rate_cuts` (hız düşüşleri: her girişin
+  kendisi, hızlıyken her yeni sinyal, hızlıyken cevapsız kalan her sonda
+  halkası). **Okuma:** düşen pay = `dropped ÷ queued`; oturum başına
+  ortalama kesinti = `rate_cuts ÷ episodes`. Kayıplar (dropped, unsent)
+  B32 kuralıyla ayrı adlarda; darboğazın kendi kaybı yine
+  `udp_game_datagrams_reported_lost`'ta.
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

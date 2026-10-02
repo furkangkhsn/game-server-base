@@ -2104,6 +2104,19 @@ mutasyonlar: izleyiciyi başlatmamak (2 test), `Drop`'ta göndermemek (1),
 farkı değil mutlak değeri toplamak (1), yanlış sütun (4). Sağ çıkan:
 `close`'ta izleyiciyi kesmemek (dinleyici tutamacı yaşadıkça okumaya
 devam eder; ölçen test "sessizliğe dek" türünden olurdu — yazılmadı).
+**B96 kapandı (rUDP sertleştirme 3):** koşul bekleyen bir test buldu —
+kapı kapanınca (dinleyici hâlâ tutulurken, soket ve satırı yaşarken)
+metrik kanalının SON göndericisi kesilen izleyiciyle gider, kanal kapanır
+ve son düşüşler raporlanmıştır
+(`a_closed_door_stops_its_watcher`); kesmeyen mutant'ta kanal hiç
+kapanmaz (10 sn sınırı yalnız başarısızlığı sınırlar). Aynı turda F75:
+`udp/tests/unaccepted.rs` toplamı "300 ms sessizliğe dek" değil, son
+gönderici gidene dek (kanal kapanışı) toplar; `bands.rs`/`frag.rs`/
+`tests.rs`'nin olumlu okumaları 10 sn pencereli (kare gelince hemen
+döner; pencere yalnız başarısızlığı sınırlar); iki olumsuz okuma ("hiçbir
+şey gelmez") aynı yazıcıdan sonra yollanan bir işaretleyici kareye
+çevrildi (loopback'te aynı yoldan sırayla) — daha güçlü: `bands.rs`
+istemcinin aldığı oyun datagram'ını da tam sayar.
 
 **El sıkışma geri çekilmesinin tavanı (BACKLOG B86 — 2026-10-02, bakımcı
 kararı: seçenek (a)).** B2'nin ölçümü (yukarıda) iki bedel gösterdi:
@@ -2291,7 +2304,8 @@ kayıp kesri (aralık başına ¼ ağırlık; gönderimsiz aralık saymaz),
 cevaplanan sonda sayısı; düzleştirilmiş RTT bandın `Rto::srtt`'si
 (sondalar besliyor). Yazıcıda `game_estimate()`; davranış henüz
 değişmedi — yalnız oturum sonu log'unda (`game_reports`, `game_loss`,
-`game_min_rtt_us`).
+`game_min_rtt_us`). Tur 3 onu okur: aşağıda "Tıkanıklık tepkisi"
+(tahmine aralığın baytları ve pencereli en küçük tur eklendi).
 
 *Sayaçlar (taşıma kapsamı, OPS §3):* `udp_game_announces_received`,
 `udp_game_probes_sent`, `udp_game_probes_send_failed`,
@@ -2369,6 +2383,262 @@ sıradaki, hiç gönderilmemiş id `late` sayılıyordu) kuralı kesinleştirdi
 (`ids_not_yet_sent_are_invalid`, `the_id_wrap_keeps_late_and_invalid_apart`;
 sarmada 0'ı atlamayan hesap da öldü). Sağ çıkan: bağlanırken duyuruyu kaldırmak — ilk yeniden gönderim
 geçişi (en geç bir okuma) duyuruyu zaten yollar; eşdeğer davranış.
+
+**Tıkanıklık tepkisi (rUDP sertleştirme 3 — 2026-10-02, BACKLOG B1;
+bakımcı kararları).** Tur 2 sinyalleri getirdi (`GameEstimate`, sondalar,
+`udp_game_*`); bu tur onlara göre davranır. Kod: `udp::congestion` (saf
+`Control` ve `PaceQueue`, genel `PathState`/`PathPhase`/`UdpCongestion`),
+`udp::writer::pace` (yazıcının kablolaması). Tel DEĞİŞMEDİ: yeni tür yok,
+yeni alan yok (REPORT'a bayt sayımı da gerekmedi — aşağıda).
+
+*Kural (bakımcı).* **Taşıma ölçer ve hızlar; içeriği inceltmek oyunun
+(kitin) opt-in kararı.** Raporlayan bir oturumun tahmini yol hızı odanın
+gönderdiğinin altındaysa yazıcı sınırsız kuyruk tutmaz (o gecikmedir):
+oyun bandını tahmini hıza göre **hızlar** (pacing) ve gönderemediği **EN
+ESKİ** oyun bandı karelerini düşürür — her biri adıyla anlamı aynı bir
+sayaçta (`udp_game_frames_dropped_paced`). Kontrol bandı (REL) asla
+hızlanmaz, asla düşmez, asla oyun kuyruğunun arkasında beklemez: baytları
+aynı kovadan düşülür, oyun bandı ona yer açar. Oyunun ne göndermesi
+gerektiği taşımanın kararı değildir; taşıma yolun ne taşıdığını söyler
+(`PathState`, aşağıda "Oyuna sinyal").
+
+*Açma/kapama (opt-in).* Sunucu anahtarı `udp_congestion = "off" | "pace"`
+(OPS §2); `UdpTransportConfig::congestion`. Varsayılan `"off"`: yazıcı
+bugünkünün aynısı (denetleyiciye hiç dokunulmaz). `"pace"`'te bile
+**raporlamayan istemci** (eski istemci, `game_reports: false`) tahmin
+üretmez, hep `Open` kalır: bugünküyle bayt-bayt, sırasıyla aynı
+(`udp::tests::pace::a_client_that_does_not_report_gets_the_same_bytes`
+— aynı partiler `off` ve `pace` yazıcısından, 200 datagram RAW/FRAG/REL
+karışık, karşılaştırılır). Yolu yetişen raporlayan oturum da `Open`'dır:
+oyun bandı yine anında gider (ölçüm: darboğazsız koşu iki modda aynı).
+
+*Durum makinesi (her uygulanan raporda — `Control::on_estimate`).*
+
+| evre | sinyal yok | sinyal |
+|---|---|---|
+| `Open` (hızlanmaz, sonda 1 sn) | `Open` | `Suspect` |
+| `Suspect` (hızlanmaz, sonda 250 ms) | `Open` (bir patlamaydı) | `Paced`, hız = teslim × β |
+| `Paced` (hızlanır, sonda 250 ms) | hız += artış; hız ≥ 1,25 × talep → `Open` | hız = min(hız, teslim) × β (kuyruk zaten boşalıyorsa ve kayıp yoksa: hız tutulur) |
+
+Bir halka dolusu (4) sonda cevapsız kalırsa (`Paced`'te): hız yarıya
+(örnek yok — klasik zaman aşımı tepkisi). Taban: saniyede 4 datagram
+bütçesi (1472 B'de 5,9 KB/sn).
+
+*Kararlar ve gerekçeleri (ve elenenler).*
+
+1. **Kayıp mı gecikme mi — ikisi de.** Yalnız kayıp: derin tamponlu bir
+   darboğaz (bufferbloat) taşana dek kayıp vermez — tepki geldiğinde
+   gecikme yarım saniyeyi aşmıştır (ölçüm: derin tampon, `off`: oyun
+   bandı p50 527 ms). Yalnız gecikme: politika uygulayan (policer) ya da
+   sığ tamponlu yol gecikme büyütmeden düşürür. Kayıp sinyali: aralıkta en
+   az 2 datagram ve en az %10 kayıp (`LOSS_MIN`, `LOSS_DIV`) — tek kayıp
+   ve %10 altı gürültü (Wi-Fi'nin rastgele kaybı tepki tetiklemesin).
+   Gecikme sinyali: en yeni sonda turu pencereli en küçük turun 30 ms
+   üstünde (`QUEUE_DELAY_LIMIT`) — oyunun hissettiği ayakta kuyruk.
+2. **Patlama mı süreklilik mi.** Tur 1'in bulgusu (patlamada geri
+   çekilmek gecikmeyi büyütür) burada: tek sinyal yalnız şüphedir
+   (`Suspect`: sonda 250 ms'ye sıklaşır, hiçbir şey hızlanmaz/düşmez);
+   üst üste ikinci sinyal hızlandırır, temiz aralık şüpheyi siler. Bir
+   kötü aralığın bedeli birkaç fazla sondadır (9 B).
+3. **Hız nasıl tahmin edilir — teslim edilen hız, AIMD düzeltmesiyle.**
+   Oyun bandı en-yenisi-kazanır ve uygulama-sınırlıdır: gönderilen, yolun
+   taşıyabileceğini söylemez; *teslim edilen* söyler. Aralığın teslimi =
+   gönderilen baytlar × teslim oranı (rapor datagram sayar); süresi =
+   aralığın istemcinin gördüğü uzunluğu: gönderim aralığı + turun o
+   aralıktaki büyümesi (dolan bir kuyruk aynı datagramları daha uzun
+   alım süresine yayar — büyüyen kuyruk kapasite sanılmaz; test
+   `a_growing_queue_is_a_signal_and_not_capacity`). Giriş ve her sinyal:
+   hız = teslim × β (0,85), mevcut hızın üstüne asla. Temiz aralık:
+   saniyede 16 datagram bütçesi/sn **toplamsal** artış (1472 B'de ≈ 23,5
+   KB/sn²) — paylaşılan darboğazda oturumların eşit paya yakınsaması
+   bundandır (Chiu–Jain: toplamsal artış, çarpımsal azalış; test
+   `two_sessions_on_one_bottleneck_converge_to_equal_shares`). **Boşalan
+   kuyruk tutar:** `Paced`'te yalnız gecikme sinyali varken tur bir
+   öncekinden kısaysa önceki kesinti çalışıyordur — hız tutulur (kayıp
+   yine keser). Ölçüldü: tutmasız 4 oturumlu paylaşımlı koşuda 200–211
+   kesinti ve 6,81–6,92 MB teslim; tutmayla 149–164 kesinti ve 7,03–7,06
+   MB. **Elenenler:** (a) *gönderilen hızdan saf AIMD (TCP Reno şekli)* —
+   uygulama-sınırlı bantta pencere/hız kullanılmayan değere büyür
+   (RFC 7661'in sorunu) ve kapasiteye tek adımda değil testere dişiyle
+   iner; (b) *BBR'nin tamamı* — datagram başına teslim zaman damgası
+   ister (RAW'a sıra numarası: tur 2'de elendi), kazanç döngüsü ve
+   ProbeRTT 250 ms'lik tek örnekle anlamsız; teslim hızı fikri alındı;
+   (c) *WebRTC GCC (gecikme eğimi)* — paket başına varış zamanı geri
+   bildirimi (transport-wide CC) ister: tel değişikliği; (d) *yalnız
+   gecikme (LEDBAT/Vegas)* — policer'da kör, gürültülü yolda ürkek.
+4. **Kuyruk ve düşürme: en eskisi, bütçe 50 ms.** Hızlanan oturumun
+   sunucu kuyruğu en çok hız × 50 ms bayt tutar (`QUEUE_BUDGET`) ve HER
+   ZAMAN en yeni mesajı: en-yenisi-kazanır — yeni snapshot eskisini
+   geçersiz kılar, eskisini geç göndermek bant harcar. Bütçe aşılınca
+   önce en eski düşer, sayılır. **Elenenler:** sınırsız kuyruk
+   (gecikme — bakımcı yasakladı), en yeniyi düşürmek (kuyruk sonu
+   düşürme: bayat kare gönderir), sayıya göre sınır (boyuttan habersiz:
+   tek büyük tam snapshot ile on küçük delta aynı sayılırdı).
+5. **FRAG atomikliği: hep ya hiç.** Parçalı mesaj kuyruğa bütün
+   datagram kümesi olarak girer; bütün düşer; ilk parçası tele çıkmış
+   mesaj asla düşmez (kalan parçalar onu işe yarar kılan şeydir — yerine
+   bir sonraki en eski düşer); oturum biterken yarım kalan
+   `udp_game_frames_unsent_paced`'te BÜTÜN bir kare sayılır (test
+   `a_fragmented_message_is_all_or_nothing`). Ölçüm: derin tamponda
+   `off`'ta darboğazın kuyruk sonu düşürmesi 268 mesajı yarım bıraktı
+   (taşınan parçalar boşa bant), `pace`'te 26.
+6. **Tek soketi paylaşan oturumlar arasında adalet: paylaşılan
+   zamanlayıcı yok.** Her oturumun yazıcısı kendi denetleyicisini ve
+   kuyruğunu taşır; adalet paylaşılan darboğazda toplamsal-artış /
+   çarpımsal-azalışın yakınsamasından gelir. Ölçüm (4 oturum, 1 sn arayla
+   katılan, toplam talebin yarısı kapasite): 40 sn'lik koşunun son 15
+   sn'sinde Jain endeksi 0,996–0,998, kapasitenin %98'i teslim; ilk
+   katılımlardan sonraki ~20 sn yakınsama (18 sn'lik koşunun son 8
+   sn'sinde 0,74–0,97 — geç gelen oturumun penceresi ayakta kuyruğu
+   "taban" sanar, pencere dönünce düzelir). **Elenen:** soket genelinde
+   bir DRR/adil kuyruk aktörü — her datagram için bir kanal sekmesi daha
+   ve yazıcılar arası paylaşılan durum (§2); sunucunun kendi çıkışı
+   darboğaz olursa (100k'da) ayrıca ölçülmeli (yeni satır).
+7. **Hızlama tanesi ve tek bekleme.** Jeton kovası: derinlik hız × 10 ms,
+   en az bir datagram (`PACE_BURST`); datagram datagram bırakır. Hızlama
+   son tarihi yazıcının var olan `min`'ine katılır (yeniden gönderim
+   zamanlayıcısı, en geç 50 ms tick): `timeout(min(rto, tick,
+   pacing), out_rx.recv())` — yine tek beklenen kaynak, yeni görev yok.
+   Kontrol baytları kovadan düşülür (borç olabilir); sondalar düşülmez
+   (9 B).
+8. **Sonda kadansı ve sessiz istemci (B91).** `Open`: 1 sn (değişmedi —
+   yolu yetişen oturumun baytları aynı). `Suspect`/`Paced`: 250 ms
+   (`FAST_PROBE_INTERVAL`; 30 Hz'de ~8 datagram/aralık — kayıp çözünürlüğü
+   kaba ama tepki ~1,25 sn). **B91:** halka dolusu sonda cevapsız
+   kaldıktan sonra her tahliyede aralık ikiye katlanır, en çok 8×
+   (`SILENT_BACKOFF_MAX`); ilk cevap kadansı geri getirir. Okumayı bırakan
+   istemci artık saniyede değil 8 sn'de bir sonda alır. İki modda da
+   geçerli: sonda bedeli düzeltmesidir, hızlama değil — hiç raporlamayan
+   istemci zaten hiç sondalanmaz (test
+   `a_silent_client_is_probed_ever_less_often`).
+9. **Pencereli en küçük tur (B93).** `GameEstimate::window_min_rtt`: iki
+   5 sn'lik kova, pencere 5–10 sn (`RTT_WINDOW`); bir pencere boyu sessizlik
+   ikisini de siler. Ömür boyu `min_rtt` log için kaldı. Ömür boyu en
+   küçük, uzayan bir rotayı sonsuza dek "ayakta kuyruk" sanardı.
+10. **REPORT'a bayt sayımı: gerekmedi.** Sunucu her aralıkta gönderdiği
+    baytları bilir (`GameEstimate::interval_sent_bytes`); teslim =
+    gönderilen bayt × teslim oranı. Hata payı: kaybolan datagram'ların
+    boyu ortalamadan farklıysa (büyük FRAG / küçük RAW karışımı) —
+    toplamsal düzeltme onu birkaç aralıkta emer. Tel değişmedi.
+
+*Oyuna sinyal (bu tur: gsb-net sınırında).* `gsb_net::udp::PathState`
+(`Copy`, küçük): `phase` (`Open`/`Suspect`/`Paced`), `rate` (yalnız
+`Paced`'te, B/sn), `demand` (odanın son rapor aralığında oyun bandına
+verdiği, B/sn), `loss_permille`, `queue_delay`; `budget(period)` — bir
+tick'te/snapshot aralığında yolun taşıyacağı bayt. Yazıcı her kararda
+günceller (`UdpWriter::path_state`), evre/hız değişince `debug` log,
+oturum sonu `info` satırında. Çekirdeğe taşınması sonraki tur (aşağıda).
+
+*Sonraki tur: çekirdek ve kit sinyali (TASARIM — uygulanmadı).*
+(1) **Yazıcı → bağlantı aktörü:** yeni `ConnIn::Path(PathState)`; yazıcı
+yalnız değişince (evre değişti ya da hız ≥ %10 oynadı), rapor başına en
+çok bir kez `try_send` eder; posta kutusu doluysa "kirli" bayrağı kalır,
+sonraki geçişte en yeni durum denenir — en-yenisi-kazanır, kayıp yok
+(eskisinin yerini yenisi alır; ertelenen sayılır). (2) **Aktör → oda:**
+aktör son durumu yerelde tutar, değişince odaya
+`RoomMsg::MemberPath` (aynı birleştirme kuralı). (3) **Oda:** üye
+tablosunda `path: Option<PathState>`; `TickCtx::path(member)` ve
+`budget(member, tick)`. (4) **Kit yapı taşı (opt-in):** `SnapshotBudget`
+— üye başına bayt bütçesiyle, oyunun verdiği öncelikle (mesafe, önem)
+varlıkları sıralar, bütçeye sığanı tam hızda, kalanı seyreltilmiş hızda
+yollar; oyun kullanmazsa hiçbir şey değişmez. **Paylaşılan durum
+(`Arc<AtomicU64>`) elendi:** §2 — değer sahibine taşınır; en-yenisi-
+kazanır birleştirmesi atomik hücreyle aynı maliyette kanal disiplinini
+korur. **Bakımcının kararı gerekenler:** (a) `PathState` taşımadan bağımsız
+mı olmalı (gsb-core'a taşınıp TCP/QUIC/WS de doldurabilsin — QUIC'in
+quinn istatistikleri RTT/pencere verir; TCP'nin tahmini yok)? (b) oda
+`PathState`'i mi yoksa yalnız bütçeyi mi görsün? (c) `ConnIn` varyantı mı
+ayrı bir yol kanalı mı? (d) varsayılanın çevrilmesi (aşağıda).
+
+*Varsayılan: şimdilik `"off"`.* Ölçümlerde `pace` hiçbir senaryoda
+kaybetmedi: darboğazda 2× mesaj, ~5× düşük gecikme, kontrol bandı ~10×
+hızlı; darboğazsız koşuda aynı bayt ve zamanlama. Yine de bu tur
+varsayılan çevrilmedi: (1) ölçümler yerel (loopback + kullanıcı alanı
+darboğazı); gerçek bir ağda (netem/WAN) titreşimli yolda (Wi-Fi,
+hücresel: 30 ms üstü titreşim) sahte gecikme sinyali ölçülmedi — o yolda
+tepki gereksiz düşürmeye dönebilir; (2) oyunun sinyali (sonraki tur)
+yokken düşürme oyuncunun göremediği bir şeydir. **Öneri:** titreşim
+ölçümü temiz çıkarsa ve sinyal çekirdeğe taşındıktan sonra varsayılan
+`"pace"` olsun (yeni satır).
+
+*Sayaçlar (taşıma kapsamı, OPS §3):* `udp_game_frames_queued_paced`
+(hızlama kuyruğuna giren kare — her biri sonra gönderilir, düşer ya da
+gönderilmeden kalır), `udp_game_frames_dropped_paced` (bütçe dolunca
+düşen en eski), `udp_game_frames_unsent_paced` (oturum biterken kuyrukta
+kalan — yazıcı durdu, REL bandı öldü ya da oturum bitti), defter:
+`queued = gönderilen + dropped + unsent` (test
+`every_queued_frame_is_sent_dropped_or_unsent` ve gerçek sokette
+`a_paced_session_keeps_the_newest_and_never_queues_control`);
+`udp_game_paced_episodes` (Open → Paced girişleri),
+`udp_game_paced_rate_cuts` (hız düşüşleri: giriş, sinyal, cevapsız
+halka). Loadgen telinin transport bölümü 5 sayaç uzadı: **GSNM**.
+
+*Ölçüm (kullanıcı alanı darboğaz, `udp::tests::pace::relay`;
+`udp::tests::pace::measure`, `--ignored`).* Gerçek kapı, raporlayan
+`UdpClient`'lar, oturum başına bir oda: her 33 ms'de 3000 B snapshot
+(3 FRAG datagramı, ≈ 91 KB/sn talep) ve her 200 ms'de bir kontrol karesi,
+gönderim anıyla damgalı. Röle: istemci başına bir soket; aşağı yönde
+TÜM oturumlar tek FIFO bağlantıyı paylaşır (hız, kuyruk sonu düşüren
+tampon, 20 ms yayılım). Yaş = gönderim → istemcinin `recv_frame`'i.
+
+Senaryolar: **derin** — 60 KB/sn, 30 KB tampon (500 ms), 1 oturum;
+**sığ** — 60 KB/sn, 6 KB tampon (100 ms), 1 oturum; **paylaşımlı** — 4
+oturum 1 sn arayla katılır, 180 KB/sn (toplam talebin yarısı), 90 KB
+tampon; **darboğazsız** — 10 MB/sn. Ölçüm penceresi: derin/sığ 14 sn'nin
+son 8'i, paylaşımlı 40 sn'nin son 15'i, darboğazsız 10 sn'nin son 6'sı.
+2026-10-02, tek makine (`udp::tests::pace::measure`).
+
+| senaryo | mod | mesaj/sn | KB/sn | oyun yaşı p50 / p95 / max ms | kontrol yaşı p50 / p95 / max ms | darboğaz düşürdü | yarım FRAG | `dropped_paced` / `queued_paced` | kesinti | Jain |
+|---|---|---|---|---|---|---|---|---|---|---|
+| derin | off | 9,0 | 27,0 | 527 / 533 / 537 | 518 / 531 / 537 | 281 | 268 | — | — | — |
+| derin | pace | 18,5 | 55,5 | 96 / 116 / 131 | 41 / 60 / 66 | 25 | 25 | 148 / 362 | 11 | — |
+| sığ | off | 9,0 | 27,0 | 119 / 123 / 129 | 111 / 122 / 122 | 298 | 293 | — | — | — |
+| sığ | pace | 18,4 | 55,1 | 94 / 126 / 159 | 42 / 64 / 93 | 27 | 27 | 151 / 382 | 11 | — |
+| paylaşımlı (oturum başına) | off | 0,1–23,5 | 0,4–70,4 | 525–529 (p50) | 527–16 133 (p50), en kötü max 20 123 | 334–2512 | 286–1050 | — | — | 0,274 |
+| paylaşımlı (oturum başına) | pace | 13,2–15,9 | 39,6–47,6 | 102–106 / 132–144 / ≤168 | 45–47 / 69–78 / ≤93 | 1–5 | 1–5 | 2331 / 4101 | 154 | 0,993 |
+| darboğazsız | off | 30,5 | 91,5 | 22 / 25 / 36 | 22 / 24 / 25 | 0 | 0 | 0 / 0 | 0 | — |
+| darboğazsız | pace | 30,5 | 91,5 | 23 / 29 / 53 | 23 / 37 / 38 | 0 | 0 | 0 / 0 | 0 | — |
+
+Okuma: 60 KB/sn'lik yol 3017 B'lik mesajdan en çok ~19,9/sn taşır —
+`pace` 18,5'ini teslim eder (`off` 9: darboğazın kuyruk sonu düşürmesi
+mesajların çoğunu yarım bırakır, yarım mesajın parçaları boşa bant);
+oyun bandı yaşı derin tamponda 527 → 96 ms, kontrol bandı 518 → 41 ms
+(kontrol karesi artık 500 ms'lik kuyruğun arkasında beklemiyor).
+Paylaşımlı `off`'ta son katılan bağlantıyı yer (Jain 0,27), ötekilerin
+kontrol bandı 16–20 sn geç kalır (242 yeniden gönderim) — REL ölüm
+sınırına yakın; `pace`'te dört oturum eşit pay (Jain 0,993), kapasitenin
+%97'si teslim. **Darboğazsız:** iki mod aynı yoldan geçer (oturum `Open`,
+hiçbir şey kuyruğa girmez — `udp_game_frames_queued_paced = 0`): teslim
+aynı (915 414 / 915 437 B — fark tek bir REL yeniden gönderimi), yaş
+farkı makine gürültüsü (önceki koşu: off 22/23/25, pace 21/24/27, ikisi
+de 915 414 B). Tekrarlanabilirlik: derin/sığ iki koşuda ±1 mesaj/sn;
+paylaşımlı 40 sn'lik dört koşuda Jain 0,988–0,998 (ikisi boşalma tutması
+olmadan: 0,988/0,993 — karar 3).
+
+*Testler (önce kırmızı — her kural mutasyonla).* Kurallar önce saf durumda sentetik saatle
+(`udp::congestion::tests` 8 test, `…::tests::queue` 5,
+`udp::feedback::tests::cadence` 5), sonra yazıcıya kablolanmış haliyle
+(`udp::writer::tests`: denetleyiciyi izler, kapalıyken asla, kesinti
+kuyruğu hemen kırpar ve uyanmayı hızlayıcı belirler) ve gerçek sokette
+(`udp::tests::pace`: raporlamayan istemci bayt-bayt aynı; hızlanan
+oturum en yeniyi tutar, kontrol kuyruğa girmez, defter kapanır).
+**Mutasyonlar 39'da 38 öldü** (her biri: dosya karalama dizinine
+yedeklendi, bozuldu, hedefli testler koştu, yedekten geri yüklendi):
+LOSS_MIN'i/oranı kaldırmak, gecikme sinyalini kaldırmak, patlamada hemen
+hızlanmak, şüphenin hiç silinmemesi, alım süresi düzeltmesini kaldırmak,
+hızın üstüne kesmek, artış yok, hiç açılmamak, taban yok, sessizliği yok
+saymak, boşalma tutmasını kaldırmak, kayıpta da tutmak, β = 1; hiç
+düşürmemek, teldeki mesajı düşürmek, en yeniyi düşürmek, kontrolü
+kovadan düşmemek, derinliği datagram'ın altına indirmek, oturum sonunu
+saymamak, kovayı sınırsız doldurmak, düşeni saymamak; yazıcıda hiç
+kuyruklamamak, açıkken kuyruklamak, sonda terk etmemek, raporu/sessizliği
+denetleyiciye vermemek, kadansı izlememek, kapalıyken hızlamak, girişte
+kovayı yeniden başlatmamak, kesintide kırpmamak, hızlama son tarihini
+`min`'e katmamak; B91 geri çekilmesi yok, sessizlik sıfırlanmıyor,
+pencere dönmüyor, pencere sessizliği silmiyor, baytlar sayılmıyor; B96:
+`close`'ta izleyiciyi kesmemek. **Sağ kalan:** yeniden gönderilen REL
+karesinin kovadan düşülmemesi (hızlıyken yeniden gönderim nadir;
+ilk gönderimin düşülmesi test ediliyor) — bilinçli bırakıldı.
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için
@@ -3916,7 +4186,7 @@ beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 | `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) + `snap_overflows` sayacı | Payload çekirdekte bölünmez; rUDP'de eşiği aşan kare **taşımada parçalanır** (§6 "MTU"), yani sayaç artık bant genişliği/parçalanma sinyali — kayıp sinyali istemcinin `frag_dropped_incomplete`'i | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | ~~Accept loop abort~~ *(kapandı — B16: `close` bekleyen accept'i bitirir, döngü kendiliğinden döner; abort yalnız 1 sn'yi aşan döngüye geri sigorta)* | — | §9 |
-| rUDP: **congestion control yok** | UDP'de sunucu pps'sini sınırlandıran şey yalnız oda bütçesi; loopback ölçümünde sorun yok, gerçek ağda retransmission fırtınası riski | token bucket (oturum başına) — ROADMAP P1 |
+| rUDP: **tıkanıklık tepkisi opt-in, oyuna sinyal yok** *(B1 tur 3: `udp_congestion = "pace"` — raporlayan oturumun oyun bandı tahmini yol hızına göre hızlanır, en eski kareler düşer + sayılır; varsayılan `"off"`)* | Varsayılan kapalı: titreşimli gerçek yolda sahte gecikme sinyali ölçülmedi; `PathState` henüz odaya ulaşmıyor, oyun içeriğini yola göre inceltemez | sinyal çekirdek/kite (sonraki tur — §6 "Tıkanıklık tepkisi"), sonra varsayılanın çevrilmesi |
 | rUDP: **şifreleme/imza yok** (HMAC katmanı değil) | v1 kapsamı; ama **cookie key artık tahmin edilemez** — konfigürasyondaki `cookie_key` ya da (varsayılan) OS entropisinden (`getrandom`) 16 bayt, sessiz zayıf geri düşüş yok (entropi yoksa süreç başlatmayı reddeder). Sahte-proof/amplifikasyon koruması key'in gizliliğine değil tahmin edilemezliğine dayanır; ağ şifrelemesi ayrı katman | DTLS ya da uygulama katmanı TLS — ROADMAP P1 |
 | rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
 | ~~rUDP: SO_RCVBUF ayarı yok~~ *(kapandı — B4: `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`, rUDP ve QUIC kapıları, `socket2` ile; yazılmazsa dokunulmaz — §6 "UDP kapılarının soket arabellekleri")* | — | — |
