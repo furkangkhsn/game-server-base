@@ -52,7 +52,12 @@ async fn idle_peer_gets_server_closed() {
 /// quiet, the window fires. The "peer" is an mpsc stream (no TCP
 /// buffering: frames arrive exactly when the test sends them, so the
 /// pacing — and the reset semantics — are deterministic).
-#[tokio::test]
+///
+/// On the paused clock (the window is a tokio timer): "100 ms between
+/// frames against a 250 ms window" is exact there. On the wall clock a
+/// stall of more than the window between two pokes fired the timer
+/// legitimately — the peer WAS quiet that long (BACKLOG F52).
+#[tokio::test(start_paused = true)]
 async fn active_peer_resets_the_idle_window() {
     use std::io;
     use std::pin::Pin;
