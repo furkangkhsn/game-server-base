@@ -259,7 +259,12 @@ mod logic;
 /// GSNJ = the GSNI layout with one more transport counter at the end of
 /// that section (the probes still open when their session ended, apart
 /// from the unanswered ones: `udp_game_probes_open_at_end`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4A;
+/// GSNK = the GSNJ layout with one more close reason (D12:
+/// `unauth_source_cap`, appended to `ServerClose`) — so the net
+/// section's `server_closes` and the registry's lost-verdict array are
+/// each one slot longer — and one more transport counter at the end of
+/// that section (B90: `ops_http_routes_timed_out`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4B;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

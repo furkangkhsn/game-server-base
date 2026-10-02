@@ -637,7 +637,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `close_verdict_lost_unauth_source_cap=` /
   `gsb_registry_close_verdicts_lost_total{reason="unauth_source_cap"}`.
   Loadgen metrik telinin `server_closes` dizisi ve kayıp hüküm dizisi
-  birer slot büyür (yeni düzen — sihirli sayı birleştirmede atanır);
+  birer slot büyür (B90'ın sayacıyla birlikte **GSNK**);
   RESULT'ta `server_close_unauth_source_cap=`. Sınır yazılmadıkça hep 0.
 - **Net kapsamı: girdi hız sınırı (E1).** Odanın hız sınırını aşıp
   bağlantı aktöründe düşürülen geçerli oyun girdisi:
@@ -967,8 +967,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   (defterin ve registry'nin cevabı: `/rooms`, oda açma/kapama)
   `http_route_timeout_secs`'i aşan, `504` ile yanıtlanan istekler.
   `RESULT`'ta `transport_ops_http_routes_timed_out=`; loadgen telinin
-  taşıma bölümü bir büyür (yeni düzen — sihirli sayı birleştirmede
-  atanır). B49'un ikisi gibi accept döngüsünden `Flusher`'la gider.
+  taşıma bölümü bir büyür (D12'nin sebebiyle birlikte **GSNK**). B49'un ikisi gibi accept döngüsünden `Flusher`'la gider.
 - **Taşıma kapsamı: el sıkışan kapıların kaynak başına sınırı (D11).**
   Satırın ve tablonun sonuna iki `counter`; `RESULT`'ta
   `transport_<ad>=` (her satırda). Loadgen teli: taşıma bölümü
