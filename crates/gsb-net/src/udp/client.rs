@@ -163,6 +163,12 @@ impl UdpClient {
         self.rel.rto().current()
     }
 
+    /// The reliable band's estimator (the tests read its RTTVAR).
+    #[cfg(test)]
+    pub(in crate::udp) fn band_rto(&self) -> &Rto {
+        self.rel.rto()
+    }
+
     /// Send one application frame: control band (reliable, sequenced) or
     /// game band (RAW, loss-tolerant) — the same split as the server.
     pub async fn send_frame(&mut self, op: u16, payload: impl Into<Bytes>) -> std::io::Result<()> {

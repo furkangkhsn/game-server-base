@@ -63,11 +63,18 @@ async fn a_clean_challenge_seeds_the_band_without_the_proofs_backoff() {
     assert!(c.stats.proof_retries >= 2, "{:?}", c.stats);
     if c.stats.challenge_retries == 0 {
         // The challenge was answered cleanly (loopback, unless a busy
-        // machine delayed it past its timer): its sample is the estimate,
-        // and the timer is the estimate's — the floor on loopback.
+        // machine delayed it past its timer): its sample is the estimate.
         assert!(c.srtt().is_some(), "the clean challenge is a sample");
-        assert_eq!(c.rto(), crate::udp::rel::MIN_RTO, "no backoff carried");
-    } else {
-        assert_eq!(c.rto(), crate::udp::rel::INITIAL_RTO, "no backoff carried");
     }
+    // The timer is the estimate's — RFC 6298's `SRTT + max(G, 4·RTTVAR)`
+    // clamped, or the initial timer without a sample — exactly, with no
+    // doubling: whatever sample a loaded machine took, the proof's two
+    // re-sends would have doubled it at least once.
+    let estimate = c.srtt().map_or(crate::udp::rel::INITIAL_RTO, |srtt| {
+        let var = c.band_rto().rttvar().saturating_mul(4);
+        srtt.saturating_add(var.max(Duration::from_millis(1)))
+    });
+    let estimate = estimate.clamp(crate::udp::rel::MIN_RTO, crate::udp::rel::MAX_RTO);
+    assert!(estimate < crate::udp::rel::MAX_RTO, "a doubling would show");
+    assert_eq!(c.rto(), estimate, "no backoff carried");
 }
