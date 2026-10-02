@@ -60,6 +60,11 @@ impl UdpClient {
     /// re-sent on loss, and a handshake the server never completes ends
     /// in `TimedOut` after `HANDSHAKE_DEADLINE`, 5 s (see the module docs,
     /// "Handshake loss").
+    ///
+    /// This is a PLAINTEXT client (no pinned server key): it reaches only
+    /// a door configured `udp_security = "plaintext"`. A sealed door — the
+    /// server's default since B5a — refuses it; connect to one with
+    /// [`Self::connect_with`] and [`UdpClientConfig::server_key`].
     pub async fn connect(addr: SocketAddr) -> std::io::Result<Self> {
         Self::connect_with(addr, UdpClientConfig::default()).await
     }
@@ -113,31 +118,6 @@ impl UdpClient {
         };
         client.handshake(nonce, within).await?;
         Ok(client)
-    }
-
-    /// One-shot liveness probe (the UDP readiness check a supervisor or
-    /// orchestrator can use in place of a TCP connect probe — UDP has no
-    /// SYN to probe with): send a challenge request on `sock` and wait up
-    /// to `wait` for the challenge. A true answer means the demux is
-    /// alive and answering; nothing is established (no session is
-    /// created by a bare challenge request).
-    pub async fn challenge_probe(sock: &UdpSocket, addr: SocketAddr, wait: Duration) -> bool {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        if sock.send_to(&encode_hello(nonce, 0), addr).await.is_err() {
-            return false;
-        }
-        let mut buf = [0u8; 32];
-        tokio::time::timeout(wait, sock.recv_from(&mut buf))
-            .await
-            .is_ok_and(|r| {
-                matches!(
-                    r,
-                    Ok((n, from)) if from == addr && n >= 18 && buf[0] == KIND_HELLO
-                )
-            })
     }
 
     /// The server's address.
@@ -204,10 +184,10 @@ impl UdpClient {
             let inner = encode_rel(self.out_seq, &frame);
             self.rel
                 .push(self.out_seq, Bytes::from(inner.clone()), Instant::now());
-            let dg = self.wire(inner).ok_or_else(exhausted)?;
+            let dg = self.wire(inner).ok_or_else(seal::exhausted)?;
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         } else {
-            let dg = self.wire(encode_raw(&frame)).ok_or_else(exhausted)?;
+            let dg = self.wire(encode_raw(&frame)).ok_or_else(seal::exhausted)?;
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         }
     }
@@ -275,12 +255,6 @@ impl UdpClient {
             }
         }
     }
-}
-
-/// The error of a send whose record counter ran out (the session is
-/// over: [`UdpClient::is_established`] is `false`).
-fn exhausted() -> std::io::Error {
-    std::io::Error::other("rUDP record layer: the session's record counter is exhausted")
 }
 
 mod handshake;

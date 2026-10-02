@@ -149,6 +149,31 @@ impl UdpClient {
 }
 
 impl UdpClient {
+    /// One-shot liveness probe (the UDP readiness check a supervisor or
+    /// orchestrator can use in place of a TCP connect probe — UDP has no
+    /// SYN to probe with): send a challenge request on `sock` and wait up
+    /// to `wait` for the challenge. A true answer means the demux is
+    /// alive and answering; nothing is established (no session is
+    /// created by a bare challenge request).
+    pub async fn challenge_probe(sock: &UdpSocket, addr: SocketAddr, wait: Duration) -> bool {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        if sock.send_to(&encode_hello(nonce, 0), addr).await.is_err() {
+            return false;
+        }
+        let mut buf = [0u8; 32];
+        tokio::time::timeout(wait, sock.recv_from(&mut buf))
+            .await
+            .is_ok_and(|r| {
+                matches!(
+                    r,
+                    Ok((n, from)) if from == addr && n >= 18 && buf[0] == KIND_HELLO
+                )
+            })
+    }
+
     /// A datagram during a sealed client's proof step: the session's keys
     /// when it is the accept with a message 2 that authenticates; `None`
     /// otherwise — a forged message 2 (counted, the initiator still

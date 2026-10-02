@@ -10,6 +10,12 @@
 use super::*;
 use crate::seal::{Opener, Refusal, Sealer};
 
+/// The error of a send whose record counter ran out (the session is
+/// over: [`UdpClient::is_established`] is `false`).
+pub(super) fn exhausted() -> std::io::Error {
+    std::io::Error::other("rUDP record layer: the session's record counter is exhausted")
+}
+
 /// The client's record state.
 #[derive(Default)]
 pub(super) struct Seal {

@@ -108,7 +108,7 @@ impl UdpClient {
         self.stats.rebinds += 1;
         let nudge = self
             .wire(encode_ack(self.in_expected))
-            .ok_or_else(super::exhausted)?;
+            .ok_or_else(super::seal::exhausted)?;
         self.sock.send_to(&nudge, self.peer).await?;
         self.sock.local_addr()
     }
