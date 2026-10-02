@@ -7,11 +7,23 @@
 use super::*;
 use crate::seal::wire::OVERHEAD_S2C;
 use crate::seal::{Accept, Initiator, Msg1, Opener, ResetToken, SEAL_LIMIT, StaticKey};
-use crate::udp::sealed::encode_send;
+use crate::udp::sealed::{SendHalf, encode_send};
 
 /// A sealed writer (budget 1200) toward a client socket, the client's
 /// opener, and the actor's inbox.
 async fn sealed_writer() -> (
+    UdpWriter,
+    UdpSocket,
+    Opener,
+    gsb_core::channel::Inbox<ConnIn>,
+) {
+    sealed_writer_with(RekeyPolicy::NEVER).await
+}
+
+/// [`sealed_writer`] whose sealer rekeys under `policy` (B5b).
+async fn sealed_writer_with(
+    policy: RekeyPolicy,
+) -> (
     UdpWriter,
     UdpSocket,
     Opener,
@@ -42,7 +54,7 @@ async fn sealed_writer() -> (
         reaper,
         metrics: None,
         congestion: UdpCongestion::Off,
-        sealer: Some(sealer),
+        sealer: Some(SendHalf::new(sealer, policy, Instant::now())),
     };
     let (in_tx, inbox) = channel::<ConnIn>(8);
     let (_out_tx, out_rx) = channel::<FrameBatch>(8);
@@ -110,6 +122,7 @@ async fn an_exhausted_record_counter_ends_the_session() {
     w.sealer
         .as_mut()
         .unwrap()
+        .sealer_mut()
         .set_next_counter_for_test(SEAL_LIMIT);
     let hb = FrameBody::new(op::base::HEARTBEAT_ACK, Bytes::new());
     assert!(w.send_batch(vec![hb]).await.is_none());
@@ -122,4 +135,42 @@ async fn an_exhausted_record_counter_ends_the_session() {
         }
         other => panic!("expected the close, got {other:?}"),
     }
+}
+
+/// Key phases, wired (B5b): a due rekey waits for the client's ACK of a
+/// control frame first sent in the current phase (counted while it
+/// waits); after it, the next datagram is the next generation's, and the
+/// client's opener follows. The counters reach the transport metrics.
+#[tokio::test]
+async fn a_sealed_writer_rekeys_once_the_client_acks_the_phase() {
+    let due = RekeyPolicy {
+        after: Duration::ZERO,
+        after_records: u64::MAX,
+    };
+    let (mut w, client, mut o, _inbox) = sealed_writer_with(due).await;
+    let hb = FrameBody::new(op::base::HEARTBEAT_ACK, Bytes::from_static(b"hb"));
+    assert!(w.send_batch(vec![hb]).await.is_none());
+    assert_eq!(opened(&client, &mut o).await.0, 0, "REL seq 1 at counter 0");
+    // A whole phase's distance, then a game frame: due, unconfirmed.
+    let sealer = w.sealer.as_mut().unwrap();
+    sealer
+        .sealer_mut()
+        .set_next_counter_for_test(crate::seal::REKEY_MIN_DISTANCE);
+    let game = FrameBody::new(1000, Bytes::from_static(b"g"));
+    assert!(w.send_batch(vec![game.clone()]).await.is_none());
+    opened(&client, &mut o).await;
+    let s = w.sealer.as_ref().unwrap();
+    assert_eq!((s.generation(), s.rekeys, s.unconfirmed), (0, 0, 1));
+    // The client's cumulative ACK (the demux's piggyback): seq 1 arrived.
+    let ack = FrameBody::new(op::base::UDP_ACK, Bytes::from(2u32.to_le_bytes().to_vec()));
+    assert!(w.send_batch(vec![ack, game]).await.is_none());
+    let (c, inner) = opened(&client, &mut o).await;
+    assert_eq!(inner[0], KIND_RAW);
+    assert_eq!(
+        o.generation(),
+        1,
+        "the client's opener followed (counter {c})"
+    );
+    let t = w.totals();
+    assert_eq!((t.udp_rekeys, t.udp_rekeys_unconfirmed), (1, 1));
 }

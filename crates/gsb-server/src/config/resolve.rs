@@ -56,6 +56,12 @@ pub enum ServerError {
     #[error("rUDP static key: {0}")]
     BadUdpStaticKey(String),
 
+    /// The sealed rUDP door's stateless reset key (B5b): both spellings
+    /// set, unreadable or malformed. The message never carries key
+    /// material.
+    #[error("rUDP reset key: {0}")]
+    BadUdpResetKey(String),
+
     #[error("invalid `shard_count` {0}: must be 1..=256 (grid topology)")]
     BadShardCount(u32),
 

@@ -82,4 +82,20 @@ pub struct UdpClientStats {
     /// Sends refused because the record counter ran out (2^62): the
     /// session was declared over.
     pub seal_exhausted: u64,
+    /// Key updates of the client → server direction (B5b), and the
+    /// attempts deferred because the server had not yet confirmed the
+    /// current key phase (counted at most once per 10 s; the session
+    /// seals on under its current key).
+    pub rekeys: u64,
+    pub rekeys_unconfirmed: u64,
+    /// Stateless resets (B5b): datagrams whose last 16 bytes were this
+    /// session's reset token — the server lost the session (a restart),
+    /// which ended at once ([`UdpClient::is_established`](crate::udp::UdpClient::is_established)
+    /// is `false`); counted under this name only.
+    pub stateless_resets_received: u64,
+    /// Of the refused records (counted under their `seal_*` name), those
+    /// of a stateless reset's size whose last 16 bytes were NOT the
+    /// session's token: a reset from a server whose reset key changed,
+    /// or a forged or corrupted small record — they look alike by design.
+    pub stateless_resets_invalid: u64,
 }

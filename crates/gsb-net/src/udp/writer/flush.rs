@@ -12,7 +12,13 @@ impl super::UdpWriter {
         if !last && !self.flusher.due() {
             return;
         }
-        let totals = TransportCounters {
+        let totals = self.totals();
+        self.flusher.flush(totals, last);
+    }
+
+    /// Every counter this writer flushes, cumulative.
+    pub(super) fn totals(&self) -> TransportCounters {
+        TransportCounters {
             udp_frames_dropped_oversized: self.dropped_oversized,
             udp_control_frames_abandoned: self.abandoned,
             udp_frames_drained: self.drained,
@@ -27,9 +33,11 @@ impl super::UdpWriter {
             udp_acks_send_failed: self.sends_ack_failed,
             udp_path_challenges_send_failed: self.sends_challenge_failed,
             udp_sessions_ended_seal_limit: self.ended_seal_limit,
+            // Its key phases (B5b).
+            udp_rekeys: self.sealer.as_ref().map_or(0, |s| s.rekeys),
+            udp_rekeys_unconfirmed: self.sealer.as_ref().map_or(0, |s| s.unconfirmed),
             ..self.feedback_totals()
-        };
-        self.flusher.flush(totals, last);
+        }
     }
 
     /// The game band's feedback counters (module `crate::udp::feedback`).

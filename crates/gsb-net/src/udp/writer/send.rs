@@ -82,6 +82,7 @@ impl super::UdpWriter {
         let datagram = Bytes::from(encode_rel(self.seq, &frame));
         self.rel.push(self.seq, datagram.clone(), Instant::now());
         self.send(&datagram, true).await;
+        self.sent_rel(self.seq);
         None
     }
 

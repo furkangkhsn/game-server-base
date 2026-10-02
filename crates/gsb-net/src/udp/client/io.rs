@@ -99,8 +99,10 @@ impl UdpClient {
                     return false;
                 }
                 let ack = u32::from_le_bytes(d[1..5].try_into().unwrap());
-                // Release, liveness clock, RTT sample (Karn's rule).
+                // Release, liveness clock, RTT sample (Karn's rule); on a
+                // sealed session the key phase's confirmation.
                 self.rel.on_ack(ack, Instant::now());
+                self.seal.on_ack(ack);
                 false
             }
             KIND_PROBE => {

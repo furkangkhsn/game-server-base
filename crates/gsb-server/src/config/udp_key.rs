@@ -12,10 +12,15 @@
 //! **Never logged, never echoed:** an error names what is wrong (missing,
 //! both set, a length, a position, the file's path), never a character
 //! of the key.
+//!
+//! **The stateless reset key** (B5b, decision 9): `udp_reset_key` /
+//! `udp_reset_key_file`, the same spelling — optional: unset, each door
+//! derives it from the static key (`ResetKey::derived_from`), which
+//! survives restarts already.
 
 use std::sync::Arc;
 
-use gsb_net::seal::{KEY_LEN, StaticKey};
+use gsb_net::seal::{KEY_LEN, ResetKey, StaticKey};
 use gsb_net::udp::UdpSecurity;
 use tracing::warn;
 
@@ -34,31 +39,52 @@ pub(crate) fn udp_security(cfg: &Config) -> Result<UdpSecurity, ServerError> {
         );
         return Ok(UdpSecurity::Plaintext);
     }
-    let hex = match (&cfg.udp_static_key, &cfg.udp_static_key_file) {
-        (None, None) => {
-            return Err(bad(
-                "missing: a sealed rUDP door (udp_security = \"sealed\", the default) \
-                 needs udp_static_key or udp_static_key_file (64 hex characters, e.g. \
-                 `openssl rand -hex 32`); a dev/LAN door may set udp_security = \
-                 \"plaintext\" instead"
-                    .into(),
-            ));
-        }
-        (Some(_), Some(_)) => {
-            return Err(bad(
-                "both udp_static_key and udp_static_key_file are set; keep one".into(),
-            ));
-        }
-        (Some(inline), None) => zeroize::Zeroizing::new(inline.clone()),
-        (None, Some(path)) => zeroize::Zeroizing::new(
-            std::fs::read_to_string(path)
-                .map_err(|e| bad(format!("udp_static_key_file `{path}`: {e}")))?,
-        ),
+    let spelled = (&cfg.udp_static_key, &cfg.udp_static_key_file);
+    let Some(private) = read_key("udp_static_key", spelled).map_err(bad)? else {
+        return Err(bad(
+            "missing: a sealed rUDP door (udp_security = \"sealed\", the default) \
+             needs udp_static_key or udp_static_key_file (64 hex characters, e.g. \
+             `openssl rand -hex 32`); a dev/LAN door may set udp_security = \
+             \"plaintext\" instead"
+                .into(),
+        ));
     };
-    let private = parse_key(hex.trim()).map_err(|why| bad(format!("malformed: {why}")))?;
     let key = StaticKey::from_private(*private)
         .map_err(|e| bad(format!("the X25519 backend refused it: {e:?}")))?;
     Ok(UdpSecurity::Sealed(Arc::new(key)))
+}
+
+/// The sealed rUDP doors' stateless reset key from the config (B5b):
+/// `None` — unset, or a plaintext door — lets each door derive it from
+/// the static key. Both spellings, an unreadable file or a malformed key
+/// refuse startup.
+pub(crate) fn udp_reset_key(cfg: &Config) -> Result<Option<Arc<ResetKey>>, ServerError> {
+    if cfg.udp_security == UdpSecurityKind::Plaintext {
+        return Ok(None);
+    }
+    let spelled = (&cfg.udp_reset_key, &cfg.udp_reset_key_file);
+    let key = read_key("udp_reset_key", spelled).map_err(ServerError::BadUdpResetKey)?;
+    Ok(key.map(|k| Arc::new(ResetKey::from_bytes(*k))))
+}
+
+/// A 32-byte key spelled inline (`name`) or in a file (`name_file`):
+/// `None` when neither is set. The error never carries a key character.
+fn read_key(
+    name: &str,
+    (inline, file): (&Option<String>, &Option<String>),
+) -> Result<Option<zeroize::Zeroizing<[u8; KEY_LEN]>>, String> {
+    let hex = match (inline, file) {
+        (None, None) => return Ok(None),
+        (Some(_), Some(_)) => {
+            return Err(format!("both {name} and {name}_file are set; keep one"));
+        }
+        (Some(inline), None) => zeroize::Zeroizing::new(inline.clone()),
+        (None, Some(path)) => zeroize::Zeroizing::new(
+            std::fs::read_to_string(path).map_err(|e| format!("{name}_file `{path}`: {e}"))?,
+        ),
+    };
+    let key = parse_key(hex.trim()).map_err(|why| format!("malformed: {why}"))?;
+    Ok(Some(key))
 }
 
 /// 64 hex characters into 32 bytes. The error never carries a character

@@ -70,3 +70,49 @@ fn a_malformed_key_refuses_without_echoing_it() {
         "the public key round-trips"
     );
 }
+
+/// The stateless reset key (B5b): optional — unset (or a plaintext door)
+/// lets each door derive it from the static key; inline or from a file,
+/// never both; malformed refuses startup without echoing it.
+#[test]
+fn the_reset_key_is_optional_and_refused_like_the_static_key() {
+    let reset = |inline: Option<&str>, file: Option<&str>| Config {
+        udp_reset_key: inline.map(str::to_string),
+        udp_reset_key_file: file.map(str::to_string),
+        ..Config::default()
+    };
+    let refused = |c: &Config| match udp_reset_key(c) {
+        Err(ServerError::BadUdpResetKey(why)) => why,
+        Err(e) => panic!("another error: {e}"),
+        Ok(k) => panic!("accepted: {k:?}"),
+    };
+    assert!(
+        udp_reset_key(&Config::default()).unwrap().is_none(),
+        "derived"
+    );
+    let hex = udp_key_hex(&[0x3C; 32]);
+    let inline = udp_reset_key(&reset(Some(&hex), None)).unwrap().unwrap();
+    let path = std::env::temp_dir().join(format!("gsb-udp-reset-{}", std::process::id()));
+    std::fs::write(&path, format!("{hex}\n")).unwrap();
+    let file = path.to_str().unwrap();
+    let from_file = udp_reset_key(&reset(None, Some(file))).unwrap().unwrap();
+    assert_eq!(inline.token(7), from_file.token(7));
+    assert_eq!(
+        inline.token(7),
+        gsb_net::seal::ResetKey::from_bytes([0x3C; 32]).token(7)
+    );
+    assert!(refused(&reset(Some(&hex), Some(file))).starts_with("both udp_reset_key"));
+    let _ = std::fs::remove_file(&path);
+    let secretish = "c0ffee".repeat(10) + "zz11";
+    let why = refused(&reset(Some(&secretish), None));
+    assert!(
+        why.starts_with("malformed") && !why.contains("c0ffee"),
+        "{why}"
+    );
+    // A plaintext door has no record layer: the key is not read.
+    let plain = Config {
+        udp_security: UdpSecurityKind::Plaintext,
+        ..reset(Some("not hex at all"), None)
+    };
+    assert!(udp_reset_key(&plain).unwrap().is_none());
+}

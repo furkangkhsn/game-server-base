@@ -27,6 +27,11 @@ pub(super) struct Noised {
 }
 
 impl super::Demux {
+    /// The key-phase policy a sealed session's writer gets (B5b).
+    pub(super) fn door_rekey(&self) -> crate::udp::RekeyPolicy {
+        self.seal.as_ref().map(|s| s.rekey).unwrap_or_default()
+    }
+
     /// Whether a verified proof of `n` bytes may go on: always on a
     /// plaintext door; on a sealed one only with a message 1 of a valid
     /// length (a plaintext client's proof, or a malformed one, is

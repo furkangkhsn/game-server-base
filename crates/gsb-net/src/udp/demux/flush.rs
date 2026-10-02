@@ -75,6 +75,9 @@ impl super::Demux {
             udp_path_candidates_not_newest: c.candidates_not_newest,
             udp_acks_not_queued: c.acks_not_queued,
             udp_path_challenges_not_queued: c.challenges_not_queued,
+            udp_stateless_resets_sent: c.resets_sent,
+            udp_stateless_resets_rate_limited: seal.resets.as_ref().map_or(0, |b| b.refused),
+            udp_stateless_resets_send_failed: c.resets_send_failed,
             ..Default::default()
         }
     }

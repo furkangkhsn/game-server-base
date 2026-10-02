@@ -9,7 +9,7 @@ use crate::udp::sealed::{context, encode_sealed_accept};
 
 /// A finished NK handshake: (server sealer, server opener, client
 /// sealer, client opener).
-fn session_pair() -> (Sealer, Opener, Sealer, Opener) {
+pub(super) fn session_pair() -> (Sealer, Opener, Sealer, Opener) {
     let server = StaticKey::generate().unwrap();
     let mut ini = Initiator::new(&server.public(), b"ctx", &[]).unwrap();
     let accept = Accept {
@@ -26,7 +26,7 @@ fn session_pair() -> (Sealer, Opener, Sealer, Opener) {
     (ss, so, cs, co)
 }
 
-fn seal(s: &mut Sealer, inner: &[u8]) -> Vec<u8> {
+pub(super) fn seal(s: &mut Sealer, inner: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     s.seal(inner, &mut out).unwrap();
     out
@@ -44,7 +44,7 @@ async fn a_sealed_client_reads_only_records_and_counts_every_refusal() {
         ..UdpClientConfig::default()
     };
     let (mut c, sink) = detached_with(config).await;
-    c.seal.install(cs, co);
+    c.seal.install(cs, co, ResetToken::from_bytes([0; 16]));
     let raw = encode_raw(&FrameBody::new(1000, Bytes::from_static(b"snap")));
     let rec = seal(&mut ss, &raw);
     assert!(c.process_datagram(&rec), "a genuine record is read");
@@ -124,4 +124,44 @@ async fn a_forged_or_plaintext_accept_does_not_end_the_sealed_handshake() {
     assert!(c.is_established() && c.sealed());
     assert_eq!(c.path.cid, Some(5));
     assert_eq!((c.stats.accepts_forged, c.stats.accepts_unsealed), (1, 1));
+}
+
+/// Key phases, client side (B5b): the client → server key moves to its
+/// next generation only once the server's ACK covered a control frame
+/// first sent in the current phase; the server's opener follows.
+#[tokio::test]
+async fn a_sealed_client_rekeys_once_the_server_acks_the_phase() {
+    let (mut ss, mut so, cs, co) = session_pair();
+    let config = UdpClientConfig {
+        server_key: Some([1; 32]),
+        rekey: RekeyPolicy {
+            after: Duration::ZERO,
+            after_records: u64::MAX,
+        },
+        ..UdpClientConfig::default()
+    };
+    let (mut c, sink) = detached_with(config).await;
+    c.seal.install(cs, co, ResetToken::from_bytes([0; 16]));
+    let mut buf = [0u8; 256];
+    let mut next = async |so: &mut Opener| {
+        let (n, _) = tokio::time::timeout(Duration::from_secs(3), sink.recv_from(&mut buf))
+            .await
+            .expect("a record")
+            .expect("recv");
+        so.open(&buf[..n]).expect("the server opens it")
+    };
+    c.send_frame(8, Bytes::from_static(b"hb")).await.unwrap();
+    assert_eq!(next(&mut so).await.counter, 0, "REL seq 1");
+    let half = c.seal.send_half().unwrap();
+    half.sealer_mut()
+        .set_next_counter_for_test(crate::seal::REKEY_MIN_DISTANCE);
+    c.send_frame(1000, Bytes::from_static(b"g")).await.unwrap();
+    next(&mut so).await;
+    assert_eq!((c.stats.rekeys, c.stats.rekeys_unconfirmed), (0, 1));
+    // The server's ACK: seq 1 arrived.
+    c.process_datagram(&seal(&mut ss, &encode_ack(2)));
+    c.send_frame(1000, Bytes::from_static(b"g")).await.unwrap();
+    next(&mut so).await;
+    assert_eq!((c.stats.rekeys, c.stats.rekeys_unconfirmed), (1, 1));
+    assert_eq!(so.generation(), 1, "the server's opener followed");
 }

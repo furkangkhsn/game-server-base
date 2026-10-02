@@ -115,7 +115,7 @@ impl UdpClient {
                         self.rel = RelSend::new(Instant::now(), rto.seed());
                         self.set_cid(accept.cid);
                         let (sealer, opener) = session.into_halves();
-                        self.seal.install(sealer, opener);
+                        self.seal.install(sealer, opener, accept.reset_token);
                         self.established = true;
                         self.announce(Instant::now());
                         return Ok(());

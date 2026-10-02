@@ -23,8 +23,8 @@ pub(crate) use listeners::*;
 mod udp_key;
 pub(crate) use resolve::ListenerSpec;
 pub use resolve::{ConfigError, ServerError};
-pub(crate) use udp_key::udp_security;
 pub use udp_key::{ephemeral_udp_key, parse_udp_public_key, udp_key_hex};
+pub(crate) use udp_key::{udp_reset_key, udp_security};
 
 /// The LEGACY config spelling of two of the three selection axes
 /// (`docs/ROADMAP.md`, P2 "Konfigürasyon düzeltmesi"): the demo rooms'

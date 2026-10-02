@@ -114,7 +114,7 @@ impl UdpClient {
             reasm: Reassembly::default(),
             reports: report::Reports::new(config),
             path: migrate::Migration::new(config.migration),
-            seal: seal::Seal::new(config.server_key),
+            seal: seal::Seal::new(&config),
         };
         client.handshake(nonce, within).await?;
         Ok(client)
@@ -185,6 +185,7 @@ impl UdpClient {
             self.rel
                 .push(self.out_seq, Bytes::from(inner.clone()), Instant::now());
             let dg = self.wire(inner).ok_or_else(seal::exhausted)?;
+            self.seal.sent_rel(self.out_seq);
             self.sock.send_to(&dg, self.peer).await.map(|_| ())
         } else {
             let dg = self.wire(encode_raw(&frame)).ok_or_else(seal::exhausted)?;

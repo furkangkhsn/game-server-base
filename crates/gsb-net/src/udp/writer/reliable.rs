@@ -24,6 +24,10 @@ impl super::UdpWriter {
         }
         let ack = u32::from_le_bytes(frame.payload[..4].try_into().unwrap());
         self.rel.on_ack(ack, Instant::now());
+        // A sealed session's key-phase confirmation (module `seal`).
+        if let Some(s) = self.sealer.as_mut() {
+            s.on_ack(ack);
+        }
     }
 
     /// Retransmit the oldest un-ACKed control frame whose timer expired

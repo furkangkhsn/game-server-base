@@ -452,6 +452,30 @@ pub struct Config {
     /// 1000-player join storm in about a second); `0` = no budget. Per
     /// door; every rUDP door gets the same value.
     pub udp_handshakes_per_sec: Option<u32>,
+    /// The sealed rUDP doors' **stateless reset key** (BACKLOG B5b,
+    /// `docs/RUDP-SECURITY.md` decision 9) as 64 hex characters: a
+    /// restarted server uses it to tell a client whose session it lost
+    /// to start over at once (a reset carrying that session's token)
+    /// instead of after the reliable band's 5 s bound. Unset (the
+    /// default): derived from the static key (a labelled HMAC), which
+    /// survives every restart already — set one only to rotate the two
+    /// apart. Either way each door binds it to its address: the restarted
+    /// server must bind the same address. Setting both spellings refuses
+    /// startup; never logged. A plaintext door ignores it.
+    pub udp_reset_key: Option<String>,
+    /// A file holding the reset key ([`Self::udp_reset_key`]'s 64 hex
+    /// characters; surrounding whitespace ignored).
+    pub udp_reset_key_file: Option<String>,
+    /// The sealed rUDP doors' **stateless reset budget** (BACKLOG B5b):
+    /// resets per second a door sends in answer to records whose
+    /// connection id it does not know — a token bucket holding 50 ms of
+    /// it, checked before any work; over it a trigger is dropped and
+    /// counted (`udp_stateless_resets_rate_limited`). Each reset is
+    /// shorter than its trigger (never an amplifier). Default 10 000
+    /// (~3 % of a demux core; a restarted server resets 10 000 sessions
+    /// in about a second); `0` = the door sends no resets (clients then
+    /// learn of a lost session from the reliable band's 5 s bound).
+    pub udp_stateless_resets_per_sec: u32,
     /// Path to the server certificate chain, PEM (leaf first). Empty (the
     /// default) = plaintext TCP, byte-identical behavior to before the TLS
     /// turn. Set together with [`Self::tls_key`] it serves TCP over rustls
@@ -757,6 +781,9 @@ impl Default for Config {
             udp_static_key: None,
             udp_static_key_file: None,
             udp_handshakes_per_sec: Some(gsb_net::udp::DEFAULT_HANDSHAKES_PER_SEC),
+            udp_reset_key: None,
+            udp_reset_key_file: None,
+            udp_stateless_resets_per_sec: gsb_net::udp::DEFAULT_STATELESS_RESETS_PER_SEC,
             tls_cert: String::new(),
             tls_key: String::new(),
             listeners: None,

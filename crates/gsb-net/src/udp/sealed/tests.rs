@@ -155,3 +155,6 @@ fn no_debug_prints_the_private_key() {
         "{shown}"
     );
 }
+
+mod door;
+mod rekey;

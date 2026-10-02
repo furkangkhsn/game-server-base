@@ -192,6 +192,8 @@ pub(super) async fn run_accept(
 pub(crate) struct UdpKeys {
     pub(crate) cookie: Option<[u8; 16]>,
     pub(crate) security: gsb_net::udp::UdpSecurity,
+    /// The stateless reset key (B5b; `None`: derived from the static key).
+    pub(crate) reset: Option<std::sync::Arc<gsb_net::seal::ResetKey>>,
 }
 
 /// An rUDP door's configuration from the server's.
@@ -222,6 +224,11 @@ pub(super) fn udp_config(
         security: keys.security.clone(),
         // The sealed door's DH budget (B119; `0` = none).
         handshakes_per_sec: cfg.udp_handshakes_per_sec,
+        // Stateless reset (B5b): the key and the budget.
+        reset_key: keys.reset.clone(),
+        stateless_resets_per_sec: cfg.udp_stateless_resets_per_sec,
+        // Key phases (B5b): the engine's policy (module `gsb_net::udp`).
+        rekey: gsb_net::udp::RekeyPolicy::default(),
     }
 }
 

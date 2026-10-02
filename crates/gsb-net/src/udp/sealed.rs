@@ -31,8 +31,9 @@
 //!   not authenticate.
 //! - msg2's encrypted payload is `seal::Accept`: the session's CID (the
 //!   routing key of every c→s record; always granted on a sealed door)
-//!   and a stateless reset token (reserved for B5b; derived from a
-//!   per-door key until B5b moves it to the config).
+//!   and its stateless reset token (B5b; module `door`): after a restart
+//!   the door answers the CID it no longer knows with a reset carrying
+//!   that token, and the client ends the session at once.
 //! - **Idempotent proof:** the accept datagram is stored with the session
 //!   until its first record opens; a re-sent proof from the session's
 //!   address gets the same bytes — no second DH.
@@ -61,6 +62,11 @@ use crate::udp::*;
 
 mod budget;
 pub(super) use budget::DhBudget;
+mod door;
+pub(super) use door::{Counts, DoorSeal};
+mod rekey;
+pub(super) use rekey::SendHalf;
+pub use rekey::{DEFAULT_REKEY_AFTER, DEFAULT_REKEY_AFTER_RECORDS, RekeyPolicy};
 
 /// The default of the door's handshake budget (B119): sealed handshakes
 /// per second the demux runs its Diffie-Hellman for. Measured (B110,
@@ -70,6 +76,14 @@ pub(super) use budget::DhBudget;
 /// still admits a 1000-player join storm within about a second. `0`
 /// (or `None`) = no budget.
 pub const DEFAULT_HANDSHAKES_PER_SEC: u32 = 1000;
+
+/// The default of the door's stateless reset budget (B5b): resets per
+/// second the demux sends in answer to records with an unknown CID — a
+/// token bucket holding 50 ms of it. Each costs one HMAC and one send
+/// (~3 µs); 10 000/s is ~3 % of the demux's core and lets a restarted
+/// server reset 10 000 sessions within about a second (each client gets
+/// the next token its datagrams find). `0`: no resets.
+pub const DEFAULT_STATELESS_RESETS_PER_SEC: u32 = 10_000;
 
 /// The door's security mode (see the module docs).
 #[derive(Clone, Default)]
@@ -160,78 +174,6 @@ pub(super) fn decode_send(b: &[u8]) -> Option<(Option<SocketAddr>, &[u8])> {
     };
     let inner = b.get(at..).filter(|i| !i.is_empty())?;
     Some((to, inner))
-}
-
-/// The sealed door's own counters (each a metric, OPS §3; the budget's
-/// refusals are [`DhBudget::refused`]).
-#[derive(Debug, Default, Clone, Copy)]
-pub(super) struct Counts {
-    pub(super) proofs_refused_plaintext: u64,
-    pub(super) handshakes_malformed: u64,
-    pub(super) handshakes_failed_decrypt: u64,
-    pub(super) handshakes_failed_internal: u64,
-    pub(super) datagrams_unsealed: u64,
-    /// One per `seal::Refusal`, in `Refusal::ALL` order.
-    pub(super) refused: [u64; 6],
-    pub(super) sessions_ended_limit: u64,
-    pub(super) candidates_not_newest: u64,
-    pub(super) acks_not_queued: u64,
-    pub(super) challenges_not_queued: u64,
-}
-
-impl Counts {
-    /// Count one refused record under its name.
-    pub(super) fn refusal(&mut self, r: crate::seal::Refusal) {
-        let i = crate::seal::Refusal::ALL
-            .iter()
-            .position(|x| *x == r)
-            .expect("every refusal is in ALL");
-        self.refused[i] += 1;
-    }
-}
-
-/// The demux's sealed-door state: the identity, the reset-token key, the
-/// DH budget and the counters.
-pub(super) struct DoorSeal {
-    pub(super) key: Arc<StaticKey>,
-    /// Derives each session's reset token. Per door and random until B5b
-    /// reads it from the config (decision 9); the token rides msg2 already
-    /// so the accept's layout does not change then.
-    pub(super) reset: crate::seal::ResetKey,
-    pub(super) budget: DhBudget,
-    pub(super) counts: Counts,
-    /// A plaintext client's proof was logged once (the rest are counted).
-    pub(super) warned_plaintext: bool,
-}
-
-impl DoorSeal {
-    /// `Err`: the OS entropy source failed (the bind refuses to start).
-    pub(super) fn new(key: Arc<StaticKey>, per_sec: Option<u32>) -> std::io::Result<Self> {
-        let mut r = [0u8; crate::seal::RESET_KEY_LEN];
-        getrandom::fill(&mut r).map_err(|e| {
-            std::io::Error::other(format!(
-                "cannot read OS entropy for the rUDP reset key: {e}"
-            ))
-        })?;
-        let reset = crate::seal::ResetKey::from_bytes(r);
-        zeroize::Zeroize::zeroize(&mut r);
-        Ok(Self {
-            key,
-            reset,
-            budget: DhBudget::new(per_sec),
-            counts: Counts::default(),
-            warned_plaintext: false,
-        })
-    }
-}
-
-impl std::fmt::Debug for DoorSeal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DoorSeal")
-            .field("budget", &self.budget)
-            .field("counts", &self.counts)
-            .finish_non_exhaustive()
-    }
 }
 
 #[cfg(test)]

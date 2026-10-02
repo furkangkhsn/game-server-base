@@ -28,9 +28,10 @@ pub(in crate::udp) struct Link {
     /// The door's congestion response (module `crate::udp::congestion`).
     pub(in crate::udp) congestion: UdpCongestion,
     /// The session's server → client record sealer on a sealed door (B5a,
-    /// module `crate::udp::sealed`): every datagram this writer sends is
-    /// sealed by it. `None`: a plaintext door.
-    pub(in crate::udp) sealer: Option<crate::seal::Sealer>,
+    /// module `crate::udp::sealed`), with its key-phase policy (B5b):
+    /// every datagram this writer sends is sealed by it. `None`: a
+    /// plaintext door.
+    pub(in crate::udp) sealer: Option<crate::udp::sealed::SendHalf>,
 }
 
 /// The per-session outbound pump spawner: ONLY a writer task (the reader

@@ -239,6 +239,12 @@ async fn start_inner(
             true => udp_security(&cfg)?,
             false => gsb_net::udp::UdpSecurity::Plaintext,
         },
+        // The stateless reset key (B5b): configured, or (`None`) derived
+        // from the static key by each door.
+        reset: match has_udp {
+            true => crate::config::udp_reset_key(&cfg)?,
+            false => None,
+        },
     };
 
     // Bind EVERY listener before spawning any accept task. The TLS pick

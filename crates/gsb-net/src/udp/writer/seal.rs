@@ -7,6 +7,7 @@
 //! writer's state stays private.
 
 use std::borrow::Cow;
+use std::time::Instant;
 
 use gsb_core::conn::ConnIn;
 use gsb_protocol::FrameBody;
@@ -26,7 +27,7 @@ impl super::UdpWriter {
             return Some(Cow::Borrowed(inner));
         };
         let mut out = Vec::with_capacity(inner.len() + OVERHEAD_S2C);
-        match sealer.seal(inner, &mut out) {
+        match sealer.seal(inner, &mut out, Instant::now()) {
             Ok(_) => Some(Cow::Owned(out)),
             Err(_) => {
                 self.seal_exhausted = true;
@@ -52,6 +53,16 @@ impl super::UdpWriter {
             Ok(_) => self.pace_charge(d.len()),
             Err(_) if challenge => self.sends_challenge_failed += 1,
             Err(_) => self.sends_ack_failed += 1,
+        }
+    }
+
+    /// The control frame `seq` just went out for the first time: on a
+    /// sealed session its record counter is kept for the ACK that covers
+    /// it (the peer's confirmation of the key phase — module
+    /// `crate::udp::sealed`, `rekey`).
+    pub(super) fn sent_rel(&mut self, seq: u32) {
+        if let Some(s) = self.sealer.as_mut() {
+            s.sent_rel(seq);
         }
     }
 

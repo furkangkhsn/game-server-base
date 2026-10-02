@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 
 use super::SessionSeal;
 use crate::transport::Endpoint;
+use crate::udp::sealed::SendHalf;
 use crate::udp::writer::{Link, udp_link_spawner};
 use crate::udp::*;
 
@@ -98,7 +99,7 @@ impl super::Demux {
             let (cid, sealer, seal) = match noised {
                 Some(x) => (
                     Some(x.cid),
-                    Some(x.sealer),
+                    Some(SendHalf::new(x.sealer, self.door_rekey(), now)),
                     Some(SessionSeal {
                         opener: x.opener,
                         accept: Some(x.accept),

@@ -22,6 +22,7 @@ mod noise;
 mod reap;
 mod record;
 mod report;
+mod reset;
 mod session;
 mod source;
 mod sweep;

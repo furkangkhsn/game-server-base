@@ -52,7 +52,7 @@ async fn detached_with(config: UdpClientConfig) -> (UdpClient, UdpSocket) {
         reasm: Reassembly::default(),
         reports: super::report::Reports::new(config),
         path: super::migrate::Migration::new(config.migration),
-        seal: super::seal::Seal::new(config.server_key),
+        seal: super::seal::Seal::new(&config),
     };
     (client, sink)
 }
@@ -318,5 +318,6 @@ async fn a_busy_game_band_does_not_starve_the_retransmit() {
 
 mod migrate;
 mod report;
+mod reset;
 mod rtt;
 mod seal;

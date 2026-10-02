@@ -642,7 +642,10 @@ mod tests;
 
 pub use client::{UdpClient, UdpClientConfig, UdpClientStats};
 pub use congestion::{PathPhase, PathState, UdpCongestion};
-pub use sealed::{DEFAULT_HANDSHAKES_PER_SEC, UdpSecurity};
+pub use sealed::{
+    DEFAULT_HANDSHAKES_PER_SEC, DEFAULT_REKEY_AFTER, DEFAULT_REKEY_AFTER_RECORDS,
+    DEFAULT_STATELESS_RESETS_PER_SEC, RekeyPolicy, UdpSecurity,
+};
 pub use transport::{UdpTransport, UdpTransportConfig};
 
 // Re-homed internals: each lives in the module that owns its concern,

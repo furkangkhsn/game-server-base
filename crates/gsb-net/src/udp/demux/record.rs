@@ -41,7 +41,10 @@ impl super::Demux {
             return;
         };
         let Some(key) = self.sessions.key_of_cid(cid) else {
+            // No session holds it (gone, or never here — a restart): the
+            // client learns at once (B5b, module `reset`).
             self.mig.cid_unknown += 1;
+            self.stateless_reset(cid, n, from);
             return;
         };
         let now = Instant::now();

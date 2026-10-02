@@ -187,23 +187,32 @@ fn the_rudp_door_gets_its_per_source_cap_and_migration() {
         security: gsb_net::udp::UdpSecurity::Sealed(std::sync::Arc::new(
             gsb_net::seal::StaticKey::generate().unwrap(),
         )),
+        reset: Some(std::sync::Arc::new(gsb_net::seal::ResetKey::from_bytes(
+            [1; 32],
+        ))),
     };
     let on = Config {
         max_handshakes_per_source: Some(3),
         udp_migration: Some(true),
         udp_handshakes_per_sec: Some(0),
+        udp_stateless_resets_per_sec: 0,
         ..Default::default()
     };
     let c = udp_config(&on, None, &plain, None);
     assert_eq!((c.max_handshakes_per_source, c.migration), (Some(3), true));
     assert_eq!(c.handshakes_per_sec, Some(0));
+    assert_eq!(c.stateless_resets_per_sec, 0, "B5b: resets off");
+    assert!(c.reset_key.is_none(), "no key: derived per door");
     let def = Config::default();
     let c = udp_config(&def, None, &plain, None);
     assert_eq!((c.max_handshakes_per_source, c.migration), (None, false));
     assert_eq!(c.handshakes_per_sec, Some(1000));
+    assert_eq!(c.stateless_resets_per_sec, 10_000);
+    let s = udp_config(&def, None, &sealed, None);
+    assert!(s.migration, "sealed: on");
     assert!(
-        udp_config(&def, None, &sealed, None).migration,
-        "sealed: on"
+        s.reset_key.is_some(),
+        "the configured reset key reaches the door"
     );
     let off = Config {
         udp_migration: Some(false),

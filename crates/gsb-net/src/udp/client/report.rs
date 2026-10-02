@@ -32,6 +32,11 @@ pub struct UdpClientConfig {
     /// default): a plaintext client, for a door whose `udp_security` is
     /// `"plaintext"` (dev/LAN) — a sealed door refuses it.
     pub server_key: Option<[u8; crate::seal::KEY_LEN]>,
+    /// When a sealed session's client → server key moves to its next
+    /// generation (B5b; module `crate::udp::sealed`). Default
+    /// [`RekeyPolicy::default`]; the server rekeys its own direction
+    /// under its own policy.
+    pub rekey: RekeyPolicy,
 }
 
 impl Default for UdpClientConfig {
@@ -40,6 +45,7 @@ impl Default for UdpClientConfig {
             game_reports: true,
             migration: true,
             server_key: None,
+            rekey: RekeyPolicy::default(),
         }
     }
 }

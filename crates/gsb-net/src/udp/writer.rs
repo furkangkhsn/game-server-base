@@ -84,9 +84,9 @@ pub(super) struct UdpWriter {
     path_changes: u64,
     path_resets: u64,
     /// The record layer's send half on a sealed door (B5a, module
-    /// `seal`): every datagram to the peer is sealed by it. `None`: a
-    /// plaintext door.
-    sealer: Option<crate::seal::Sealer>,
+    /// `seal`; its key phases, B5b): every datagram to the peer is sealed
+    /// by it. `None`: a plaintext door.
+    sealer: Option<crate::udp::sealed::SendHalf>,
     /// The sealer's counter ran out (2^62): the session ends at the next
     /// turn of the loop (`udp_sessions_ended_seal_limit`).
     seal_exhausted: bool,

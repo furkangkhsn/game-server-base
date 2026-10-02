@@ -18,7 +18,7 @@ pub(super) fn sealed_demux(
     d.migration = true;
     let key = Arc::new(StaticKey::generate().expect("a key"));
     let public = key.public();
-    d.seal = Some(DoorSeal::new(key, per_sec).expect("entropy"));
+    d.seal = Some(DoorSeal::new(key, per_sec));
     (d, end_rx, public)
 }
 
@@ -205,4 +205,5 @@ mod budget;
 mod cost;
 mod handshake;
 mod records;
+mod reset;
 mod rule;
