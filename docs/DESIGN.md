@@ -3837,7 +3837,8 @@ Bir rapor, toplayıcının her üreticiden aldığı SON örnektir; shard
 aktörleri örneklerini birbirinden bağımsız gönderir (her biri kendi
 adımının sonunda, `metrics_every` adımda bir) ve toplayıcı kendi
 tick'inde yayar. Rapor bu yüzden aynı turun örnekleri ARASINA düşebilir:
-bazı satırlar `k` turu, diğerleri hâlâ `k − 1`. Her satır kendi shard'ı
+bazı satırlar `k` turu, diğerleri hâlâ `k − 1` (toplayıcı bunu artık
+bekleyerek önler — aşağıda "Toplayıcı uçuştaki turu bekler (F29)"). Her satır kendi shard'ı
 için kendi örnek tick'inde kesindir; toplamları ise odanın HİÇBİR
 anı değildir — iki tur arasında eski-turlu bir shard'dan yeni-turlu
 birine göçen oyuncu iki satırda birden görünür (oda bir fazla okur),
@@ -3864,9 +3865,10 @@ kendisidir (RESULT'un `shards=`'ı; `print_report` onu
 `peak_population`/`steady_span`/`steady_end`/`has_populated_cut`'a
 verir). Ve **boş odanın kesiti nüfus değildir** (B52): ilk girişten
 önce ve son ayrılıştan sonra kimse göçmez, shard'lar kolayca hizalanır;
-oyuncular içerideyken ise her rapor yırtık olabilir — toplayıcı,
+oyuncular içerideyken ise her rapor yırtık olabiliyordu — toplayıcı,
 shard'ların örneklediği ticker'ın aynısında ve aynı saniyelik periyotla
-yayar, yükte yayını onların turunu böler. Tek kesitleri kimseyi
+yayar, yükte yayını onların turunu bölüyordu (F29 bunu toplayıcıda
+kapattı, aşağıda; kural, kesiti olmayan koşular için durur). Tek kesitleri kimseyi
 tutmayan bir koşunun nüfusunun kesiti yoktur: kesitsiz koşu gibi yırtık
 geri düşüşle okunur (ve insan-okunur blok `(torn: …)` der). Eskiden bu
 boş kesitler koşunun tek nüfusuydu: yükte `loadgen_orchestrates_the_mmo`
@@ -3892,6 +3894,42 @@ başına el değiştirme) ve `loadgen::report::spread::tests` (gerçek bir
 başarısız koşunun rapor akışı, satır satır; eksik satırlı rapor, B45;
 tepeye eşit yırtık/eksik raporun pencere sonu olamaması, B46; yalnız
 boş kesitli koşunun rapor akışı, B52).
+
+**Toplayıcı uçuştaki turu bekler (F29).** Yırtılmanın kaynağı
+toplayıcının kendisiydi: shard'larla aynı ticker'a abone, raporu
+düştüğü tick'te boşaltıp yayıyordu; shard'lar aynı tick'te, her biri
+kendi görevinde örnekliyor. Rapor shard'ların örnek tick'ine denk
+gelince boşaltma turun ortasına düşüyordu. Ölçüm (F29; `taskset -c 0,1`
++ `yes` yükü ve yüksüz, 4 shard'lı MMO): orkestre koşuda oyunculu
+raporların %2,8'i (5/181), ayrık sunucuda %1'i (2/211) yırtıktı;
+sunucu çocuğunun odası toplayıcıyla aynı anda kurulunca ilk raporların
+fazı turla çakışıyor (B52'nin kısa koşuları), shard'lar hızının altına
+düşünce fazları raporunkinin üstünden kayıyor. Şimdi düşen rapor, bir
+sharded odanın CANLI satırları `lagged_ticks`'te anlaşıp `steps`'te
+ayrışıyorsa (uçuşta bir tur: kimi shard `k`'yı gönderdi, kimi aynı
+tick'i hâlâ adımlıyor) bekler; boşaltma sonraki her tick'te yinelenir,
+rapor satırları hizalı bulan ilk tick'te çıkar — normalde bir sonraki
+tick. Bekleme düştüğü andan `metrics::CUT_GRACE` (250 ms; periyodun
+yarısıyla sınırlı, `MetricsCollector::with_cut_grace`) ile sınırlıdır:
+ölmüş ya da takılmış bir shard raporları tutamaz; sınırda rapor eskisi
+gibi yırtık çıkar (tüketici onu her zamanki gibi `(steps,
+lagged_ticks)` ayrılığından tanır; `debug` satırı). Sonraki rapor,
+çıkanın bir periyot sonrasına düşer: bekleme yayını turun hemen
+arkasına taşır, sonrakiler beklemeden kesittir. Beklemenin
+iyileştiremeyeceği ayrılık beklenmez: `lagged_ticks`'te ayrışan
+satırlar (eşit olmayan `Lagged`) bir daha hizalanmaz (F20), tek oda
+tek satırdır, duran odanın / ölü shard'ın kalan satırları
+(`RoomFinal`, `RoomEndedUncounted` — her shard kendi adımında donar)
+sorulmaz. Shard satırının odası kimlikten okunur (`room << 16 |
+index`'in tersi; `1 << 16` altı tek odadır). Sonra: aynı yükte yırtık
+oranı orkestre koşuda 0/182, ayrık sunucuda 0/92. Bedeli: `/metrics`
+anlık görüntüsü ve log satırları, uçuşta tur varken periyot sınırından
+bir tick (en çok `CUT_GRACE`) sonra yenilenir; raporun biçimi, metrik
+adları, tel baytları değişmedi. Toplayıcının takvimi artık tick
+saatinde (`ticker::now`: üretimde duvar saati, duraklatılmış testte
+sanal saat — kilit testler `metrics::tests::cut`, paused saat). Eksik
+satır (henüz ilk örneğini göndermemiş shard, B45) beklenmez: toplayıcı
+odanın shard sayısını bilmez.
 
 **Katlanmış histogramın nüfusu `steps` DEĞİLDİR.** `steps` MAX ile,
 iki histogram SUM ile katlandığı için katlamadan sonra aynı şeyi

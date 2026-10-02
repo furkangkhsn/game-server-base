@@ -117,7 +117,7 @@ mod tests;
 
 pub use accumulator::MetricAccumulator;
 pub use closes::ServerCloses;
-pub use collector::{FINAL_REPORT_GRACE, MetricSink, MetricsCollector};
+pub use collector::{CUT_GRACE, FINAL_REPORT_GRACE, MetricSink, MetricsCollector};
 pub use export::Exporter;
 #[cfg(feature = "otlp")]
 pub use export::otlp;

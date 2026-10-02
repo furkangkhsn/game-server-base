@@ -37,11 +37,12 @@
 //!
 //! And a cut of the EMPTY room is no population (B52). Before the first
 //! join and after the last leave nothing migrates and the shards line up
-//! easily; while the players are in, every report can be torn (the
-//! collector emits on the same ticker, at the same once-a-second period,
-//! as the shards sample, so under load its emit splits their round). A
-//! run whose only cuts hold nobody has no cut of its population: it is
-//! read from the torn fallback, like a run without any cut.
+//! easily; while the players are in, a report can be torn (before F29
+//! the collector's emit could split the shards' round; it now waits for
+//! the round, bounded by `gsb_core::metrics::CUT_GRACE`, so a stalled
+//! shard or an uneven `Lagged` still tears it). A run whose only cuts
+//! hold nobody has no cut of its population: it is read from the torn
+//! fallback, like a run without any cut.
 
 use gsb_core::metrics::MetricReport;
 

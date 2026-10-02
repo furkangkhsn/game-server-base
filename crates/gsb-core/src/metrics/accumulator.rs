@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use crate::id::{ConnectionId, RoomId};
 use crate::metrics::*;
 
+mod cut;
 mod report;
 
 /// How many report windows a destroyed room lingers after its

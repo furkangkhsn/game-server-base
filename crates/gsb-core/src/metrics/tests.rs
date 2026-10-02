@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 #[cfg(feature = "prometheus")]
 mod closes;
 mod collector;
+mod cut;
 mod export;
 mod final_report;
 #[cfg(feature = "prometheus")]

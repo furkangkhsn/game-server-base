@@ -1,6 +1,8 @@
 //! The collector task: one owner of the accumulator, one awaited
 //! source at a time (the ticker while the server runs, then its event
-//! channel while it stops — `closing`), publishing on a period.
+//! channel while it stops — `closing`), publishing on a period — a
+//! period's report waiting, bounded, for a sharded room's round in
+//! flight to land (`cut`).
 
 use std::time::{Duration, Instant};
 
@@ -11,6 +13,8 @@ use crate::ticker::TickInfo;
 
 mod closing;
 pub use closing::FINAL_REPORT_GRACE;
+mod cut;
+pub use cut::CUT_GRACE;
 
 /// Where reports go. All sinks are message-passing: the collector never
 /// shares its accumulator.
@@ -40,7 +44,11 @@ pub enum MetricSink {
 /// the server runs, that source is a subscription to the global ticker's
 /// broadcast (the same channel the rooms use): on each tick it drains its
 /// event channels with `try_recv` (synchronous) and, at most once per
-/// `period`, emits a report through its sink. When the ticker closes
+/// `period`, emits a report through its sink — on the first tick after
+/// the report fell due that finds no sharded room's round in flight, or
+/// at [`CUT_GRACE`] (BACKLOG F29, see `cut`). The schedule runs on the
+/// tick clock (`crate::ticker::now`: the wall clock in production, the
+/// virtual one under a paused test runtime). When the ticker closes
 /// (shutdown) the rooms and connections are only starting their own ends,
 /// so the collector then awaits its event channel instead, folding every
 /// last word (a room's `RoomFinal`, a connection's final sample) until
@@ -65,7 +73,11 @@ pub struct MetricsCollector {
     /// in this order, before the sink consumes it.
     exporters: Vec<Box<dyn Exporter>>,
     period: Duration,
+    /// When the next periodic report falls due, on the tick clock.
     next_report: Instant,
+    /// How long a due report waits, at most, for a sharded room's round
+    /// in flight (see `cut`).
+    cut_grace: Duration,
     /// How long the final report waits for the producers after the ticker
     /// closed (see `closing`).
     final_grace: Duration,
@@ -86,7 +98,8 @@ impl MetricsCollector {
             sink,
             exporters: Vec::new(),
             period,
-            next_report: Instant::now() + period,
+            next_report: crate::ticker::now() + period,
+            cut_grace: CUT_GRACE,
             final_grace: FINAL_REPORT_GRACE,
         }
     }
@@ -108,6 +121,14 @@ impl MetricsCollector {
     /// [`FINAL_REPORT_GRACE`]; see `closing`).
     pub fn with_final_grace(mut self, grace: Duration) -> Self {
         self.final_grace = grace;
+        self
+    }
+
+    /// Bound a due report's wait for a sharded room's round in flight
+    /// (default [`CUT_GRACE`], capped at half the period; `Duration::ZERO`
+    /// never waits; see `cut`).
+    pub fn with_cut_grace(mut self, grace: Duration) -> Self {
+        self.cut_grace = grace;
         self
     }
 
@@ -133,13 +154,13 @@ impl MetricsCollector {
                 self.ticks.recv().await,
                 Err(broadcast::error::RecvError::Closed)
             );
-            let now = Instant::now();
+            let now = crate::ticker::now();
             while let Ok(ev) = self.rx.try_recv() {
                 self.acc.apply(ev);
             }
             self.drain_transport();
-            if now >= self.next_report {
-                self.emit(now);
+            if now >= self.next_report && self.ready_to_emit(now) {
+                self.emit(Instant::now());
                 self.next_report = now + self.period;
             }
             if closed {
