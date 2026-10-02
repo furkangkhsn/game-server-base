@@ -18,8 +18,11 @@ pub mod mmo;
 pub mod war;
 
 mod drive;
+mod ops;
 #[allow(unused_imports)] // each suite uses its own subset
 pub use drive::{config_file, eventually, hold};
+#[allow(unused_imports)] // each suite uses its own subset
+pub use ops::{http, metric_sum, until_metric};
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;

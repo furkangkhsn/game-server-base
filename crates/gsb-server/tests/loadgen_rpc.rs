@@ -7,10 +7,22 @@
 use std::collections::HashMap;
 use std::process::{Command, Output};
 
-/// Run the real `gsb-loadgen` with `args`.
+/// Run the real `gsb-loadgen` with `args`, the server's idle window off.
+///
+/// Why off: every session here is ended by its client (the ledger's
+/// connection terms are asserted 0), and the window could only misfire.
+/// The in-process server and its clients share one process, and a stall
+/// of that process longer than the window (30 s — swap, a machine
+/// running two full gates) wakes every pump with its idle deadline due:
+/// all four sessions closed as idle, every leave lost — the
+/// `left=0 server_close_idle_timeout=4` of A7's last run (BACKLOG F52;
+/// reproduced every time by freezing the loadgen 3 s against a 2 s
+/// window). The window itself is tested where it is the claim (e2e,
+/// the pump's tests).
 fn loadgen(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_gsb-loadgen"))
         .args(args)
+        .args(["--idle-timeout-secs", "0"])
         .env("RUST_BACKTRACE", "1")
         .output()
         .expect("spawning gsb-loadgen")

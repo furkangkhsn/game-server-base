@@ -8,7 +8,6 @@
 mod common;
 mod hosted;
 
-use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use gsb_demo_mmo::components::Kind;
@@ -16,20 +15,9 @@ use gsb_demo_mmo::mmo;
 use gsb_demo_mmo::{MobSpawn, Pos3, Realm};
 use gsb_server::games::mmo::MmoModule;
 use hosted::mmo::{MmoView, dm, ground};
-use hosted::{Client, Door, eventually, hold};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use hosted::{Client, Door, eventually, hold, http, until_metric};
 
 type Mmo = Client<MmoView>;
-
-/// One raw ops-surface request; returns the response text.
-async fn http(addr: SocketAddr, request: &str) -> String {
-    let mut s = TcpStream::connect(addr).await.expect("ops listener");
-    s.write_all(request.as_bytes()).await.expect("request");
-    let mut buf = Vec::new();
-    s.read_to_end(&mut buf).await.expect("response");
-    String::from_utf8_lossy(&buf).into_owned()
-}
 
 /// Two pre-created MMO rooms and a third opened at runtime are three
 /// separate worlds: each has its own four shards (a player in one never
@@ -149,9 +137,25 @@ async fn a_runtime_room_gets_the_server_ceiling() {
         gone >= Duration::from_millis(900),
         "the grace is not shortened: {gone:?}"
     );
-    assert!(
-        gone < Duration::from_millis(3_500),
-        "held past the 1 s ceiling (the combat window is 6 s): {gone:?}"
+    // The ceiling, not the end of the combat window (6 s after the hit),
+    // ended the hold: the room counts a hold it forced over a standing
+    // veto. Read from the room's own counter, not from "gone within
+    // 3.5 s" — a starved server is slower to notice the drop and to
+    // show the logout, without the ceiling being any later (BACKLOG F52).
+    let forced = until_metric(
+        ops,
+        "gsb_room_detach_forced_total",
+        2,
+        Duration::from_secs(10),
+        "a hold the ceiling forced, counted (none: the hold ended without \
+         overriding the combat veto)",
+        |n| n > 0.0,
+    )
+    .await;
+    assert_eq!(
+        forced, 1.0,
+        "held past the 1 s ceiling (the combat window is 6 s): the ceiling \
+         forced exactly this one hold"
     );
     handle.stop().await;
 }

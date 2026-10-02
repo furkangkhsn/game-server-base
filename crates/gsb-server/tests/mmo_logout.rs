@@ -17,7 +17,7 @@ use gsb_demo_mmo::mmo;
 use gsb_demo_mmo::{MobSpawn, Pos3, Realm};
 use gsb_server::games::mmo::MmoModule;
 use hosted::mmo::{MmoView, dm, ground};
-use hosted::{Client, Door, config_file, eventually, hold};
+use hosted::{Client, Door, config_file, eventually, hold, until_metric};
 
 type Mmo = Client<MmoView>;
 
@@ -139,8 +139,10 @@ async fn the_server_ceiling_bounds_the_combat_hold() {
         toml::from_str("max_detach_hold_secs = 1").expect("the key parses");
     let handle = start_with(realm, "[mmo]\nlogout_grace_secs = 1", |cfg| {
         cfg.max_detach_hold = ceiling.max_detach_hold;
+        cfg.http_listen = "127.0.0.1:0".into();
     })
     .await;
+    let ops = handle.http_addr.expect("ops surface");
     let mut p = join(handle.addr, "fighter").await;
     let mut o = join(handle.addr, "observer").await;
     let ip = p.entity;
@@ -178,9 +180,25 @@ async fn the_server_ceiling_bounds_the_combat_hold() {
         gone >= Duration::from_millis(900),
         "the grace is not shortened: {gone:?}"
     );
-    assert!(
-        gone < Duration::from_millis(3_500),
-        "held past the 1 s ceiling (the combat window is 6 s): {gone:?}"
+    // The ceiling, not the end of the combat window (6 s after the hit),
+    // ended the hold: the room counts a hold it forced over a standing
+    // veto. Read from the room's own counter, not from "gone within
+    // 3.5 s" — a starved server is slower to notice the drop and to
+    // show the logout, without the ceiling being any later (BACKLOG F52).
+    let forced = until_metric(
+        ops,
+        "gsb_room_detach_forced_total",
+        1,
+        Duration::from_secs(10),
+        "a hold the ceiling forced, counted (none: the hold ended without \
+         overriding the combat veto)",
+        |n| n > 0.0,
+    )
+    .await;
+    assert_eq!(
+        forced, 1.0,
+        "held past the 1 s ceiling (the combat window is 6 s): the ceiling \
+         forced exactly this one hold"
     );
     let deadline = Instant::now() + Duration::from_secs(5);
     while members(&handle).await != 1 {

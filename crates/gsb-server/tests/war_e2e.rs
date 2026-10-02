@@ -12,7 +12,7 @@
 mod common;
 mod hosted;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gsb_demo_war::realm::faction_of;
 use gsb_demo_war::war::Kind;
@@ -21,7 +21,7 @@ use gsb_demo_war::{Pos3, Realm};
 use gsb_kit::team::Team;
 use gsb_server::games::war::WarModule;
 use hosted::war::WarView;
-use hosted::{Client, Door, eventually, hold};
+use hosted::{Client, Door, eventually, hold, until_metric};
 
 type War = Client<WarView>;
 
@@ -159,9 +159,18 @@ async fn allies_map_wide_and_an_enemy_only_through_a_faction_tower() {
 /// tick, come first) and cuts the player there; the faction-0 player on
 /// shard 3 then sees all four towers but not that ally. Under the
 /// default budget it sees both.
+///
+/// The default's "sees both" is a condition, waited for (it used to be
+/// read after a fixed 500 ms, which a starved run could spend before the
+/// ally's export arrived). The cut is a silence, so its window must be
+/// one the run really lived through: both shards demonstrably ticked in
+/// it (each player's numbered move acked, shard 0's first — the ally's
+/// unit would ride its exports) and at least 500 ms (≈ 15 ticks of
+/// relay) passed; a starved run waits longer for that, it does not pass
+/// on an empty window (BACKLOG F52).
 #[tokio::test]
 async fn the_war_table_budget_reaches_the_shards() {
-    async fn view_of_the_far_ally(budget: Option<u32>) -> (usize, bool) {
+    async fn start(budget: Option<u32>) -> (gsb_server::ServerHandle, War, War) {
         let realm = Realm::empty()
             .with_login("a0", Team(0), Pos3::ground(-100.0, -600.0))
             .with_login("b0", Team(0), Pos3::ground(650.0, 150.0));
@@ -173,26 +182,66 @@ async fn the_war_table_budget_reaches_the_shards() {
         let handle = gsb_server::start_game_server(Box::new(WarModule::with_realm(realm)), cfg)
             .await
             .expect("the war starts");
-        let mut a = join(handle.addr, "a0").await;
-        let mut b = join(handle.addr, "b0").await;
-        let ia = a.entity;
-        let mut both = [&mut a, &mut b];
-        eventually(&mut both, Duration::from_secs(10), "four towers", |cs| {
-            cs[1].view.of_kind(Kind::Tower).len() == 4
-        })
-        .await;
-        hold(&mut both, Duration::from_millis(500), |_| {}).await;
-        let seen = (b.view.of_kind(Kind::Tower).len(), b.sees(ia));
-        handle.stop().await;
-        seen
+        let a = join(handle.addr, "a0").await;
+        let b = join(handle.addr, "b0").await;
+        (handle, a, b)
     }
-    assert_eq!(view_of_the_far_ally(Some(1)).await, (4, false), "cut");
-    assert_eq!(view_of_the_far_ally(None).await, (4, true), "the default");
+    fn towers(c: &War) -> usize {
+        c.view.of_kind(Kind::Tower).len()
+    }
+
+    // The default budget: the far ally comes into view with the towers.
+    let (handle, mut a, mut b) = start(None).await;
+    let ia = a.entity;
+    eventually(
+        &mut [&mut a, &mut b],
+        Duration::from_secs(10),
+        "four towers and the far ally (the default)",
+        |cs| towers(cs[1]) == 4 && cs[1].sees(ia),
+    )
+    .await;
+    handle.stop().await;
+
+    // One record per faction per tick: the ally is cut, the towers are not.
+    let (handle, mut a, mut b) = start(Some(1)).await;
+    let ia = a.entity;
+    let mut both = [&mut a, &mut b];
+    eventually(&mut both, Duration::from_secs(10), "four towers", |cs| {
+        towers(cs[1]) == 4
+    })
+    .await;
+    let opened = Instant::now();
+    both[0].move_to(-100.0, -600.0, 1).await;
+    eventually(&mut both, Duration::from_secs(10), "shard 0 ticked", |cs| {
+        assert!(!cs[1].sees(ia), "cut");
+        cs[0].view.acks.last() == Some(&1)
+    })
+    .await;
+    both[1].move_to(650.0, 150.0, 1).await;
+    eventually(
+        &mut both,
+        Duration::from_secs(10),
+        "shard 3 ticked after it, and 500 ms passed",
+        |cs| {
+            assert!(!cs[1].sees(ia), "cut");
+            cs[1].view.acks.last() == Some(&1) && opened.elapsed() >= Duration::from_millis(500)
+        },
+    )
+    .await;
+    assert_eq!(towers(&b), 4, "the towers are not cut");
+    handle.stop().await;
 }
 
 /// `[war] disconnect_grace_secs` reaches the shards: at 0 a dropped
 /// player's unit leaves at once (its far ally loses it); under the
 /// default grace it stays parked in the world (and in the ally's view).
+///
+/// "Leaves" is a condition, waited for. "Stays" is read only once the
+/// server has PARKED the unit (the room's `gsb_room_detached` gauge) and
+/// a second after that: a fixed second after the client's drop was a
+/// window a starved server could spend before it even saw the drop — a
+/// pass on nothing — or, for the zero grace, before it removed the unit
+/// (BACKLOG F52).
 #[tokio::test]
 async fn the_war_table_grace_reaches_the_shards() {
     async fn ally_after_a_drop(grace: Option<f64>) -> bool {
@@ -204,11 +253,14 @@ async fn the_war_table_grace_reaches_the_shards() {
         });
         let cfg = hosted::config_file(
             "war-grace",
-            &format!("game = \"war\"\nbind = \"127.0.0.1:0\"\n{table}"),
+            &format!(
+                "game = \"war\"\nbind = \"127.0.0.1:0\"\nhttp_listen = \"127.0.0.1:0\"\n{table}"
+            ),
         );
         let handle = gsb_server::start_game_server(Box::new(WarModule::with_realm(realm)), cfg)
             .await
             .expect("the war starts");
+        let ops = handle.http_addr.expect("ops surface");
         let a = join(handle.addr, "a0").await;
         let mut b = join(handle.addr, "b0").await;
         let ia = a.entity;
@@ -217,8 +269,28 @@ async fn the_war_table_grace_reaches_the_shards() {
         })
         .await;
         drop(a); // the transport dies
-        hold(&mut [&mut b], Duration::from_secs(1), |_| {}).await;
-        let still = b.sees(ia);
+        let still = if grace == Some(0.0) {
+            eventually(
+                &mut [&mut b],
+                Duration::from_secs(10),
+                "the unit leaves",
+                |cs| !cs[0].sees(ia),
+            )
+            .await;
+            false
+        } else {
+            until_metric(
+                ops,
+                "gsb_room_detached",
+                1,
+                Duration::from_secs(10),
+                "the server parks the unit",
+                |n| n >= 1.0,
+            )
+            .await;
+            hold(&mut [&mut b], Duration::from_secs(1), |_| {}).await;
+            b.sees(ia)
+        };
         handle.stop().await;
         still
     }

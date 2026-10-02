@@ -407,7 +407,15 @@ async fn idle_connection_is_closed(kind: Kind) {
 /// never make a live client look idle. This client heartbeats four times
 /// faster than the throttle answers and is still never closed — while the
 /// ack count stays at the throttled rate, not the send rate.
+///
+/// The client never waits past its next heartbeat (the receive is bounded
+/// by it — a 500 ms receive used to stretch a gap to ~750 ms of the 1 s
+/// window), and it measures its own largest gap between two sends: a
+/// close after a gap of a whole window is the window working on a client
+/// that WAS silent that long (a stalled run), reported as an inconclusive
+/// run, not as a server fault (BACKLOG F52).
 async fn active_heartbeat_survives(kind: Kind) {
+    const WINDOW: Duration = Duration::from_secs(1);
     let handle = gsb_server::start_server(cfg_on(kind.clone(), Some(1.0), None, None))
         .await
         .expect("server starts");
@@ -424,6 +432,19 @@ async fn active_heartbeat_survives(kind: Kind) {
     let t0 = Instant::now();
     let mut acks = 0u64;
     let mut next_hb = t0;
+    let (mut last_sent, mut max_gap) = (t0, Duration::ZERO);
+    // A server close of this session: the transport's end, or (rUDP,
+    // which has no EOF) the server's own close notice.
+    fn closed(max_gap: Duration, last_sent: Instant) -> ! {
+        let gap = max_gap.max(last_sent.elapsed());
+        if gap >= WINDOW {
+            panic!(
+                "inconclusive run: the client itself sent nothing for {gap:?} \
+                 (the window is {WINDOW:?}) — a stalled run, not an idle-window fault"
+            );
+        }
+        panic!("server closed an active connection (largest send gap {gap:?})");
+    }
     loop {
         let elapsed = t0.elapsed();
         if elapsed >= Duration::from_millis(5000) {
@@ -432,19 +453,33 @@ async fn active_heartbeat_survives(kind: Kind) {
         if Instant::now() >= next_hb {
             next_hb += Duration::from_millis(250);
             let hb = Heartbeat { tick: acks }.encode_to_vec();
-            client
+            if client
                 .write_frame(gsb_protocol::op::base::HEARTBEAT, &hb)
                 .await
-                .expect("socket alive");
+                .is_err()
+            {
+                closed(max_gap, last_sent); // the server closed the socket
+            }
+            let now = Instant::now();
+            max_gap = max_gap.max(now - last_sent);
+            last_sent = now;
         }
-        match client.recv(Duration::from_millis(500)).await.unwrap() {
+        let wait = next_hb
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        match client.recv(wait).await.unwrap() {
             Recv::Frame((op, payload)) => {
                 if op == gsb_protocol::op::base::HEARTBEAT_ACK {
                     let _m: HeartbeatAck = HeartbeatAck::decode(&payload[..]).unwrap();
                     acks += 1;
                 }
+                if op == gsb_protocol::op::base::ERROR {
+                    let m: Error = Error::decode(&payload[..]).unwrap();
+                    assert_eq!(m.code, 9, "only a close could be sent: {m:?}");
+                    closed(max_gap, last_sent);
+                }
             }
-            Recv::Closed => panic!("server closed an active connection"),
+            Recv::Closed => closed(max_gap, last_sent),
             Recv::TimedOut => {} // quiet window: no ack this round
         }
     }
@@ -693,8 +728,27 @@ async fn flooder_drops_attributed(kind: Kind) {
         joined = op == gsb_protocol::op::base::JOIN_ROOM_RESULT;
     }
 
+    // The flood runs at least 3 s AND until a metrics report has caught
+    // the flooder live (a non-empty `actions_dropped_top`): the collector
+    // reports once a period, and a starved one fitted no such report into
+    // a fixed 3 s (BACKLOG F52). 30 s only bounds a hang.
     let flood_start = Instant::now();
-    let fdeadline = flood_start + Duration::from_secs(3);
+    let mut rep_rx = rep_rx;
+    let mut reports = Vec::new();
+    let mut flooding = |reports: &mut Vec<_>| {
+        while let Ok(r) = rep_rx.try_recv() {
+            reports.push(r);
+        }
+        let caught = reports
+            .iter()
+            .any(|r: &gsb_core::metrics::MetricReport| !r.actions_dropped_top.is_empty());
+        let t = flood_start.elapsed();
+        assert!(
+            t < Duration::from_secs(30) || caught,
+            "no report caught the flooder live in {t:?}"
+        );
+        t < Duration::from_secs(3) || !caught
+    };
     // TCP/TLS: a DEDICATED tight-write task (no read pacing — interleaving
     // reads would slow the flood below the room's 480/s pull budget); the
     // rustls stream splits exactly like the TCP socket does.
@@ -706,23 +760,28 @@ async fn flooder_drops_attributed(kind: Kind) {
     match client.0.into_split() {
         Ok((mut r, mut w)) => {
             let mf = gsb_client::frame::encode(gsb_demo::op::MOVE_TO, &move_payload);
-            let flood = tokio::spawn(async move {
-                while Instant::now() < fdeadline {
-                    if w.get_mut().write_all(&mf).await.is_err() {
-                        break; // peer gone
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flood = tokio::spawn({
+                let stop = Arc::clone(&stop);
+                async move {
+                    while !stop.load(Ordering::Relaxed) {
+                        if w.get_mut().write_all(&mf).await.is_err() {
+                            break; // peer gone
+                        }
                     }
                 }
             });
-            while flood_start.elapsed() < Duration::from_secs(3) {
+            while flooding(&mut reports) {
                 let _ = tokio::time::timeout(Duration::from_millis(200), r.next()).await;
             }
+            stop.store(true, Ordering::Relaxed);
             flood.await.expect("flood task exits");
         }
         Err(udp) => {
             let Conn::Udp(mut c) = *udp else {
                 unreachable!("only rUDP has no halves")
             };
-            while Instant::now() < fdeadline {
+            while flooding(&mut reports) {
                 c.send_frame(gsb_demo::op::MOVE_TO, move_payload.clone())
                     .await
                     .unwrap();
@@ -733,12 +792,10 @@ async fn flooder_drops_attributed(kind: Kind) {
     }
 
     // Stop the server: the collector's final flush lands during shutdown,
-    // and its sender drop then closes the channel — `recv` drains until
-    // the last report is out.
+    // and its sender drop then closes the channel — the rest of the
+    // reports, to the last one.
     handle.stop().await;
-    let mut rx = rep_rx;
-    let mut reports = Vec::new();
-    while let Some(r) = rx.recv().await {
+    while let Some(r) = rep_rx.recv().await {
         reports.push(r);
     }
     let last = reports.last().expect("at least one metric report");

@@ -79,20 +79,38 @@ where
 
 /// Liveness, honest branch: BEFORE the collector's first real emission the
 /// watch carries the back-dated placeholder, so `/healthz` must answer 503
-/// naming staleness — never ok from a report nobody produced. The probe
-/// fires immediately after startup, comfortably inside the ~1 period
-/// window before the first real report.
+/// naming staleness — never ok from a report nobody produced.
+///
+/// "Before the first report" is proven, not hoped for: the collector's
+/// first report is due one report period (1 s) after it was built, which
+/// is after `t0`, so an answer read less than a period after `t0` was
+/// served before any report existed. A run whose start and probe took a
+/// whole period (a starved one) proves nothing either way: it is
+/// repeated, and the claim is checked, unchanged, on the first run that
+/// is evidence — a conclusive run that answers 200 fails at once
+/// (BACKLOG F52; the F30 pattern, not "retry until green").
 #[tokio::test]
 async fn healthz_answers_503_before_the_first_report() {
-    let handle = start_with_http().await;
-    let addr = handle.http_addr.expect("ops addr");
-    let (status, text) = raw_request(addr, "GET /healthz HTTP/1.1\r\n\r\n").await;
-    assert_eq!(status, 503, "pre-first-report healthz must be 503: {text}");
-    assert!(
-        body_of(&text).contains("stale"),
-        "the reason names staleness: {text}"
-    );
-    handle.stop().await;
+    const REPORT_PERIOD: Duration = Duration::from_secs(1);
+    for attempt in 1..=10 {
+        let t0 = Instant::now();
+        let handle = start_with_http().await;
+        let addr = handle.http_addr.expect("ops addr");
+        let (status, text) = raw_request(addr, "GET /healthz HTTP/1.1\r\n\r\n").await;
+        let took = t0.elapsed();
+        handle.stop().await;
+        if took >= REPORT_PERIOD {
+            eprintln!("attempt {attempt}: start and probe took {took:?}, inconclusive");
+            continue;
+        }
+        assert_eq!(status, 503, "pre-first-report healthz must be 503: {text}");
+        assert!(
+            body_of(&text).contains("stale"),
+            "the reason names staleness: {text}"
+        );
+        return;
+    }
+    panic!("no conclusive run: every start-and-probe took a whole report period");
 }
 
 /// Liveness, ok branch (OPS §4 item 1): while the ticker runs, `/healthz`

@@ -110,12 +110,18 @@ async fn the_ticket_player_picks_the_character_not_the_claimed_name() {
 /// (same wire id, where she stood — not at her save), and it plays. Once
 /// a later drop has logged her out, a new session is a fresh join the
 /// router sends back to her save on shard 1.
+///
+/// The logout timer is the deadline her reconnect must beat (drop, 300 ms,
+/// a whole new connect-auth-join): 5 s, not 1 s — a starved run's
+/// reconnect can take a second, and then she was logged out and the
+/// "resume" was a fresh join (BACKLOG F52). The logout is waited for as a
+/// condition; its bound is only a hang guard.
 #[tokio::test]
 async fn a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save() {
     let realm = Realm::empty()
         .with_login("ann", Pos3::new(200.0, 0.0, -200.0)) // shard 1
         .with_login("obs", Pos3::new(-240.0, 0.0, 256.0)); // shard 2, by waystone 2
-    let handle = start(realm, "[mmo]\nlogout_grace_secs = 1", false).await;
+    let handle = start(realm, "[mmo]\nlogout_grace_secs = 5", false).await;
     let join = |name: &'static str| Client::join(&Door::Tcp, handle.addr, name, 1);
     let mut ann: Mmo = join("ann").await;
     let mut obs: Mmo = join("obs").await;
@@ -156,7 +162,7 @@ async fn a_resume_lands_on_the_parked_character_and_a_logout_returns_to_the_save
     drop(ann);
     eventually(
         &mut [&mut obs],
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         "ann logs out after the grace",
         |cs| cs[0].sees(id).is_none(),
     )
