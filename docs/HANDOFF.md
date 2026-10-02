@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1676 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1679 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -196,6 +196,17 @@ notice'i). Açık: F66–F69.
 saatinde (`ticker::now`). Ölçüm: orkestre MMO'da yırtık 5/181 → 0/182.
 Üst düzey ret artık `at <yol>:<satır>` der (`Config::origin`, opak
 `ConfigOrigin`). Açık: F70, F71.
+
+**t1 tamam** (CHANGELOG "t1"): gerçek saatli test kalıpları CONTRIBUTING
+"Gerçek saatli testler"de (F52 maddeleri); `tests/hosted/ops.rs::until_metric`
+odanın sayacını `/metrics`'ten okur (shard satırları `room << 16 | i`,
+toplanır). Loadgen RESULT'ta `errors_*` anahtarları `errors=`'in hemen
+ardında. `PROTOCOL_WAIT` (5 sn) rUDP'nin `REL_NO_ACK_FATAL`'ına elle
+eşlenir (sabit `udp` modülünde gizli) — o değişirse
+`loadgen/client/wait.rs` de. e2e aktif heartbeat testi 1 sn'den uzun
+süreç donmasında tasarım gereği açık "kanıtsız koşu" mesajıyla düşer.
+Açık: F72 (duvar saatli idle penceresi — karar), F73, F74, F75 (rUDP'nin
+riskli testleri).
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -899,6 +910,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1676 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1679 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

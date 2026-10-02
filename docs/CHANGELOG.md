@@ -5,6 +5,59 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## t1 — F52 + F51 + B88: yükte güvenilir testler, loadgen istemcisinin pencereleri (`test/t1-load-flakes`)
+
+- **Yöntem:** iş parçacığı düzeyinde aç bırakma (`taskset -c 0,1` + 24
+  `yes`; F51 için ayrıca nice 19), süreç dondurma (SIGSTOP/SIGCONT) ve
+  elle sokulan geçici takılma; önce ve sonra aynı yük altında. Altı ajanın
+  paylaştığı makinede yük ortalaması 40–118.
+- **Bağlantı aktörü:** `conn_counts/samples` — flush aralığı aktörün
+  doğuşundan sayılır, ilk karesine geç varan aktör AUTH'ta flush eder; o
+  örnek boşaltılıp toplama katılır (eşitlikler aynı). `heartbeats` ve
+  `security`'nin üç testi "bir ACK, sonra 400 ms sessizlik" yerine çite
+  dek okur (AUTH sonucu, puansız `ERROR`, aktörün sonu); kısma yapısıyla
+  sınanır (en çok `1 + ⌊span / 1 sn⌋` cevap). 1 sn'lik elle takılmada eski
+  testler 0/3, yeniler 3/3.
+- **Registry:** üç satır-bırakma testi paused saatte (eski sharded declined
+  testi 0,3/0,05 sn donmada 10/10 düşüyordu).
+- **gsb-net:** pump'ın idle testi paused saatte (dev-dep `test-util`);
+  `closed_door` kanalın kapanışına dek okur.
+- **Hosted ve e2e:** MMO tavanı `gsb_room_detach_forced_total`'dan (shard
+  satırlarının toplamı) tam 1 olarak okunur (`hosted/ops.rs`; önce 2,5/0,1
+  donmada 0/5, sonra 5/5); war_e2e'nin olumlu iddiaları koşul olarak
+  beklenir, sessizlikleri yaşandığı kanıtlanan pencerede okunur;
+  `mmo_home` çıkış sayacı 5 sn (önce 0/5, sonra 5/5); e2e heartbeat'te
+  pencere boyu susmuş istemcinin kapatılması açık "kanıtsız koşu"; e2e
+  flooder, bir rapor flooder'ı canlı yakalayana dek sürer (önce 3/5,
+  sonra 5/5); healthz 503'te bir periyottan kısa koşu kanıttır.
+- **Loadgen birim testleri:** girdisiz koşu kanıtsızdır, iki katı
+  pencereyle yinelenir (1,0/0,1 donmada önce 0/5, sonra 5/5).
+- **loadgen_rpc (A7'nin `left=0 server_close_idle_timeout=4`'ü):** süreç
+  içi sunucu ve istemciler tek süreç; idle penceresinden uzun takılma her
+  oturumu "boşta" kapatır (loadgen'i 2 sn'lik pencereye karşı 3 sn
+  dondurmak 3/3 üretir). Testler `--idle-timeout-secs 0` ile; oda defteri
+  tam okunur (`+req_rej_conn`); "makul hız" iddiaları en yavaş cevabın
+  istek aralığında kaldığı koşudan.
+- **Loadgen istemcisi (F51, B88):** girdi ve RPC JOIN cevabını bekler; yalnız
+  oturan istemci LEAVE yollar; JOIN cevabı (son tarihten sonra) ve LEAVE
+  cevabı `PROTOCOL_WAIT` = 5 sn beklenir (rUDP'nin `REL_NO_ACK_FATAL`'ı;
+  eski 500 ms bir `MAX_RTO`'nun yarısıydı), istemcinin kendi bekleme
+  süresiyle ölçülür. F35 aç bırakmasında istemci `joined=5 left=3` (bir
+  koşuda `0/0`) yerine `12/12`. `errors` sebebe göre: `errors_not_in_room`,
+  `errors_other_code`, `errors_bad_snapshot`, `errors_bad_private`,
+  `errors_connect_failed`, `errors_empty_frame` (RESULT ve CLIENT
+  satırında; metrik teli değişmedi). Kilit:
+  `client::view::run::tests::join_first` — JOIN cevabını 600 ms tutan
+  sahte eş; girdi kapısını kaldırmak (2 erken girdi) ve RPC takvimini
+  join'den önce başlatmak (12 erken istek) testi düşürür.
+- **Motor değişmedi.**
+
+Testler 1676 → 1679 (`otlp` ile 1694 → 1697). Ebeveyn doğrulaması: tam
+kapılar yeşil; ayrıca bütün `cargo test --workspace` 0–1 çekirdeklerine
+sabit, yanında 24 `yes` ile: 1679'un (o an 1678) hepsi yeşil (14 dk).
+İlk teslimde B88'in girdi kapısı kilitsizdi (mutasyon sağ çıktı) — kilit
+testi ebeveynin isteğiyle eklendi.
+
 ## m1 — F29 toplayıcı uçuştaki shard turunu bekler; F64 üst düzey reddinde `dosya:satır` (`obs/m1-collector-config`)
 
 - **F29 — hata (motor):** toplayıcı shard'larla aynı ticker'a abone, raporu
