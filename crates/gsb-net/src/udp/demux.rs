@@ -20,6 +20,7 @@ mod flush;
 mod handshake;
 mod inbound;
 mod reap;
+mod report;
 mod sweep;
 pub(super) use reap::Reaper;
 #[cfg(test)]
@@ -89,6 +90,8 @@ pub(super) struct Demux {
     reap_wakes: u64,
     acks_piggybacked: u64,
     ack_piggyback_failed: u64,
+    /// Game-band reports the writer's channel refused (full or closed).
+    reports_not_forwarded: u64,
     oversized_in: u64,
     bad_datagrams: u64,
     /// Inbound FRAG datagrams (client→server fragmentation is refused).
@@ -103,7 +106,8 @@ pub(super) struct Demux {
     closed_requests: u64,
     closed_actions: u64,
     closed_controls: u64,
-    /// REL/RAW/ACK datagrams from an address with no session (B66).
+    /// REL/RAW/ACK/REPORT datagrams from an address with no session
+    /// (B66).
     no_session: u64,
     /// ACKs and challenges the socket refused (B66).
     acks_send_failed: u64,
@@ -152,6 +156,7 @@ impl Demux {
             reap_wakes: 0,
             acks_piggybacked: 0,
             ack_piggyback_failed: 0,
+            reports_not_forwarded: 0,
             oversized_in: 0,
             bad_datagrams: 0,
             frag_refused: 0,

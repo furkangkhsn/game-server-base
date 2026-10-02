@@ -16,6 +16,7 @@ impl UdpClient {
         }
         match d[0] {
             KIND_RAW => {
+                self.game_datagram();
                 if let Some(fb) = body_of(&d[1..], 0) {
                     // Lossy band: no seq, no dedupe — hand it straight to
                     // the loop (unordered by design).
@@ -27,6 +28,7 @@ impl UdpClient {
             KIND_FRAG => {
                 // A fragment of an over-budget game-band frame: the
                 // message joins the lossy band once it is whole.
+                self.game_datagram();
                 match self.reasm.accept(d, Instant::now(), &mut self.stats) {
                     Some(fb) => {
                         self.raw = Some(fb);
@@ -88,8 +90,14 @@ impl UdpClient {
                 self.rel.on_ack(ack, Instant::now());
                 false
             }
+            KIND_PROBE => {
+                // The game band's feedback (module `feedback`).
+                self.on_probe(d);
+                false
+            }
             // The server only sends HELLO during the handshake (already
-            // complete here): ignore any late one.
+            // complete here): ignore any late one — and any kind this
+            // client does not know (the evolution rule's half here).
             _ => false,
         }
     }
@@ -111,6 +119,8 @@ impl UdpClient {
             }
             Due::Idle | Due::Wait => {}
         }
+        // The game band's feedback: re-announce while no probe came.
+        self.announce(now);
     }
 
     /// The client's half of the session-fatal rule: count what will never

@@ -368,7 +368,9 @@ Global ticker ── broadcast<TickInfo{tick, at}> ──▶
   JOIN_ROOM_REQ, JOIN_ROOM_RESULT, LEAVE_ROOM_REQ, LEAVE_ROOM_RESULT,
   HEARTBEAT, HEARTBEAT_ACK, ERROR; `10`/`11` = UDP_HELLO/UDP_ACK —
   rUDP **taşıma işaretleri**, aktör katmanının altında işlenir, mesaj
-  tablosunda değiller); `1000+` oyun bandı
+  tablosunda değiller; `13` = UDP_REPORT, aynı türden işaret — istemcinin
+  oyun bandı raporu demux'tan yazıcıya bu opcode'la geçer, §6 "Oyun bandı
+  geri bildirimi"); `1000+` oyun bandı
   (MOVE_TO=1000, WORLD_SNAPSHOT=1003; PRIVATE=1004 `RoomLogic::private`
   için ayrılmış, demo kullanmaz; 1001/1002 boş — eski ENTITY_SPAWNED /
   ENTITY_REMOVED kaldırıldı, üyelik snapshot'ta var olmaya indirgendi).
@@ -1895,7 +1897,10 @@ aşağıda "Aktörü ölmüş oturum").
 RTO yeniden gönderim, **sıralı teslim** — AUTH/JOIN/LEAVE/HEARTBEAT);
 `2` ACK `[u32 next_expected]`; `3` HELLO `[u64 nonce][u64 cookie]`;
 `4` FRAG `[u16 mesaj id][u8 index][u8 count][parça]` (yalnız sunucu →
-istemci, bütçeyi aşan oyun bandı karesi — aşağıda "MTU").
+istemci, bütçeyi aşan oyun bandı karesi — aşağıda "MTU"); `5` PROBE
+`[u32 sonda id][u32 yankı µs]` (yalnız sunucu → istemci) ve `6` REPORT
+`[u32 sonda id][u32 alınan oyun datagram'ı]` (yalnız istemci → sunucu) —
+oyun bandının geri bildirimi, aşağıda "Oyun bandı geri bildirimi".
 Band ayrımı: `op 1..=64` (11 hariç) = kontrol (güvenilir), `op ≥ 1000`
 = oyun (kayıp toleranslı). Yeniden gönderim: uyarlanan RTO (RFC 6298,
 50 ms–1 sn, geri çekilmeli — B2, aşağıda; önceden sabit 50 ms); tek
@@ -2098,6 +2103,180 @@ band_without_the_proofs_backoff}`; `a_proof_that_never_lands_…`'in üst
 sınırı tavanlı takvime göre (27). Öldürülen mutasyonlar: tavanı kaldırmak
 (2 test), bandı `seed` yerine `rto` ile kurmak (2), `seed`'in geri
 çekilmeyi tutması (3).
+
+**Oyun bandı geri bildirimi: sonda + alıcı raporu (rUDP sertleştirme 2 —
+2026-10-02, bakımcı kararı: seçenek (a), EKLEMELİ rapor; B87 de burada
+kapandı).** RAW ve FRAG asla ACK'lenmez ve sıra numarası taşımaz: sunucunun,
+baytlarının neredeyse hepsini taşıyan bant için hiçbir kayıp ya da gecikme
+sinyali yoktu — tıkanıklık denetiminin (B1, tur 3) okuyacağı şey. Ayrıca
+seyrek kontrol bandında RTT tahmini bayatlıyordu (B87: fırtınada şişen
+RTTVAR sonraki kontrol karesine dek sürüyordu). Kod: `udp::feedback`
+(sunucunun saf durumu), `udp::writer::feedback`, `udp::demux::report`,
+`udp::client::report`.
+
+*Tel — iki YENİ datagram türü, var olan her bayt aynı* (§5'in evrim
+kuralı; RAW/FRAG/REL/ACK/HELLO testlerle bayt-bayt sabit):
+
+| bayt | `5` PROBE (sunucu → istemci) | `6` REPORT (istemci → sunucu) |
+|---|---|---|
+| 0 | tür = `5` | tür = `6` |
+| 1–4 | sonda id'si, u32 LE (oturum başına 1'den artar, 0 hiç kullanılmaz) | cevapladığı sonda id'si, u32 LE (`0` = *duyuru*: henüz sonda yok) |
+| 5–8 | yankı: sunucunun bu yoldaki EN YENİ RTT örneği, µs, u32 LE (`0` = önceki sondadan beri örnek yok) | oturum başından beri alınan oyun bandı datagram'ı (RAW ve FRAG, her biri bir), u32 LE, sarmalı |
+| 9+ | yok — alıcı sondaki baytları yok sayar (ileride eklemeli alan) | aynı |
+
+Her ikisi 9 B; demux 9 B'den kısa REPORT'u bozuk sayar.
+
+*Akış.* (1) **İstemci katılmayı ister:** bağlanınca (kabulden hemen sonra)
+bir duyuru (`REPORT{0, n}`) yollar; sonda gelmezse her 1 sn'de bir
+(`ANNOUNCE_EVERY`), en çok 3 kez (`ANNOUNCE_MAX`). (2) **Sunucu kadansı
+belirler:** duyuru yapan oturumun yazıcısı hemen bir sonda, sonra her
+`PROBE_INTERVAL`'de (1 sn) bir sonda yollar; yazıcı zaten en geç her
+50 ms'de uyanır (yeni await yok), sonda o geçişte senkron gider
+(`try_send_to`, yeniden gönderim geçişi gibi). (3) **İstemci her sondayı
+hemen cevaplar:** sondanın id'si ve o ana dek aldığı oyun datagram'ı
+sayısı; yankı > 0 ise kendi REL bandının tahmincisine örnek olarak verir.
+(4) **Demux** REPORT'u ACK gibi oturumun yazıcısına çıkış kanalından
+`UDP_REPORT` (13) karesi olarak geçirir — aktör onu hiç görmez; rapor
+boşta kalma penceresini tazelemez (ACK de tazelemez: canlılık istemcinin
+kendi trafiği). (5) **Yazıcı** raporu uygular. Kadansı değiştirmek (tur
+3: RTT başına, gönderim hızına göre…) yalnız sunucu değişikliğidir —
+istemci saf bir yankıdır.
+
+*Sıra numarası olmadan kayıp.* Yazıcı soketin kabul ettiği her oyun
+datagram'ını sayar (`S`); her sonda gönderildiği anki `S`'yi tutar. Art
+arda cevaplanan iki sonda `k-1, k` bir aralık sınırlar: gönderilen =
+`S(k) − S(k-1)`, alınan = iki raporun farkı, kayıp = fark. Sondayı geçen
+(sondadan sonra gönderilip önce varan) datagram'lar aralığın alınanını
+gönderileninden birkaç fazla yapar: o fazlalık **sonraki aralığa taşınır**
+— bu aralığın kaybı değil, sonrakinin teslimi değil (kırpılsaydı sonraki
+aralık o kadar kayıp gösterirdi). İlk aralık oturum başından (`S = 0`,
+alınan 0) ilk cevaplanan sondaya dek. Sonda yeniden gönderilmez; halkada
+en çok `PROBE_RING` (4) bekleyen sonda; daha yeni bir sondanın cevabı
+eskileri "cevapsız" sayar.
+
+*Doğrulama — bir istemcinin iddiası durumu zehirleyemez* (her şey kendi
+oturumunda, saf durum, `udp::feedback::tests`): duyurmamış oturumdan ya da
+hiç gönderilmemiş id'li rapor → `invalid` (hiçbir şey uygulanmaz); geriye
+giden sayaç (sarmalı fark > 2³¹) → `invalid`; cevaplanmış ya da geride
+kalmış sondanın raporu (yeniden sıralanmış/çiftlenmiş) → `late`, yok
+sayılır; rapor geldiği ana dek sunucunun GÖNDERDİĞİNDEN fazlasını
+iddia ederse → gönderilene **kırpılır** (`clamped`; ağın çiftlediği
+datagram ya da yalan) ve uygulanır — kırpma sonraki aralığa kredi
+bırakmaz. Bir istemci yalnız kendi oturumunun tahminini bozabilir; tur
+3'te bu, kendi akışının hızı demektir.
+
+*RTT ve B87 — örnek REL bandının tahmincisini de besler.* Sondanın turu
+(`şimdi − sondanın gönderimi`; demux → yazıcı kanalı dahil, ACK örneği
+gibi) hem oyun bandı tahminine hem oturumun `rel::Rto`'suna gider: tek
+yol, tek tur, tek tahmin. Sonda asla yeniden gönderilmez ve rapor onu
+adıyla anar — örnek Karn kuralını yapısı gereği sağlar; bandın kendi
+kuralları (kendi karelerinde Karn, katlama, boşta kalma) DEĞİŞMEDİ,
+yalnız geçerli bir örnek daha geldi (ve geçerli her örnek gibi geri
+çekilmeyi bitirir — RFC 6298). İstemci tarafı: sonda sunucunun en yeni
+örneğini yankılar, istemci onu kendi bandına örnek verir — iki yön de
+dakikada bir kare taşıyan bantta saniyede bir tazelenir. 5 sn'den
+(`REL_NO_ACK_FATAL`) uzun yankı canlı bir bandın turu değildir:
+reddedilir ve sayılır (`probe_echoes_refused`). Fırtınada şişen RTTVAR
+artık örnek başına ¾ ile söner (B87'nin ölçtüğü srtt 42 / rto 648 ms:
+~5 örnekte rto < 200 ms) — sonraki kontrol karesini beklemeden.
+
+*Uyumluluk, iki yön.* **Yeni istemci → eski sunucu:** eski demux
+bilinmeyen türü `_ => bad_datagrams` koluyla düşürür ve
+`udp_datagrams_malformed`'ta sayar ("bilinmeyen tür"); oturuma dokunmaz
+(boşta kalma penceresine bile). Sonda gelmediği için istemci 3 duyurudan
+sonra susar: eski sunucuda oturum başına en çok 3 sayım, başka etki yok
+(95e6342 koduna karşı doğrulandı — aşağıda). **Eski istemci → yeni
+sunucu:** duyuru yok → sonda yok → tel bugünküyle bayt-bayt aynı; oturumun
+tahmini yok (`game_estimate() = None`), başka hiçbir şey değişmez.
+İstemcide raporlar varsayılan AÇIK (`UdpClientConfig::game_reports`;
+`UdpClient::connect_with` ile kapatılır — kapalı istemci eski istemcinin
+kendisidir: duyurmaz, sondayı cevaplamaz). Eski istemci sondayı zaten
+`_ => false` ile yok sayar (yeni sunucu ona sonda yollamaz). Yeni sunucu
+da bilmediği türü (7+) aynı kuralla sayar, oturuma dokunmaz (test).
+
+*Bedel (sınırlı).* Sonda ve rapor 9 B: IPv4'te başlıklarla 37 B, saniyede
+bir — oturum başına her yönde **37 B/sn** (IPv6'da 57), artı oturum başına
+en çok 3 duyuru. 30 Hz'lik bir snapshot akışında aralık ~30 datagram
+kapsar (kayıp çözünürlüğü ~%3). Oturum başına durum: 4 girdilik halka ve
+bir düzine sayaç. 100k oturumda tek sokete ±200k pps (oyun bandının 30 Hz'de
+3M'sinin ~%7'si); tur 3 kadansı oturum başına seyreltebilir.
+
+*Tahmin (tur 3'ün okuyacağı).* `feedback::GameEstimate`: en yeni ve en
+küçük sonda turu, son aralığın uzunluğu / gönderileni / kaybı, düzleştirilmiş
+kayıp kesri (aralık başına ¼ ağırlık; gönderimsiz aralık saymaz),
+cevaplanan sonda sayısı; düzleştirilmiş RTT bandın `Rto::srtt`'si
+(sondalar besliyor). Yazıcıda `game_estimate()`; davranış henüz
+değişmedi — yalnız oturum sonu log'unda (`game_reports`, `game_loss`,
+`game_min_rtt_us`).
+
+*Sayaçlar (taşıma kapsamı, OPS §3):* `udp_game_announces_received`,
+`udp_game_probes_sent`, `udp_game_probes_send_failed`,
+`udp_game_probes_unanswered` (yazıcılar bitince `probes_sent =
+reports_received + probes_unanswered`), `udp_game_reports_received`,
+`udp_game_reports_late`, `udp_game_reports_invalid`,
+`udp_game_reports_clamped`, `udp_game_reports_not_forwarded` (demux:
+yazıcı kanalı dolu/kapalı), `udp_game_datagrams_reported_sent` /
+`udp_game_datagrams_reported_lost` (kayıp oranı = ikisinin oranı; gauge
+değil: sayaçlar toplanır, oran sorgu anında — B32'nin "her kaybı say"
+kuralı), `udp_game_rtt_samples` / `udp_game_rtt_sum_us` (ortalama =
+ikincisi ÷ birincisi). İstemci (`UdpClientStats`):
+`game_datagrams_received`, `probes_received`, `reports_sent`,
+`announces_sent`, `reports_send_failed`, `probe_echoes_refused`.
+`udp_datagrams_no_session` artık oturumsuz adresten gelen REPORT'u da
+sayar (HELP güncellendi).
+
+*Elenenler.* (a) *RAW/FRAG'a sıra numarası* — var olan baytları değiştirir
+(evrim kuralı yasaklar; eski istemci her oyun karesini bozuk okurdu).
+(b) *Sıralı yeni bir oyun türü (RAW2 `[u32 seq]…`)* — eklemeli, ama oyun
+datagram'ı başına 4 B ve sunucuda istemci yeteneğine göre iki kodlama
+yolu; sayım + sonda aynı kaybı oyun datagram'ı başına 0 baytla ölçer
+(bedeli: kayıp aralık başına bilinir, hangi datagram olduğu değil —
+tıkanıklık denetimi için yeter, oyun zaten kendini iyileştiriyor). (c)
+*İstemcinin kendi saatiyle raporlaması (RTCP RR şekli)* — RTT için yine
+sunucudan zaman damgalı bir şey ve bir "bekleme süresi" (DLSR) alanı
+gerekirdi; kadans istemcide kalır, tur 3 onu sunucudan değiştiremezdi;
+eski sunucuya sürekli bozuk datagram. (d) *Duyurusuz herkese sonda* —
+eski istemciye fazladan datagram: "eski istemci için hiçbir şey değişmez"
+bozulurdu. (e) *Rapor RTT'sini yalnız ayrı bir oyun bandı tahmininde
+tutmak* — aynı yol için iki tahmin, B87 açık kalırdı. (f) *Raporu REL
+bandında taşımak* — güvenilir bant bayat raporu yeniden gönderir, yeniden
+gönderilen raporun turu örnek olamaz (Karn), aktör katmanına opcode girer.
+(g) *Kaybı gauge (kesir) olarak yayımlamak* — oturumlar arası
+toplanamaz; sayaç çifti oranı sorgu anında verir. (h) *Daha sık sonda
+(her N datagram'da)* — 100k oturumda pps bedeli; kadans sunucunun, tur 3
+gerektiği yerde sıklaştırır. (i) *Bayt sayımı* — tur 3 bayt temelli hız
+isteyebilir; REPORT'un sonu eklemeli alana açık, şimdilik datagram.
+
+*Testler (önce kırmızı; mutasyonlu).* `udp::feedback::tests` (saf durum,
+sentetik saat: duyurusuz oturum hiç sondalanmaz; kadans; iki sonda → kayıp
+ve RTT, yankı bir kez; düzleştirme; yeniden sıralama fazlası taşınır;
+iddia kırpılır ve sonraki aralığa kredi bırakmaz; geriye giden sayaç
+reddedilir; bilinmeyen id geçersiz, cevaplanmış geç; her sonda ya
+cevaplanır ya cevapsız sayılır), `udp::writer::tests` (cevaplanan sonda
+REL bandının ilk örneği, geri çekilmeyi bitirir — B87 sunucu tarafı),
+`udp::client::tests::report` (sonda anında sayıyla cevaplanır, yankı
+örnek — B87 istemci tarafı; 5 sn'lik yankı reddedilir; duyurular sınırlı,
+ilk sondada biter; raporlar kapalıyken sonda yok sayılır),
+`udp::demux::tests::report` (rapor yalnız yazıcıya, idle'a dokunmaz;
+kısa/oturumsuz/dolu/kapalı sayılır; bilinmeyen tür bozuk, oturum
+dokunulmaz), `udp::tests::feedback` (gerçek soket: yazıcı duyurudan önce
+sondalamaz, 8 oyun datagram'ında 2 kayıp — kontrol karesi sayılmaz;
+gerçek kapıda raporlayan istemci sondalanır ve ölçülür; raporlamayan
+hiç sondalanmaz), `writer_lost`'un B73 testi rapor karesini de dışarıda
+bırakır. *Eski sunucu kanıtı:* 95e6342 ağacına konan geçici bir demux
+testi (commit edilmedi) bu turun duyurusunu (`[6, 0,0,0,0, 3,0,0,0]`)
+`bad_datagrams`'a (`udp_datagrams_malformed`) sayıyor; oturum, boşta
+kalma penceresi ve aktör dokunulmuyor, oturumun sonraki RAW'ı iletiliyor.
+Öldürülen mutasyonlar 22'de 21: duyurusuz oturumu sondalamak (10 test —
+eski baytları sabitleyen testler dahil), fazlayı taşımamak, kırpmamak,
+geriye gideni kabul, geride kalanı/halka taşmasını/oturum sonunu
+saymamak, geç/geçersiz karışması, yankıyı sıfırlamamak, REL'i
+beslememek, kontrol datagram'ını oyun saymak, demux'ın raporu
+düşürmesi, raporu oturum karesi saymak, FRAG'ı saymamak, istemcinin
+sayaç tutmaması, duyuru tavanı yok, kapalıyken cevaplamak, sınırsız
+yankı, ilk sondayı hemen göndermemek, kapalı yazıcıda oturumu tutmak.
+Sağ çıkan: bağlanırken duyuruyu kaldırmak — ilk yeniden gönderim
+geçişi (en geç bir okuma) duyuruyu zaten yollar; eşdeğer davranış.
 
 **MTU — oyun bandı parçalanır (rUDP parçalama turu).**
 `max_datagram_bytes` varsayılan 1472 (1500−20−8) ve her datagram için

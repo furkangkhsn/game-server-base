@@ -100,6 +100,9 @@ impl UdpClient {
                         let d = self.buf[..n].to_vec();
                         self.process_datagram(&d);
                         self.established = true;
+                        // This client reports (unless configured off):
+                        // the server probes only a session that says so.
+                        self.announce(Instant::now());
                         return Ok(());
                     }
                     // Nothing proven yet: this cannot be our session.

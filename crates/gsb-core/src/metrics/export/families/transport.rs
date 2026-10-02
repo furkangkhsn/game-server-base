@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 49] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 62] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -182,7 +182,7 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 49] 
     ),
     tr(
         "gsb_transport_udp_datagrams_no_session_total",
-        "REL, RAW and ACK datagrams from an address with no rUDP session (over, or never established), dropped, cumulative.",
+        "REL, RAW, ACK and REPORT datagrams from an address with no rUDP session (over, or never established), dropped, cumulative.",
         |t| t.udp_datagrams_no_session,
     ),
     tr(
@@ -271,6 +271,72 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 49] 
         "gsb_transport_udp_datagrams_dropped_kernel_total",
         "Datagrams the kernel dropped on the rUDP door's socket because its receive queue was full, before the demux could read them (per socket, from the socket's /proc/net/udp drops column; Linux only, 0 elsewhere), cumulative.",
         |t| t.udp_datagrams_dropped_kernel,
+    ),
+    // Round 2 of rUDP hardening: the game band's probes and reports.
+    tr(
+        "gsb_transport_udp_game_announces_received_total",
+        "Game-band report announcements (REPORT with probe id 0: a client asks to be probed) the rUDP writers received, cumulative.",
+        |t| t.udp_game_announces_received,
+    ),
+    tr(
+        "gsb_transport_udp_game_probes_sent_total",
+        "Game-band PROBE datagrams the rUDP writers sent to announced sessions, cumulative.",
+        |t| t.udp_game_probes_sent,
+    ),
+    tr(
+        "gsb_transport_udp_game_probes_send_failed_total",
+        "Game-band PROBE datagrams the socket refused (lost; the next one goes an interval later), cumulative.",
+        |t| t.udp_game_probes_send_failed,
+    ),
+    tr(
+        "gsb_transport_udp_game_probes_unanswered_total",
+        "Game-band probes whose report never came back (the probe or its report lost, superseded by a newer answered probe, or outstanding when the session ended), cumulative.",
+        |t| t.udp_game_probes_unanswered,
+    ),
+    tr(
+        "gsb_transport_udp_game_reports_received_total",
+        "Game-band reports answering one of the session's probes, applied (an RTT sample and an interval of loss accounting each), cumulative.",
+        |t| t.udp_game_reports_received,
+    ),
+    tr(
+        "gsb_transport_udp_game_reports_late_total",
+        "Game-band reports for a probe already answered or superseded (reordered or duplicated), ignored, cumulative.",
+        |t| t.udp_game_reports_late,
+    ),
+    tr(
+        "gsb_transport_udp_game_reports_invalid_total",
+        "Game-band reports refused: a probe id the session never sent, or a received count that runs backwards; nothing applied, cumulative.",
+        |t| t.udp_game_reports_invalid,
+    ),
+    tr(
+        "gsb_transport_udp_game_reports_clamped_total",
+        "Game-band reports applied with their received count clamped to what the server had sent by their arrival (a duplicated datagram or a false claim), cumulative.",
+        |t| t.udp_game_reports_clamped,
+    ),
+    tr(
+        "gsb_transport_udp_game_reports_not_forwarded_total",
+        "Game-band reports the rUDP demux could not hand to the session's writer (its outbound channel full or closed), lost, cumulative.",
+        |t| t.udp_game_reports_not_forwarded,
+    ),
+    tr(
+        "gsb_transport_udp_game_datagrams_reported_sent_total",
+        "Game-band datagrams (RAW and FRAG) sent within the intervals answered reports cover: the denominator of the reported loss, cumulative.",
+        |t| t.udp_game_datagrams_reported_sent,
+    ),
+    tr(
+        "gsb_transport_udp_game_datagrams_reported_lost_total",
+        "Of those, the game-band datagrams the clients reported missing (path loss as the clients saw it), cumulative.",
+        |t| t.udp_game_datagrams_reported_lost,
+    ),
+    tr(
+        "gsb_transport_udp_game_rtt_samples_total",
+        "RTT samples the rUDP writers took from answered game-band probes, cumulative.",
+        |t| t.udp_game_rtt_samples,
+    ),
+    tr(
+        "gsb_transport_udp_game_rtt_sum_us_total",
+        "Sum of the game-band probe RTT samples in microseconds (divide by gsb_transport_udp_game_rtt_samples_total for the mean), cumulative.",
+        |t| t.udp_game_rtt_sum_us,
     ),
 ];
 

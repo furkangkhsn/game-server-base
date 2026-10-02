@@ -85,6 +85,14 @@ impl RelSend {
         &self.rto
     }
 
+    /// An RTT sample from outside the band's own frames: a game-band
+    /// probe's round trip (module `feedback`, BACKLOG B87). Valid by
+    /// construction — a probe is never re-sent — so, like a clean ACK, it
+    /// also ends the backoff.
+    pub(super) fn sample(&mut self, rtt: Duration) {
+        self.rto.sample(rtt);
+    }
+
     /// The oldest outstanding frame (tests rewind its clock).
     #[cfg(test)]
     pub(super) fn front_mut(&mut self) -> Option<&mut Outstanding> {

@@ -61,7 +61,12 @@
 //! (`udp_control_retransmits_timeout`). D11's two after it
 //! (`handshakes_{refused,retried}_per_source`). B49's two after them
 //! (`ops_http_conns_refused`, `ops_http_writes_timed_out`). B85's one after them
-//! (`udp_datagrams_dropped_kernel`). And F50's one deliberate
+//! (`udp_datagrams_dropped_kernel`). rUDP hardening round 2's
+//! thirteen game-band feedback counters after that
+//! (`udp_game_announces_received` .. `udp_game_rtt_sum_us`), and the
+//! deliberate HELP change of `gsb_transport_udp_datagrams_no_session_total`
+//! (REPORT datagrams from an address with no session count there too).
+//! And F50's one deliberate
 //! RENAME: `team_export_drops=` / `gsb_room_team_export_drops_total`
 //! (full and closed mixed) became `team_export_drops_{full,closed}=` /
 //! `gsb_room_team_export_drops_{full,closed}_total`, in its place.

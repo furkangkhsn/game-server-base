@@ -71,6 +71,13 @@ pub mod op {
         /// actor layer (the connection actor never sees it). Payload:
         /// `[u32 LE next expected sequence]`.
         pub const UDP_ACK: u16 = 11;
+        /// rUDP transport-level marker (NOT a message-table message): a
+        /// client's game-band receiver report (its own datagram kind on
+        /// the wire), handed by the shared demux to the session's writer
+        /// as a frame of this opcode — the way `UDP_ACK` is — and
+        /// consumed there, below the actor layer. Payload:
+        /// `[u32 LE probe id][u32 LE game datagrams received]`.
+        pub const UDP_REPORT: u16 = 13;
     }
 
     /// First opcode reserved for game crates.

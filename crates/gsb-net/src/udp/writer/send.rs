@@ -40,6 +40,11 @@ impl super::UdpWriter {
             self.apply_ack(&frame);
             return None;
         }
+        if frame.op == op::base::UDP_REPORT {
+            // The demux's piggybacked game-band report (`feedback`).
+            self.apply_report(&frame);
+            return None;
+        }
         if !is_control(frame.op) {
             // The game band: RAW, or FRAG when over the budget.
             self.send_game(&frame).await;
@@ -71,22 +76,30 @@ impl super::UdpWriter {
 
     /// Put one datagram on the socket (`control`: the reliable band's).
     pub(super) async fn send(&mut self, datagram: &[u8], control: bool) {
-        if let Err(e) = self.sock.send_to(datagram, self.peer).await {
-            // The socket is shut (listener close) or the peer is gone:
-            // keep draining the channel so the actor's exit cascade is
-            // not delayed; the next send keeps failing until the channel
-            // closes. Counted by band (B66): a game datagram is lost, a
-            // control one is retransmitted.
-            match control {
-                true => self.control_send_failed += 1,
-                false => self.game_send_failed += 1,
-            }
-            debug!(conn = %self.conn, peer = %self.peer, %e, "rUDP: send failed");
+        match self.sock.send_to(datagram, self.peer).await {
+            // A game datagram on the wire: the feedback's sent count.
+            Ok(_) if !control => self.feedback.game_sent(),
+            Ok(_) => {}
+            Err(e) => self.send_failed(&e, control),
         }
     }
 
+    /// The socket is shut (listener close) or the peer is gone: keep
+    /// draining the channel so the actor's exit cascade is not delayed;
+    /// the next send keeps failing until the channel closes. Counted by
+    /// band (B66): a game datagram is lost, a control one is
+    /// retransmitted.
+    fn send_failed(&mut self, e: &std::io::Error, control: bool) {
+        match control {
+            true => self.control_send_failed += 1,
+            false => self.game_send_failed += 1,
+        }
+        debug!(conn = %self.conn, peer = %self.peer, %e, "rUDP: send failed");
+    }
+
     /// Close the outbound channel and count what it still holds as never
-    /// sent (the demux's piggybacked ACKs are not frames of the session).
+    /// sent (the demux's piggybacked ACKs and reports are not frames of
+    /// the session).
     pub(super) fn drain_unsent(&mut self) {
         self.out_rx.close();
         while let Ok(batch) = self.out_rx.try_recv() {
@@ -97,10 +110,10 @@ impl super::UdpWriter {
 
 /// Whether an outbound frame is one of the SESSION's (a game or control
 /// frame the room or the connection sent), not the demux's piggybacked
-/// inbound ACK — a transport message for this writer's band, which the
-/// loss counters leave out (B66, B73).
+/// inbound ACK or game-band report — transport messages for this writer,
+/// which the loss counters leave out (B66, B73).
 pub(super) fn is_session_frame(frame: &FrameBody) -> bool {
-    frame.op != op::base::UDP_ACK
+    frame.op != op::base::UDP_ACK && frame.op != op::base::UDP_REPORT
 }
 
 /// The session's frames in a batch (see [`is_session_frame`]).

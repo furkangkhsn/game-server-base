@@ -28,6 +28,7 @@ impl super::Demux {
             udp_actions_dropped_closed: self.closed_actions,
             udp_control_frames_dropped_closed: self.closed_controls,
             udp_datagrams_no_session: self.no_session,
+            udp_game_reports_not_forwarded: self.reports_not_forwarded,
             ..Default::default()
         };
         self.flusher.flush(totals, last);

@@ -156,8 +156,9 @@ async fn a_notice_without_a_reserved_slot_is_counted_as_deferred() {
 
 /// B73: after the session is over, `udp_frames_drained` counts the
 /// session's own frames the writer takes off its channel — game and
-/// control frames — and not the demux's piggybacked ACKs (a transport
-/// message for a band that is gone, not a frame of the session).
+/// control frames — and not the demux's piggybacked ACKs or game-band
+/// reports (transport messages for a session that is gone, not frames
+/// of it).
 #[tokio::test]
 async fn frames_drained_after_the_end_leave_the_piggybacked_acks_out() {
     let (metrics_tx, mut metrics_rx) = mpsc::channel(8);
@@ -169,10 +170,13 @@ async fn frames_drained_after_the_end_leave_the_piggybacked_acks_out() {
     let peer = raw.local_addr().unwrap();
     let w = writer(bound().await, peer, 1200, in_tx, out_rx, metrics_tx);
     let ack = || FrameBody::new(op::base::UDP_ACK, Bytes::from(1u32.to_le_bytes().to_vec()));
+    let report = || FrameBody::new(op::base::UDP_REPORT, Bytes::from(vec![0u8; 8]));
     // The first batch is sent; with nothing outstanding the session is
-    // then over. The second is drained: two frames and one ACK.
+    // then over. The second is drained: two frames, one ACK, one report.
     out_tx.try_send(vec![game()]).unwrap();
-    out_tx.try_send(vec![ack(), game(), control(2)]).unwrap();
+    out_tx
+        .try_send(vec![ack(), report(), game(), control(2)])
+        .unwrap();
     drop(out_tx);
     tokio::time::timeout(Duration::from_secs(5), w)
         .await

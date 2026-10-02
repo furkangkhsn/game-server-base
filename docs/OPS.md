@@ -939,6 +939,42 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   görev başlamaz, sayaç 0 kalır. Sütun `u32`, sarar; fark sarmalı
   aritmetikle alınır. Sayaç artıyorsa ilacı `udp_recv_buffer_bytes`
   (§2, B4). Kapı metrik raporlamıyorsa (gömen, test) görev yok.
+- **Taşıma kapsamı: rUDP oyun bandının geri bildirimi (rUDP sertleştirme
+  2).** Satırın ve tablonun sonuna 13 `counter` (B85'inkinden sonra);
+  loadgen telinde `GSNI`, `RESULT`'ta `transport_<ad>=` (her satırda).
+  Sunucu, duyuru yapan (raporlayan) her oturuma saniyede bir PROBE yollar,
+  istemci her birini o ana dek aldığı oyun datagram'ı sayısıyla cevaplar
+  (DESIGN §6 "Oyun bandı geri bildirimi"). Yazıcılardan:
+  `udp_game_announces_received` (sondalanmak isteyen istemcinin duyurusu —
+  `REPORT{0}`; oturum başına bir, ilk sondası kaybolursa en çok üç),
+  `udp_game_probes_sent`, `udp_game_probes_send_failed` (soket reddetti —
+  kayıp, sonraki bir aralık sonra), `udp_game_probes_unanswered` (raporu
+  hiç gelmeyen sonda: sonda ya da rapor kayboldu, daha yeni bir sondanın
+  cevabı onu geride bıraktı ya da oturum önce bitti; yazıcılar bitince
+  `probes_sent = reports_received + probes_unanswered`),
+  `udp_game_reports_received` (bir sondayı cevaplayan, uygulanan rapor —
+  her biri bir RTT örneği), `udp_game_reports_late` (cevaplanmış ya da
+  geride kalmış sondanın raporu: yeniden sıralanmış/çiftlenmiş, yok
+  sayıldı), `udp_game_reports_invalid` (reddedildi: oturumun hiç
+  göndermediği id ya da geriye giden sayaç — hiçbir şeyi uygulanmaz),
+  `udp_game_reports_clamped` (iddiası, geldiği ana dek gönderilenden
+  fazlaydı — çiftlenmiş datagram ya da yalan —; gönderilene kırpılıp
+  uygulandı), `udp_game_datagrams_reported_sent` /
+  `udp_game_datagrams_reported_lost` (cevaplanan raporların kapsadığı
+  aralıklarda gönderilen oyun datagram'ları — RAW ve FRAG — ve
+  istemcilerin eksik bildirdiği; **yolun kayıp oranı = ikisinin oranı**,
+  `rate()`'leriyle), `udp_game_rtt_samples` / `udp_game_rtt_sum_us` (sonda
+  turları; **ortalama tur = sum ÷ samples**; her örnek oturumun REL bandı
+  tahmincisini de besler — B87). Demux'tan:
+  `udp_game_reports_not_forwarded` (yazıcının kanalı dolu ya da kapalı —
+  rapor kayboldu). Raporlamayan (eski ya da `game_reports: false`)
+  istemci sondalanmaz: bu sayaçlara hiçbir şey katmaz. Kesir yerine
+  sayaç çifti: oturumlar arası toplanabilir, oran sorgu anında (B32'nin
+  "her kaybı say" kuralı). **Anlam genişlemesi (HELP değişti):**
+  `udp_datagrams_no_session` artık oturumsuz adresten gelen REPORT'u da
+  sayar ("REL, RAW, ACK and REPORT datagrams …"). Eski bir sunucu
+  (bu turdan önceki) yeni istemcinin duyurusunu `udp_datagrams_malformed`'ta
+  sayar (bilinmeyen tür; oturum başına en çok 3).
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

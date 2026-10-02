@@ -10,43 +10,6 @@ use tokio::net::UdpSocket;
 
 use crate::udp::*;
 
-/// Client-side transport statistics (returned with the client).
-#[derive(Debug, Default)]
-pub struct UdpClientStats {
-    /// The client's own reliable retransmissions (its control frames
-    /// re-sent because their retransmit timer expired before their ACK
-    /// arrived).
-    pub retrans_out: u64,
-    /// Duplicated inbound REL frames (the SERVER's retransmissions, as
-    /// observed by this client).
-    pub dup_in: u64,
-    /// Inbound REL frames dropped on a full out-of-order window.
-    pub oob_dropped: u64,
-    /// Outbound REL frames still outstanding when the reliable band was
-    /// declared dead (see the module docs, "The REL liveness bound"). A
-    /// frame is never abandoned on its own age — the whole band dies at
-    /// once, and [`UdpClient::is_established`] flips to `false`.
-    pub gave_up: u64,
-    /// Game-band messages rebuilt from FRAG datagrams (server → client
-    /// fragmentation; see the module docs, "MTU (feature 3)").
-    pub frag_reassembled: u64,
-    /// Messages dropped with a fragment still missing: superseded by a
-    /// newer message in their slot, aged out, or evicted by the memory
-    /// bound. The loss signal of the fragmented band.
-    pub frag_dropped_incomplete: u64,
-    /// FRAG datagrams refused: a malformed header, a count past the
-    /// ceiling, a count that disagrees with the message's first
-    /// fragment, or a fragment of a message the slot has moved past.
-    pub frag_rejected: u64,
-    /// Challenge requests re-sent because no challenge came back within
-    /// the handshake re-send interval (see the module docs, "Handshake
-    /// loss").
-    pub challenge_retries: u64,
-    /// Proofs re-sent because the server had not yet shown it holds the
-    /// session: the proof, or the server's accept, was lost.
-    pub proof_retries: u64,
-}
-
 /// A rUDP client: the mirror image of the server's demux/writer, as one
 /// task (the load generator's and the e2e tests' client is a plain task,
 /// not an actor, so the whole session state is task-local).
@@ -80,6 +43,8 @@ pub struct UdpClient {
     /// The fragmented game band's reassembly state (bounded; see
     /// `frag`).
     reasm: Reassembly,
+    /// The game band's feedback: the count and the announcements.
+    reports: report::Reports,
 }
 
 impl UdpClient {
@@ -90,14 +55,29 @@ impl UdpClient {
     /// in `TimedOut` after `HANDSHAKE_DEADLINE`, 5 s (see the module docs,
     /// "Handshake loss").
     pub async fn connect(addr: SocketAddr) -> std::io::Result<Self> {
-        Self::connect_within(addr, HANDSHAKE_DEADLINE).await
+        Self::connect_with(addr, UdpClientConfig::default()).await
+    }
+
+    /// [`Self::connect`] with a [`UdpClientConfig`] (game-band reports
+    /// off: the client as it was before they existed).
+    pub async fn connect_with(addr: SocketAddr, config: UdpClientConfig) -> std::io::Result<Self> {
+        Self::connect_within_with(addr, HANDSHAKE_DEADLINE, config).await
     }
 
     /// [`Self::connect`] with an explicit give-up bound (the tests' seam:
     /// the give-up is exercised without waiting the full bound).
+    #[cfg(test)]
     pub(super) async fn connect_within(
         addr: SocketAddr,
         within: Duration,
+    ) -> std::io::Result<Self> {
+        Self::connect_within_with(addr, within, UdpClientConfig::default()).await
+    }
+
+    async fn connect_within_with(
+        addr: SocketAddr,
+        within: Duration,
+        config: UdpClientConfig,
     ) -> std::io::Result<Self> {
         let sock = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
             .await
@@ -121,6 +101,7 @@ impl UdpClient {
             buf: vec![0u8; 2048],
             raw: None,
             reasm: Reassembly::default(),
+            reports: report::Reports::new(config),
         };
         client.handshake(nonce, within).await?;
         Ok(client)
@@ -280,6 +261,10 @@ impl UdpClient {
 
 mod handshake;
 mod io;
+mod report;
+mod stats;
+pub use report::UdpClientConfig;
+pub use stats::UdpClientStats;
 
 #[cfg(test)]
 pub(in crate::udp) use handshake::step_interval;

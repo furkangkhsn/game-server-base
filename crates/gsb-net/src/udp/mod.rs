@@ -228,7 +228,17 @@
 //!   4 FRAG   [u16 LE msg id][u8 index][u8 count][chunk]
 //!                                               game band over the budget,
 //!                                               server → client only
+//!   5 PROBE  [u32 LE probe id][u32 LE echo µs]  game-band feedback,
+//!                                               server → client only
+//!   6 REPORT [u32 LE probe id][u32 LE received] game-band feedback,
+//!                                               client → server only
 //! ```
+//!
+//! Kinds 5 and 6 are additive (rUDP hardening round 2): a client asks
+//! for them, so a peer of either side that predates them sees the wire
+//! it always saw — see "Game-band feedback" in the `feedback` module.
+//! A kind a peer does not know is dropped and counted (the server:
+//! `udp_datagrams_malformed`), the session untouched.
 //!
 //! The band split is by opcode: `op <= 64` (base control band) is
 //! REL, `op >= 1000` (game band) is RAW — or FRAG when one RAW datagram
@@ -262,7 +272,9 @@
 //!   are self-contained (a client that loses one heals on the next
 //!   snapshot or the keep-alive resend — `RoomConfig::keepalive_hz`), so
 //!   reliable delivery would cost seq/ack/retransmit state for nothing.
-//!   RAW frames are unordered and unnumbered, by design.
+//!   RAW frames are unordered and unnumbered, by design; the band's loss
+//!   and round trip are measured beside it, by the client's receiver
+//!   reports (module `feedback`).
 //!
 //! ## The REL liveness bound (why a give-up is not a statistic)
 //!
@@ -557,7 +569,11 @@
 //!   and snapshot budget. On loopback that is invisible; on a real
 //!   network a room fan-out plus retransmissions can push a slow path
 //!   into a loss spiral it has no way to back out of. (Verified: no
-//!   token bucket, no pacer, no window anywhere under `udp/`.)
+//!   token bucket, no pacer, no window anywhere under `udp/`.) The
+//!   SIGNALS exist since round 2 — a reporting client's game-band loss
+//!   and round trip per session (`feedback::GameEstimate`), the kernel's
+//!   drops on the door's socket (`kernel`) — and nothing acts on them
+//!   yet: the response is round 3.
 //! - **NAT rebinding ends the session.** Sessions are keyed by the
 //!   peer's 4-tuple, so a rebind is a new address: a new handshake, a new
 //!   `ConnectionId`, and the old session lingering until the idle sweep.
@@ -577,6 +593,7 @@
 mod client;
 mod cookie;
 mod demux;
+mod feedback;
 mod frag;
 mod kernel;
 mod rel;
@@ -587,17 +604,21 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use client::{UdpClient, UdpClientStats};
+pub use client::{UdpClient, UdpClientConfig, UdpClientStats};
 pub use transport::{UdpTransport, UdpTransportConfig};
 
 // Re-homed internals: each lives in the module that owns its concern,
 // and is named here so every child module reaches it by one path.
 use cookie::{CookieClock, CookieKey};
 use demux::{Reaper, UdpSession, demux};
+use feedback::{ANNOUNCE_EVERY, ANNOUNCE_MAX, Feedback, Report};
 use frag::{FRAG_MAX_COUNT, Reassembly, split};
 use rel::{Due, HANDSHAKE_MAX_RTO, MAX_RTO, RelSend, Rto};
 use transport::Queued;
-use wire::{body_of, encode_ack, encode_hello, encode_raw, encode_rel};
+use wire::{
+    body_of, encode_ack, encode_hello, encode_probe, encode_raw, encode_rel, encode_report,
+    parse_two_u32,
+};
 use writer::udp_pump_spawner;
 
 use std::time::Duration;
@@ -612,6 +633,12 @@ pub const KIND_HELLO: u8 = 3;
 /// A fragment of an over-budget game-band frame (server → client only;
 /// see "MTU (feature 3)").
 pub const KIND_FRAG: u8 = 4;
+/// A game-band feedback probe (server → client only; see "Game-band
+/// feedback").
+pub const KIND_PROBE: u8 = 5;
+/// A game-band receiver report (client → server only; see "Game-band
+/// feedback").
+pub const KIND_REPORT: u8 = 6;
 
 /// The rotation period of the handshake cookie's TIME TERM (see
 /// [`CookieClock`], and the module docs, "Cookie rotation"). A proof is

@@ -21,8 +21,28 @@ impl super::UdpWriter {
             udp_frames_unsent: self.unsent,
             writer_verdicts_deferred: self.verdicts_deferred,
             udp_control_retransmits_timeout: self.retransmits,
-            ..Default::default()
+            ..self.feedback_totals()
         };
         self.flusher.flush(totals, last);
+    }
+
+    /// The game band's feedback counters (module `crate::udp::feedback`).
+    fn feedback_totals(&self) -> TransportCounters {
+        let c = &self.feedback.counts;
+        TransportCounters {
+            udp_game_announces_received: c.announces,
+            udp_game_probes_sent: c.probes_sent,
+            udp_game_probes_send_failed: c.probes_send_failed,
+            udp_game_probes_unanswered: c.probes_unanswered,
+            udp_game_reports_received: c.reports,
+            udp_game_reports_late: c.late,
+            udp_game_reports_invalid: c.invalid,
+            udp_game_reports_clamped: c.clamped,
+            udp_game_datagrams_reported_sent: c.reported_sent,
+            udp_game_datagrams_reported_lost: c.reported_lost,
+            udp_game_rtt_samples: c.rtt_samples,
+            udp_game_rtt_sum_us: c.rtt_sum_us,
+            ..Default::default()
+        }
     }
 }

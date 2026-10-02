@@ -252,7 +252,11 @@ mod logic;
 /// GSNH = the GSNG layout with one more transport counter at the end of
 /// that section (the kernel's drops on the rUDP door's socket — B85:
 /// `udp_datagrams_dropped_kernel`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E48;
+/// GSNI = the GSNH layout with thirteen more transport counters at the
+/// end of that section (the game band's probes and receiver reports —
+/// rUDP hardening round 2: `udp_game_announces_received` ..
+/// `udp_game_rtt_sum_us`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E49;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

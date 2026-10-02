@@ -12,71 +12,7 @@ use gsb_core::id::ConnectionId;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
 
-use crate::transport::PumpSpawner;
 use crate::udp::*;
-
-/// The per-session outbound pump spawner: ONLY a writer task (the reader
-/// is the shared demux, owned by the listener).
-pub(super) fn udp_pump_spawner(
-    sock: Arc<UdpSocket>,
-    peer: SocketAddr,
-    max_datagram: usize,
-    reaper: Reaper,
-    metrics: crate::TransportMetrics,
-) -> PumpSpawner {
-    Box::new(
-        move |conn: ConnectionId,
-              in_tx: Mailbox<ConnIn>,
-              out_rx: Inbox<FrameBatch>,
-              _timeouts: crate::pump::PumpTimeouts| {
-            // `in_tx` is already registered in the demux (at handshake);
-            // the copy handed here is the writer's ONE way to end the
-            // session when the reliable band dies (see `die`). Neither
-            // pump deadline applies here: inbound silence is the demux
-            // deadline heap's concern, and this writer's own liveness
-            // bound is the REL band's ACK-progress clock (see `reliable`),
-            // which is the datagram equivalent of the stream pumps' write
-            // stall — a datagram `try_send_to` never parks. The band's
-            // death verdict gets a mailbox slot reserved NOW, before the
-            // task runs (B66; see `crate::pump::verdict`).
-            let verdict = Some(crate::pump::verdict::Verdict::reserve(in_tx.clone(), true));
-            let writer = tokio::spawn(
-                UdpWriter {
-                    conn,
-                    sock,
-                    peer,
-                    in_tx,
-                    out_rx,
-                    max_datagram,
-                    seq: 0,
-                    // No sample yet: the server's handshake is
-                    // stateless, so its first sample is its first
-                    // control frame's ACK.
-                    rel: RelSend::new(Instant::now(), Rto::default()),
-                    dropped_oversized: 0,
-                    frag_id: 0,
-                    frag_messages: 0,
-                    frag_datagrams: 0,
-                    retransmits: 0,
-                    abandoned: 0,
-                    oversized_warned: false,
-                    reaper,
-                    reap_signalled: false,
-                    drained: 0,
-                    verdict,
-                    deferred_verdict: None,
-                    game_send_failed: 0,
-                    control_send_failed: 0,
-                    unsent: 0,
-                    verdicts_deferred: 0,
-                    flusher: crate::metrics::Flusher::new(metrics),
-                }
-                .run(),
-            );
-            (None, writer)
-        },
-    )
-}
 
 /// The per-session writer: outbound batches → datagrams, with the
 /// reliable control band (retransmit + cumulative-ack state + the
@@ -137,6 +73,9 @@ pub(super) struct UdpWriter {
     verdicts_deferred: u64,
     /// The loss counters' path to the collector (B58).
     flusher: crate::metrics::Flusher,
+    /// The game band's feedback: the probes, the client's reports and the
+    /// session's estimate (module `feedback`).
+    feedback: Feedback,
 }
 
 impl UdpWriter {
@@ -171,6 +110,9 @@ impl UdpWriter {
             if fatal.is_none() {
                 fatal = self.retransmit_pass();
             }
+            if fatal.is_none() && !self.reap_signalled {
+                self.probe_pass();
+            }
             if let Some(reason) = fatal {
                 self.die(reason);
                 break;
@@ -188,6 +130,7 @@ impl UdpWriter {
         // Whatever ended the writer (the REL band died; every sender is
         // gone), the session has no writer any more: the demux may free it.
         self.signal_reap().await;
+        self.feedback.end();
         self.flush_metrics(true);
         if let Some((in_tx, msg)) = self.deferred_verdict.take() {
             // No slot was reserved at birth and the mailbox was full: the
@@ -212,6 +155,9 @@ impl UdpWriter {
                 rto_ms = self.rel.rto().current().as_millis() as u64,
                 abandoned = self.abandoned,
                 drained = self.drained,
+                game_reports = self.feedback.counts.reports,
+                game_loss = self.game_estimate().map(|e| e.loss),
+                game_min_rtt_us = self.game_estimate().map(|e| e.min_rtt.as_micros() as u64),
                 "rUDP writer session counters"
             );
         }
@@ -239,3 +185,15 @@ mod flush;
 /// The send path: a batch frame by frame, one datagram, and what is
 /// never sent (B66). A CHILD module too.
 mod send;
+
+/// The writer's birth: the spawner the demux hands each endpoint, and
+/// the writer it builds. A CHILD module too.
+mod spawn;
+pub(super) use spawn::udp_pump_spawner;
+
+/// The game band's feedback: the probe pass and the client's reports
+/// (module `crate::udp::feedback`). A CHILD module too.
+mod feedback;
+
+#[cfg(test)]
+mod tests;

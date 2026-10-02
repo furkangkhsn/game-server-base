@@ -238,6 +238,13 @@ impl super::Demux {
                     self.bad_datagrams += 1;
                 }
             }
+            KIND_REPORT => {
+                if n < 9 {
+                    self.bad_datagrams += 1;
+                    return;
+                }
+                self.handle_report(peer);
+            }
             KIND_FRAG => {
                 // Refused: the server never reassembles (inputs are small,
                 // and reassembly state here would be memory any session

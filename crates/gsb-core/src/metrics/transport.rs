@@ -183,9 +183,9 @@ transport_counters! {
     udp_actions_dropped_closed,
     /// rUDP demux: other base-band frames lost the same way.
     udp_control_frames_dropped_closed,
-    /// rUDP demux: REL, RAW and ACK datagrams from an address with no
-    /// session (its session is over, or there never was one), dropped
-    /// undecoded.
+    /// rUDP demux: REL, RAW, ACK and REPORT datagrams from an address
+    /// with no session (its session is over, or there never was one),
+    /// dropped undecoded.
     udp_datagrams_no_session,
     /// rUDP writer: frames never sent because the session's reliable band
     /// died — the rest of the batch being sent (the undeliverable control
@@ -262,6 +262,53 @@ transport_counters! {
     /// only, 0 elsewhere. The system-wide `RcvbufErrors` mixes every UDP
     /// socket of the host; this is the door's own.
     udp_datagrams_dropped_kernel,
+    /// rUDP writers (game-band feedback): announcements received — REPORTs
+    /// with probe id 0, a client asking to be probed (one session sends
+    /// one, or up to three while its first probe is lost).
+    udp_game_announces_received,
+    /// rUDP writers (game-band feedback): PROBEs the socket took (one per
+    /// probe interval per announced session).
+    udp_game_probes_sent,
+    /// rUDP writers (game-band feedback): PROBEs the socket refused (lost;
+    /// the next one goes an interval later).
+    udp_game_probes_send_failed,
+    /// rUDP writers (game-band feedback): probes whose report never came
+    /// back — the probe or its report was lost, it was superseded by a
+    /// newer answered probe, or the session ended first. `probes_sent =
+    /// reports_received + probes_unanswered` once the writers end.
+    udp_game_probes_unanswered,
+    /// rUDP writers (game-band feedback): reports answering one of the
+    /// session's probes, applied (each an RTT sample and an interval of
+    /// loss accounting).
+    udp_game_reports_received,
+    /// rUDP writers (game-band feedback): reports for a probe already
+    /// answered or superseded (reordered or duplicated), ignored.
+    udp_game_reports_late,
+    /// rUDP writers (game-band feedback): reports refused — an id the
+    /// session never sent (or a session that never announced), or a
+    /// received count that runs backwards. Nothing of them is applied.
+    udp_game_reports_invalid,
+    /// rUDP writers (game-band feedback): reports applied with their
+    /// received count clamped to what the server had sent by their arrival
+    /// (a duplicated datagram, or a false claim).
+    udp_game_reports_clamped,
+    /// rUDP demux (game-band feedback): reports it could not hand to the
+    /// session's writer (its outbound channel full or closed), lost.
+    udp_game_reports_not_forwarded,
+    /// rUDP writers (game-band feedback): game datagrams (RAW and FRAG)
+    /// sent within the intervals the applied reports cover — the
+    /// denominator of the reported loss.
+    udp_game_datagrams_reported_sent,
+    /// rUDP writers (game-band feedback): of those, the datagrams the
+    /// clients reported missing (the path's loss, as the clients saw it; a
+    /// reordering surplus is carried, not counted).
+    udp_game_datagrams_reported_lost,
+    /// rUDP writers (game-band feedback): RTT samples taken from answered
+    /// probes (each also feeds the session's reliable-band estimator).
+    udp_game_rtt_samples,
+    /// rUDP writers (game-band feedback): the sum of those samples, in
+    /// microseconds (÷ `udp_game_rtt_samples` = the mean probe round trip).
+    udp_game_rtt_sum_us,
 }
 
 impl TransportCounters {

@@ -22,9 +22,17 @@ use super::*;
 /// counters do afterwards). The second socket is returned so the peer
 /// address stays bound for the client's lifetime.
 async fn detached() -> (UdpClient, UdpSocket) {
+    detached_with(UdpClientConfig::default()).await
+}
+
+/// [`detached`] with a [`UdpClientConfig`].
+async fn detached_with(config: UdpClientConfig) -> (UdpClient, UdpSocket) {
     let sock = UdpSocket::bind("127.0.0.1:0")
         .await
         .expect("bind the client socket");
+    // Its writability known to the runtime, as a connected client's is
+    // (the handshake sent on it): the synchronous sends then go out.
+    sock.writable().await.expect("writable");
     let sink = UdpSocket::bind("127.0.0.1:0")
         .await
         .expect("bind the silent peer");
@@ -42,6 +50,7 @@ async fn detached() -> (UdpClient, UdpSocket) {
         buf: vec![0u8; 2048],
         raw: None,
         reasm: Reassembly::default(),
+        reports: super::report::Reports::new(config),
     };
     (client, sink)
 }
@@ -305,4 +314,5 @@ async fn a_busy_game_band_does_not_starve_the_retransmit() {
     }
 }
 
+mod report;
 mod rtt;
