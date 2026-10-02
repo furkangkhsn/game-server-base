@@ -31,6 +31,8 @@ pub(crate) struct ServerOverrides {
     /// The UDP door's receive buffer (`None` = config default:
     /// untouched, B4).
     pub(crate) udp_recv_buffer: Option<u32>,
+    /// The rUDP congestion response (`None` = config default: off, B104).
+    pub(crate) udp_congestion: Option<gsb_server::UdpCongestionKind>,
     /// The rUDP record layer (B5a): sealed — under an ephemeral key drawn
     /// here, its public half on the server handle — or plaintext.
     pub(crate) udp_security: gsb_server::UdpSecurityKind,
@@ -59,6 +61,9 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     }
     if let Some(n) = o.udp_recv_buffer {
         cfg.udp_recv_buffer_bytes = Some(n);
+    }
+    if let Some(k) = o.udp_congestion {
+        cfg.udp_congestion = k;
     }
     // The rUDP door's record layer (B5a): a load run's server is sealed
     // like a deployment's, under a key of its own (its clients pin the
@@ -208,6 +213,7 @@ mod tests {
             mmo_crystallize: None,
             listen_backlog: None,
             udp_recv_buffer: None,
+            udp_congestion: None,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
             udp_handshakes_per_sec: None,
         };
@@ -239,6 +245,7 @@ mod tests {
             mmo_crystallize: None,
             listen_backlog,
             udp_recv_buffer: None,
+            udp_congestion: None,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
             udp_handshakes_per_sec: None,
         };
@@ -263,6 +270,7 @@ mod tests {
             mmo_crystallize: None,
             listen_backlog: None,
             udp_recv_buffer,
+            udp_congestion: None,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
             udp_handshakes_per_sec: None,
         };
@@ -271,6 +279,37 @@ mod tests {
         assert_eq!(cfg.udp_recv_buffer_bytes, None);
         apply_overrides(&mut cfg, &o(Some(4 << 20)));
         assert_eq!(cfg.udp_recv_buffer_bytes, Some(4 << 20));
+    }
+
+    /// `--udp-congestion` (B104) lands in the config's `udp_congestion`;
+    /// unset, the config default (off) stays.
+    #[test]
+    fn the_udp_congestion_override_sets_the_config_key() {
+        let o = |udp_congestion| ServerOverrides {
+            max_players: None,
+            max_connections: None,
+            idle_timeout_secs: None,
+            write_stall_secs: None,
+            conn_out: None,
+            disconnect_grace_secs: None,
+            mmo_crystallize: None,
+            listen_backlog: None,
+            udp_recv_buffer: None,
+            udp_congestion,
+            udp_security: gsb_server::UdpSecurityKind::Sealed,
+            udp_handshakes_per_sec: None,
+        };
+        let mut cfg = gsb_server::Config::default();
+        apply_overrides(&mut cfg, &o(None));
+        assert_eq!(cfg.udp_congestion, gsb_server::UdpCongestionKind::Off);
+        apply_overrides(&mut cfg, &o(Some(gsb_server::UdpCongestionKind::Pace)));
+        assert_eq!(cfg.udp_congestion, gsb_server::UdpCongestionKind::Pace);
+        apply_overrides(&mut cfg, &o(None));
+        assert_eq!(
+            cfg.udp_congestion,
+            gsb_server::UdpCongestionKind::Pace,
+            "unset touches nothing"
+        );
     }
 
     /// A load run's rUDP door is sealed like a deployment's (B5a) under a
@@ -288,6 +327,7 @@ mod tests {
             mmo_crystallize: None,
             listen_backlog: None,
             udp_recv_buffer: None,
+            udp_congestion: None,
             udp_security,
             udp_handshakes_per_sec: Some(0),
         };

@@ -127,6 +127,16 @@ pub(super) fn server_args(args: &Args, pinned_cores: Option<usize>) -> Vec<Strin
         sargs.push("--udp-recv-buffer".into());
         sargs.push(n.to_string());
     }
+    if let Some(k) = args.udp_congestion {
+        sargs.push("--udp-congestion".into());
+        sargs.push(
+            match k {
+                gsb_server::UdpCongestionKind::Off => "off",
+                gsb_server::UdpCongestionKind::Pace => "pace",
+            }
+            .into(),
+        );
+    }
     if let Some(n) = args.udp_handshakes_per_sec {
         sargs.push("--udp-handshakes-per-sec".into());
         sargs.push(n.to_string());

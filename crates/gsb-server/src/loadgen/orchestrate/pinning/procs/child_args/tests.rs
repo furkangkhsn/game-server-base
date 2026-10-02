@@ -165,6 +165,27 @@ fn the_udp_recv_buffer_goes_to_the_server_only() {
     );
 }
 
+/// `--udp-congestion` is a server knob (B104): the served server's rUDP
+/// writers get it, as given; unset, the served server keeps its config
+/// default (off).
+#[test]
+fn the_udp_congestion_goes_to_the_server_only() {
+    let mut args = Args::defaults();
+    let flag = "--udp-congestion";
+    assert_eq!(value_of(&server_args(&args, None), flag), None);
+    for (k, want) in [
+        (gsb_server::UdpCongestionKind::Pace, "pace"),
+        (gsb_server::UdpCongestionKind::Off, "off"),
+    ] {
+        args.udp_congestion = Some(k);
+        assert_eq!(value_of(&server_args(&args, None), flag), Some(want));
+        assert_eq!(
+            value_of(&client_args(&args, 10, 0, door(), None, None), flag),
+            None
+        );
+    }
+}
+
 /// The slow reader is a client knob: every client child stalls the same
 /// way, the server never hears of it.
 #[test]

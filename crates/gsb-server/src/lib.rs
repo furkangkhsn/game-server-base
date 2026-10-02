@@ -33,7 +33,8 @@ pub use boot::{
 pub use config::{
     Communication, Config, ConfigError, ConfigOrigin, ListenerEntry, ListenerTransport,
     MetricsConfig, OtlpSection, RoomOverride, ServerError, Topology, TransportKind,
-    UdpSecurityKind, Visibility, ephemeral_udp_key, parse_udp_public_key, udp_key_hex,
+    UdpCongestionKind, UdpSecurityKind, Visibility, ephemeral_udp_key, parse_udp_public_key,
+    udp_key_hex,
 };
 pub use error_chain::error_chain;
 pub use game::{GameError, GameModule, RegistryParts, RegistryTask};

@@ -244,6 +244,12 @@ struct Args {
     /// re-sent (`hs_retries`) and connect p99 grows. Linux caps it at
     /// `net.core.rmem_max`.
     udp_recv_buffer: Option<u32>,
+    /// The in-process / served server's rUDP congestion response
+    /// (`--udp-congestion off|pace`, BACKLOG B104; unspecified = the
+    /// server config default, `off`): `pace` paces a reporting session's
+    /// game band to its path's estimated rate. The jitter measurement
+    /// (`scripts/rudp-jitter.sh`) runs the same load under both.
+    udp_congestion: Option<gsb_server::UdpCongestionKind>,
     /// The rUDP record layer (`--udp-security sealed|plaintext`, default
     /// sealed — the server's own default, BACKLOG B5a): the in-process /
     /// served server's `udp_security`, with an ephemeral static key it
@@ -450,6 +456,10 @@ Server options (in-process server, --serve, or the orchestrator's server):
   --udp-server-key HEX                the external sealed server's public
                                        key (64 hex; with --addr and
                                        --transport udp)
+  --udp-congestion off|pace           the server's rUDP congestion response
+                                       (default: the config's, off; pace =
+                                       pace a reporting session's game band
+                                       to its path's estimated rate)
   --udp-recv-buffer N                 receive buffer (SO_RCVBUF, bytes) of
                                        the server's UDP door (default: the
                                        server config default, untouched;

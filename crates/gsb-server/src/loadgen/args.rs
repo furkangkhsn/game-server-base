@@ -46,6 +46,7 @@ impl Args {
             conn_out: None,
             listen_backlog: None,
             udp_recv_buffer: None,
+            udp_congestion: None,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
             udp_server_key: None,
             udp_handshakes_per_sec: None,
@@ -229,6 +230,17 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                     "--udp-recv-buffer must be 4096..=2147483647 (Linux caps it at net.core.rmem_max)",
                 )?;
                 args.udp_recv_buffer = Some(n);
+            }
+            "--udp-congestion" => {
+                args.udp_congestion = Some(match v()?.as_str() {
+                    "off" => gsb_server::UdpCongestionKind::Off,
+                    "pace" => gsb_server::UdpCongestionKind::Pace,
+                    other => {
+                        return Err(CliError(format!(
+                            "--udp-congestion: expected off|pace, got {other}"
+                        )));
+                    }
+                });
             }
             "--udp-security" => {
                 args.udp_security = match v()?.as_str() {

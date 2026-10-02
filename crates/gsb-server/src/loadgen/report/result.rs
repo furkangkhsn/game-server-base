@@ -259,6 +259,7 @@ pub(crate) fn print_report(
         .iter()
         .filter(|r| r.connected)
         .max_by_key(|r| r.connect_ms);
+    let (connect_p50, connect_p99) = (pctl(&mut conns_ms, 0.50), pctl(&mut conns_ms, 0.99));
     println!(
         "connect{}: p50={}ms p99={}ms slowest={}ms (client #{})",
         if args.transport == crate::Transport::Udp {
@@ -266,8 +267,8 @@ pub(crate) fn print_report(
         } else {
             ""
         },
-        pctl(&mut conns_ms, 0.50),
-        pctl(&mut conns_ms, 0.99),
+        connect_p50,
+        connect_p99,
         slowest.map(|r| r.connect_ms).unwrap_or(0),
         slowest.map(|r| r.id).unwrap_or(0)
     );
@@ -453,7 +454,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_refused={} req_unread={} req_unbound={} req_to={} req_late={} req_undelivered={} req_abandoned={} req_pending={} actions_unread={} actions_unbound={}{} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{} game={}",
+             detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{}{} game={}",
         mode,
         match labels {
             Some(l) => l.visibility.to_string(),
@@ -622,6 +623,15 @@ pub(crate) fn print_report(
             .iter()
             .map(|(r, n)| format!(" server_close_{}={n}", r.label()))
             .collect::<String>(),
+        // The path segment (`path.rs`): the comparison inputs of the
+        // jitter measurement (B104) and the clients' rUDP ends (B128).
+        path_segment(
+            (connect_p50, connect_p99),
+            snaps_total,
+            dur,
+            &udp_ends,
+            args.udp_congestion,
+        ),
         // A sharded game's per-shard members at the end of the steady
         // window — its last consistent cut, `spread.rs`
         // (`shard_members=a,b,c,d`; `-` without server reports) —

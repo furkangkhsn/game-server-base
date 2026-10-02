@@ -454,31 +454,45 @@ fn loadgen_smoke_separate_processes() {
 /// server draws its key and its clients pin the handle's public half; the
 /// served child reports its key on the `SERVING` line and the client
 /// children pin it (`--udp-server-key`). Every client joins over the
-/// sealed door, and nothing is refused or forged.
+/// sealed door, and nothing is refused or forged. Each run names its
+/// congestion response (`--udp-congestion`, B104 — the served child gets
+/// it on its own command line), and the RESULT line carries what the
+/// jitter measurement (`scripts/rudp-jitter.sh`) compares; no session
+/// ended under its client (B128's `udp_ends_*`).
 #[test]
 fn a_sealed_rudp_run_connects_in_process_and_orchestrated() {
-    for argv in [
-        &[
-            "3",
-            "--duration",
-            "3",
-            "--move-ms",
-            "100",
-            "--transport",
-            "udp",
-        ][..],
-        &[
-            "--orchestrate",
-            "4",
-            "--procs",
-            "2",
-            "--duration",
-            "3",
-            "--move-ms",
-            "100",
-            "--transport",
-            "udp",
-        ][..],
+    for (argv, congestion) in [
+        (
+            &[
+                "3",
+                "--duration",
+                "3",
+                "--move-ms",
+                "100",
+                "--transport",
+                "udp",
+                "--udp-congestion",
+                "off",
+            ][..],
+            "off",
+        ),
+        (
+            &[
+                "--orchestrate",
+                "4",
+                "--procs",
+                "2",
+                "--duration",
+                "3",
+                "--move-ms",
+                "100",
+                "--transport",
+                "udp",
+                "--udp-congestion",
+                "pace",
+            ][..],
+            "pace",
+        ),
     ] {
         let run = loadgen_rate::run(argv);
         let out = &run.out;
@@ -506,9 +520,30 @@ fn a_sealed_rudp_run_connects_in_process_and_orchestrated() {
             "transport_udp_handshakes_failed_decrypt",
             "transport_seal_forged",
             "transport_udp_datagrams_unsealed",
+            "udp_ends_rel_dead",
+            "udp_ends_reset",
+            "udp_ends_seal_limit",
         ] {
             assert_eq!(kv.get(k), Some(&"0"), "{k}: {result_line}");
         }
+        assert_eq!(kv.get("udp_congestion"), Some(&congestion), "{result_line}");
+        for k in [
+            "transport_udp_game_paced_episodes",
+            "transport_udp_game_paced_rate_cuts",
+            "transport_udp_game_frames_dropped_paced",
+            "transport_udp_game_frames_queued_paced",
+            "transport_udp_game_datagrams_reported_lost",
+            "transport_udp_game_datagrams_reported_sent",
+            "transport_udp_game_rtt_sum_us",
+            "transport_udp_game_rtt_samples",
+            "connect_p50_ms",
+            "connect_p99_ms",
+        ] {
+            let v = kv.get(k).unwrap_or_else(|| panic!("{k}: {result_line}"));
+            assert!(v.parse::<u64>().is_ok(), "{k}={v}: {result_line}");
+        }
+        let rate: f64 = kv["snap_per_s"].parse().expect("snap_per_s");
+        assert!(rate > 0.0, "snapshots flowed: {result_line}");
     }
 }
 

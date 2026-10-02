@@ -63,6 +63,7 @@ pub(crate) async fn serve(args: Args) {
             mmo_crystallize: args.mmo_crystallize,
             listen_backlog: args.listen_backlog,
             udp_recv_buffer: args.udp_recv_buffer,
+            udp_congestion: args.udp_congestion,
             udp_security: args.udp_security,
             udp_handshakes_per_sec: args.udp_handshakes_per_sec,
         },
