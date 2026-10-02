@@ -5,6 +5,51 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## m1 — F29 toplayıcı uçuştaki shard turunu bekler; F64 üst düzey reddinde `dosya:satır` (`obs/m1-collector-config`)
+
+- **F29 — hata (motor):** toplayıcı shard'larla aynı ticker'a abone, raporu
+  düştüğü tick'te boşaltıp yayıyordu; shard'lar örneklerini aynı tick'te,
+  her biri kendi görevinde gönderiyor. Rapor shard'ların örnek tick'ine
+  denk gelince boşaltma turun ortasına düşüyor, rapor yırtık çıkıyordu
+  (B52). Ölçüm (4 shard'lı MMO; `taskset -c 0,1` + `yes` yükü ve yüksüz):
+  orkestre koşuda oyunculu raporların 5/181'i (%2,8), ayrık sunucuda
+  2/211'i yırtık. Mekanizma: yavaşlayan shard'ın örnek fazı raporunkinin
+  üstünden kayıyor (rapor başına ~200 ms).
+  - **Düzeltme:** düşen rapor, bir sharded odanın canlı satırları
+    `lagged_ticks`'te anlaşıp `steps`'te ayrışıyorsa (uçuşta tur) bekler;
+    boşaltma her tick yinelenir, rapor satırları hizalı bulan ilk tick'te
+    (normalde bir sonraki) çıkar. Sınır `metrics::CUT_GRACE` = 250 ms
+    (periyodun yarısıyla sınırlı; `MetricsCollector::with_cut_grace`,
+    `ZERO` hiç beklemez): ölü/takılmış shard raporları tutamaz, sınırda
+    rapor eskisi gibi yırtık çıkar (`debug`). `lagged_ticks`'te ayrışan
+    satırlar (F20), tek odalar, duran odanın / ölü shard'ın kalan satırları
+    beklenmez. Toplayıcının takvimi tick saatinde (`ticker::now`).
+  - Sonra: aynı yükte orkestre 0/182, ayrık 0/92 yırtık.
+  - Elenenler: yayını yarım periyot kaydırmak, shard sayısını bilerek tur
+    tamamlanınca yaymak (örnek/tel değişikliği), "sessiz tick" kuralı,
+    yalnız `steps` karşılaştırmak, F20 (gerekmedi).
+  - Rapor biçimi, metrik adları, tel baytları değişmedi; `/metrics` ve log
+    satırları uçuşta tur varken periyot sınırından en çok 250 ms sonra
+    yenilenir (`/healthz` eşiği 3 periyot). DESIGN §12 "Toplayıcı uçuştaki
+    turu bekler (F29)", OPS §1.
+- **F64 — üst düzey reddinde `dosya:satır`:** `Config::from_file` metin
+  elindeyken her üst düzey anahtarın onu ilk yazan satırını (`ad = …`,
+  `[ad]`, `[ad.alt]`, `[[ad]]`, `ad.alt = …`; toml'un konumlu
+  ayrıştırıcısı) yoluyla birlikte yeni `Config::origin` alanına (opak
+  `ConfigOrigin`) kaydeder. `ServerError::UnknownKey` yeni `at` alanını
+  taşır; mesaj ``…key `tik_hz` at server.toml:4 (did you mean …`` der.
+  Kodla kurulan config'te mesaj eskisi gibi. Neden opak genel alan: özel
+  alan `Config { …, ..Config::default() }` literalini crate dışında
+  kırardı. API: `Config::origin`, `ConfigOrigin`, `UnknownKey::at` (tüm
+  alanları sayan literal/desen kırılır, bilerek). OPS §2 "Üst düzey".
+
+Testler 1659 → 1676 (`otlp` ile 1677 → 1694): F29 `metrics::tests::cut`
+(5, paused saat) + `metrics::accumulator::cut::tests` (4); F64
+`tests/top_level_key_lines.rs` (5) + `config::origin::tests` (3). Eski
+davranışa dönen mutasyonlar testleri düşürüyor; 14 mutasyonun hepsi
+yakalandı. Ebeveyn doğrulaması: tam kapılar ebeveynde (yük ~40'ta yeşil);
+shard satır kimliği sınırını `>`'a çekmek testi düşürdü.
+
 ## c1 — kapanış hükümleri ve nedenleri: F60, F28, B30 (`fix/c1-close-reasons`)
 
 - **F60 — oturum başına tek kayıp hüküm:** duruşta aynı oturum için iki hüküm

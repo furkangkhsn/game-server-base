@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1659 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+1676 test yeşil (1 ignored doctest), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -188,6 +188,14 @@ bağlantının sonunda bir kez sayılır; oda politikası kopan bağlantının h
 `ConnectionClosedBy(ServerClose)` ile görür (kit ezmesi hükme göre); WS kapısı
 kapanış kodunu oturumun sonuna göre seçer (`SessionEnd`, uç noktanın end
 notice'i). Açık: F66–F69.
+
+**m1 tamam** (CHANGELOG "m1"; DESIGN §12 "Toplayıcı uçuştaki turu bekler
+(F29)", OPS §1/§2): toplayıcı, bir sharded odanın turu uçuştaysa raporu en
+çok `metrics::CUT_GRACE` (250 ms) bekletir; rapor satırlar hizalanınca
+(normalde bir sonraki tick) çıkar, sınırda eskisi gibi yırtık. Takvim tick
+saatinde (`ticker::now`). Ölçüm: orkestre MMO'da yırtık 5/181 → 0/182.
+Üst düzey ret artık `at <yol>:<satır>` der (`Config::origin`, opak
+`ConfigOrigin`). Açık: F70, F71.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -891,6 +899,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1659 passed, 1 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 1676 passed, 1 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

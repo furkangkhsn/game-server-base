@@ -77,11 +77,14 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **1659** (1659/1659 yeşil, 1 ignored doctest;
+Test sayısı: bugün itibarıyla **1676** (1676/1676 yeşil, 1 ignored doctest;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **c1 — F60 + F28 + B30** (kapanış hükümleri ve nedenleri) —
+Son tur: **m1 — F29 + F64** — toplayıcı uçuştaki shard turunu
+`CUT_GRACE` (250 ms) sınırıyla bekler (yükte yırtık rapor %2,8 → 0); üst
+düzey config reddi `dosya:satır` der (`Config::origin`).
+Önceki tur: **c1 — F60 + F28 + B30** (kapanış hükümleri ve nedenleri) —
 duruşta oturum başına tek kayıp hüküm (sayım bağlantıda,
 `ShutdownOvertaking`); kopmanın arkasındaki hüküm politikaya
 (`DisconnectCause::ConnectionClosedBy`, kit hükme göre seçer); WS kapanış
