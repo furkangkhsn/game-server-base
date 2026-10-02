@@ -15,6 +15,12 @@
 //!   back as it drops. Then the registry's per-source cap on
 //!   unauthenticated connections (D12) counts it — `ConnOpened` goes
 //!   after the take, so never twice at once (D11's hand-off, the same).
+//! - **Migration** (B113). A pending session that moves counts against
+//!   the new source when it has room; otherwise its count stays where it
+//!   was (counted, `moves_kept`). The move itself is never refused:
+//!   nobody is stranded, and no move frees a place the new source cannot
+//!   take — every count stays on a source the session proved, none over
+//!   the cap.
 //! - **No lock, bounded.** The tables live in the demux task. An entry
 //!   exists only while a claim does; claims ride in queued endpoints
 //!   (the endpoint channel's capacity, plus one per pending accept), and
@@ -64,6 +70,9 @@ pub(super) struct PerSource {
     released: Receiver<SessionKey>,
     /// Verified proofs refused at the cap (no session, no accept).
     pub(super) refused: u64,
+    /// Migrations of a pending session whose count stayed at its old
+    /// source (the new one was at the cap).
+    pub(super) moves_kept: u64,
 }
 
 impl PerSource {
@@ -78,6 +87,7 @@ impl PerSource {
             release,
             released,
             refused: 0,
+            moves_kept: 0,
         }
     }
 
@@ -97,6 +107,18 @@ impl PerSource {
                 e.remove();
             }
         }
+    }
+
+    /// `key`'s place, counted against `source`.
+    fn hold(&mut self, key: SessionKey, source: Source) {
+        self.held
+            .entry(source)
+            .or_insert(Held {
+                pending: 0,
+                warned: false,
+            })
+            .pending += 1;
+        self.by_key.insert(key, source);
     }
 
     /// Whether `source` holds its cap now.
@@ -133,19 +155,34 @@ impl PerSource {
     /// its queued endpoint (`None` with no cap).
     pub(super) fn claim(&mut self, key: SessionKey, ip: IpAddr) -> Option<Pending> {
         self.cap?;
-        let source = Source::of(ip);
-        self.held
-            .entry(source)
-            .or_insert(Held {
-                pending: 0,
-                warned: false,
-            })
-            .pending += 1;
-        self.by_key.insert(key, source);
+        self.hold(key, Source::of(ip));
         Some(Pending {
             key,
             release: self.release.clone(),
         })
+    }
+
+    /// The session `key` migrated to `ip`: a pending one's count follows
+    /// it when the new source has room, else stays (counted).
+    pub(super) fn moved(&mut self, key: SessionKey, ip: IpAddr) {
+        let Some(cap) = self.cap else {
+            return;
+        };
+        self.reclaim();
+        let Some(&old) = self.by_key.get(&key) else {
+            return;
+        };
+        let new = Source::of(ip);
+        if new == old {
+            return;
+        }
+        if self.full(cap, new) {
+            self.moves_kept += 1;
+            debug!(%old, %new, "rUDP: pending session moved; its count stays at the old source");
+            return;
+        }
+        self.give_back(old);
+        self.hold(key, new);
     }
 
     /// The pending sessions `ip`'s source holds (after reclaiming).
@@ -170,6 +207,7 @@ impl std::fmt::Debug for PerSource {
             .field("sources", &self.held.len())
             .field("pending", &self.by_key.len())
             .field("refused", &self.refused)
+            .field("moves_kept", &self.moves_kept)
             .finish()
     }
 }

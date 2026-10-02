@@ -22,6 +22,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 const PROMPT: Duration = Duration::from_secs(5);
 
+#[path = "unauth_per_source/migrate.rs"]
+mod migrate;
+
 fn parse(text: &str) -> Config {
     toml::from_str(text).expect("the config parses")
 }

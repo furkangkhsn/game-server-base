@@ -101,7 +101,11 @@
 //! after `gsb_metrics_dropped_total`.
 //! B103's room-scope `snapshots_withheld=` after `snapshots=`, with
 //! `gsb_room_snapshots_withheld_total` after `gsb_room_snapshots_total`.
-//! B113's registry-scope `unauth_source_moves_kept=` at the end of that
+//! B89's two transport counters at the end of that line and table
+//! (`udp_proofs_refused_per_source`, `udp_pending_source_moves_kept`),
+//! and B113's deliberate HELP change of
+//! `gsb_transport_udp_path_changes_not_forwarded_total` (the actor is
+//! told too). B113's registry-scope `unauth_source_moves_kept=` at the end of that
 //! line, with `gsb_registry_unauth_source_moves_kept_total` after
 //! `gsb_registry_detach_despawns_lost_total`.
 

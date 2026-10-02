@@ -334,8 +334,9 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_udp_path_validations_open_at_end",
         "transport_udp_migrations",
         "transport_udp_migrations_port_only",
-        // The rUDP door's per-source cap (B89).
+        // The rUDP door's per-source cap and migration's source (B89, B113).
         "transport_udp_proofs_refused_per_source",
+        "transport_udp_pending_source_moves_kept",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",

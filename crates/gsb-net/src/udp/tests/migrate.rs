@@ -23,6 +23,8 @@ struct Live {
     eps: mpsc::UnboundedReceiver<Endpoint>,
     listener: Arc<dyn Listener>,
     metrics: mpsc::Receiver<MetricsEvent>,
+    /// The moves the session's actor was told of (B113), in order.
+    peers: Vec<std::net::SocketAddr>,
 }
 
 /// A door (migration `on` or off) and one client (`config`) connected
@@ -59,6 +61,7 @@ async fn live(on: bool, config: UdpClientConfig, nat: Option<&mut Option<Nat>>) 
         eps,
         listener,
         metrics,
+        peers: Vec::new(),
     }
 }
 
@@ -74,6 +77,7 @@ impl Live {
         while ops.len() < 2 {
             match tokio::time::timeout(Duration::from_secs(5), self.in_rx.recv()).await {
                 Ok(Some(ConnIn::Frame(f))) if f.payload.as_ref() == tag => ops.push(f.op),
+                Ok(Some(ConnIn::PeerChanged { peer })) => self.peers.push(peer),
                 Ok(Some(_)) => {}
                 other => panic!("{tag:?}: the server's half: {other:?}"),
             }
@@ -138,6 +142,7 @@ async fn a_nat_rebinding_migrates_the_session() {
     l.exchange(b"after").await;
     l.exchange(b"again").await;
     l.no_new_session().await;
+    assert_eq!(l.peers, [nat.public()], "the actor is told");
     assert!(l.c.stats.path_challenges_answered >= 1, "{:?}", l.c.stats);
     assert_eq!(l.c.stats.rebinds, 0, "the client did nothing");
     let t = l.counters().await;
@@ -145,6 +150,29 @@ async fn a_nat_rebinding_migrates_the_session() {
     assert_eq!(t.udp_migrations_port_only, 1);
     assert_eq!(t.udp_path_validations_started, 1);
     assert_eq!(t.udp_cid_unknown + t.udp_path_responses_unmatched, 0);
+}
+
+/// A NAT rebinding onto another public address (127.0.0.2: another
+/// source, a phone moving behind a carrier NAT): the session moves, and
+/// its actor is told the new address — what carries the per-source count
+/// along (B113). A new IP: no port-only move.
+#[tokio::test]
+async fn a_rebinding_to_another_source_tells_the_actor() {
+    let mut nat = None;
+    let mut l = live(true, UdpClientConfig::default(), Some(&mut nat)).await;
+    let nat = nat.as_mut().unwrap();
+    l.exchange(b"before").await;
+    let moved = nat.rebind_to([127, 0, 0, 2]).await;
+    l.exchange(b"after").await;
+    l.exchange(b"again").await;
+    l.no_new_session().await;
+    assert_eq!(l.peers, [moved]);
+    let t = l.counters().await;
+    assert_eq!(
+        (t.udp_migrations, t.udp_migrations_port_only),
+        (1, 0),
+        "{t:?}"
+    );
 }
 
 /// `UdpClient::rebind` (Wi-Fi ↔ cellular, as a new local socket): the

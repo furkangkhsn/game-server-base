@@ -60,11 +60,15 @@
 //!   honest rebinding one round trip of inputs. Replies (the demux's
 //!   ACKs) still go to the old, validated address.
 //! - **A matching `PATH_RESPONSE`** (the pending nonce, from the
-//!   candidate address) migrates: the session's address index moves, and
-//!   the writer is told through its outbound channel (`UDP_PATH`, like
-//!   the piggybacked ACK); from then on everything goes to the new
-//!   address. A response the writer's full channel refuses is counted and
-//!   the validation stays pending (the next challenge round retries).
+//!   candidate address) migrates: the session's address index moves, the
+//!   writer is told through its outbound channel (`UDP_PATH`, like the
+//!   piggybacked ACK) and the connection actor through its inbox
+//!   (`ConnIn::PeerChanged`: its `peer`, and the registry's per-source
+//!   count — B113), both or neither; from then on everything goes to the
+//!   new address. A response either full channel refuses is counted and
+//!   the validation stays pending (the next challenge round retries). A
+//!   still-pending session's place in the per-source cap (B89) follows
+//!   it to the new source when that has room.
 //! - **The old address keeps working** until the migration completes.
 //! - **A validation ends** migrated, timed out ([`VALIDATION_TIMEOUT`]
 //!   without a matching response — noticed on the session's next

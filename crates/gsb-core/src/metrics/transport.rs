@@ -393,8 +393,9 @@ transport_counters! {
     /// nonce), dropped.
     udp_path_responses_unmatched,
     /// rUDP demux (migration): matching responses whose path-change
-    /// notice the session's writer channel refused (full or closed); the
-    /// validation stays pending and the next challenge round retries.
+    /// notices the session's writer or actor channel refused (full or
+    /// closed; both are told or neither — B113); the validation stays
+    /// pending and the next challenge round retries.
     udp_path_changes_not_forwarded,
     /// rUDP demux (migration): validations that ended without a matching
     /// response within 3 s (a spoofed or vanished candidate); the session
@@ -417,6 +418,11 @@ transport_counters! {
     /// (established, not yet taken by the accept loop) — no session, no
     /// accept; the client re-sends its proof.
     udp_proofs_refused_per_source,
+    /// rUDP demux (per-source cap, BACKLOG B89/B113): sessions that migrated
+    /// while pending (established, not yet taken by the accept loop) into a
+    /// source holding `max_handshakes_per_source`: the move happened, the
+    /// session's place stayed counted at its old source.
+    udp_pending_source_moves_kept,
 }
 
 impl TransportCounters {

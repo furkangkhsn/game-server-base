@@ -1,14 +1,17 @@
 //! The demux's half of connection migration (module `crate::udp::path`
 //! has the rules and the reasons): a tagged datagram from a new address
 //! starts a path validation, a matching response moves the session and
-//! tells its writer, and every validation ends under one name. A child
+//! tells its writer and its actor (B113), and every validation ends
+//! under one name. A child
 //! of [`super`], so the demux's state stays private.
 
 use std::net::SocketAddr;
 use std::time::Instant;
 
 use bytes::Bytes;
+use gsb_core::conn::ConnIn;
 use gsb_protocol::{FrameBody, op};
+use tokio::sync::mpsc::error::TrySendError;
 use tracing::debug;
 
 use super::SessionKey;
@@ -35,8 +38,9 @@ pub(super) struct Counts {
     pub(super) address_in_use: u64,
     /// Path responses that answered no pending validation.
     pub(super) responses_unmatched: u64,
-    /// Matching responses whose writer notice its channel refused (the
-    /// validation stays pending).
+    /// Matching responses whose notices the writer's or the actor's
+    /// channel refused — both are told or neither (the validation stays
+    /// pending).
     pub(super) changes_not_forwarded: u64,
     pub(super) validations_timed_out: u64,
     pub(super) validations_superseded: u64,
@@ -135,7 +139,8 @@ impl super::Demux {
     }
 
     /// A path response for `key` from `from`: a match migrates the
-    /// session (its writer told first — no notice, no move).
+    /// session (its writer and its actor told first — no notices, no
+    /// move).
     pub(super) fn path_response(&mut self, key: SessionKey, from: SocketAddr, nonce: u64) {
         let Some(s) = self.sessions.get(key) else {
             return;
@@ -152,20 +157,31 @@ impl super::Demux {
         }
         let old = s.addr;
         let notice = FrameBody::new(op::base::UDP_PATH, Bytes::from(encode_addr(p.addr)));
-        match s.out_tx.try_send(vec![notice]) {
-            Ok(()) => {}
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.mig.changes_not_forwarded += 1;
-                return;
+        // The writer (where replies go) and the actor (its `peer`, the
+        // registry's per-source count — B113) are told together or not
+        // at all: a slot in each channel first, then both notices.
+        let told = match (s.out_tx.try_reserve(), s.in_tx.try_reserve()) {
+            (Ok(writer), Ok(actor)) => {
+                writer.send(vec![notice]);
+                actor.send(ConnIn::PeerChanged { peer: from });
+                Ok(())
             }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                self.mig.changes_not_forwarded += 1;
+            (Err(TrySendError::Closed(())), _) | (_, Err(TrySendError::Closed(()))) => Err(true),
+            _ => Err(false),
+        };
+        if let Err(gone) = told {
+            // Full: the validation stays pending and the next response
+            // retries. Closed: the session's actor or writer is gone.
+            self.mig.changes_not_forwarded += 1;
+            if gone {
                 self.removed_actor_gone += 1;
                 self.remove_session(key);
-                return;
             }
+            return;
         }
         self.sessions.move_to(key, from);
+        // A pending session's place in the per-source cap follows (B89).
+        self.per_source.moved(key, from.ip());
         if let Some(s) = self.sessions.get_mut(key) {
             s.path = None;
         }

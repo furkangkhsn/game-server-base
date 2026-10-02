@@ -45,6 +45,7 @@ impl super::Demux {
             udp_migrations: self.mig.migrations,
             udp_migrations_port_only: self.mig.migrations_port_only,
             udp_proofs_refused_per_source: self.per_source.refused,
+            udp_pending_source_moves_kept: self.per_source.moves_kept,
             ..Default::default()
         };
         self.flusher.flush(totals, last);

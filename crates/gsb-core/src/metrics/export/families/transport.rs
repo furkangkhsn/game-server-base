@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 86] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 87] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -427,7 +427,7 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 86] 
     ),
     tr(
         "gsb_transport_udp_path_changes_not_forwarded_total",
-        "Matching rUDP path responses whose path-change notice the session's writer channel refused (the validation stays pending), cumulative.",
+        "Matching rUDP path responses whose path-change notices the session's writer or actor channel refused (both are told or neither; the validation stays pending), cumulative.",
         |t| t.udp_path_changes_not_forwarded,
     ),
     tr(
@@ -459,6 +459,11 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 86] 
         "gsb_transport_udp_proofs_refused_per_source_total",
         "Verified rUDP proofs refused because their source held its max_handshakes_per_source pending sessions (no session, no accept; the client re-sends), cumulative.",
         |t| t.udp_proofs_refused_per_source,
+    ),
+    tr(
+        "gsb_transport_udp_pending_source_moves_kept_total",
+        "rUDP sessions that migrated while pending into a source holding its max_handshakes_per_source: moved, their place kept at the old source, cumulative.",
+        |t| t.udp_pending_source_moves_kept,
     ),
 ];
 

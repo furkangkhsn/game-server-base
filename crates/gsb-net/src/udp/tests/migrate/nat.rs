@@ -75,7 +75,18 @@ impl Nat {
     /// A new mapping: a new back socket (a new public port), the old one
     /// gone. Returns the new public address.
     pub(in crate::udp::tests) async fn rebind(&mut self) -> SocketAddr {
-        let next = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("back"));
+        self.rebind_to([127, 0, 0, 1]).await
+    }
+
+    /// [`Self::rebind`] onto a public address at `ip` — another source
+    /// when it is not the old one's (127.0.0.2: the carrier NAT a phone
+    /// moves behind, B113).
+    pub(in crate::udp::tests) async fn rebind_to(&mut self, ip: [u8; 4]) -> SocketAddr {
+        let next = Arc::new(
+            UdpSocket::bind(SocketAddr::from((ip, 0)))
+                .await
+                .expect("back"),
+        );
         self.s2c.abort();
         self.s2c = Self::mapping(
             Arc::clone(&self.front),

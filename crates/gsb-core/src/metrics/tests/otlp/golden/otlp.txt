@@ -278,7 +278,7 @@ gsb_transport_udp_path_address_in_use sum t=2 mono=true unit="" n=1 | rUDP candi
   [] 1000..2000 int 78
 gsb_transport_udp_path_responses_unmatched sum t=2 mono=true unit="" n=1 | rUDP PATH_RESPONSE datagrams that answered no pending validation (none pending, another address or nonce), dropped, cumulative.
   [] 1000..2000 int 79
-gsb_transport_udp_path_changes_not_forwarded sum t=2 mono=true unit="" n=1 | Matching rUDP path responses whose path-change notice the session's writer channel refused (the validation stays pending), cumulative.
+gsb_transport_udp_path_changes_not_forwarded sum t=2 mono=true unit="" n=1 | Matching rUDP path responses whose path-change notices the session's writer or actor channel refused (both are told or neither; the validation stays pending), cumulative.
   [] 1000..2000 int 80
 gsb_transport_udp_path_validations_timed_out sum t=2 mono=true unit="" n=1 | rUDP path validations that ended without a matching response within 3 s; the session stayed on its old path, cumulative.
   [] 1000..2000 int 81
@@ -292,6 +292,8 @@ gsb_transport_udp_migrations_port_only sum t=2 mono=true unit="" n=1 | rUDP migr
   [] 1000..2000 int 85
 gsb_transport_udp_proofs_refused_per_source sum t=2 mono=true unit="" n=1 | Verified rUDP proofs refused because their source held its max_handshakes_per_source pending sessions (no session, no accept; the client re-sends), cumulative.
   [] 1000..2000 int 86
+gsb_transport_udp_pending_source_moves_kept sum t=2 mono=true unit="" n=1 | rUDP sessions that migrated while pending into a source holding its max_handshakes_per_source: moved, their place kept at the old source, cumulative.
+  [] 1000..2000 int 87
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

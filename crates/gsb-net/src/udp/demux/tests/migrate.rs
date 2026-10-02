@@ -71,10 +71,14 @@ pub(super) fn nonce_of(d: &[u8]) -> u64 {
 }
 
 impl Rig {
+    /// The session's next frame, past the move notices (B113, `source`).
     pub(super) fn frame(&mut self) -> Option<Vec<u8>> {
-        match self.inbox.try_recv() {
-            Ok(ConnIn::Frame(f)) => Some(f.payload.to_vec()),
-            _ => None,
+        loop {
+            match self.inbox.try_recv() {
+                Ok(ConnIn::Frame(f)) => return Some(f.payload.to_vec()),
+                Ok(ConnIn::PeerChanged { .. }) => continue,
+                _ => return None,
+            }
         }
     }
 }
@@ -198,3 +202,4 @@ async fn the_newest_candidate_wins_and_a_taken_address_is_refused() {
 
 mod limits;
 mod nonce;
+mod source;
