@@ -505,7 +505,8 @@ boy = min(tetikleyen − 1, RESET_LEN_MAX = 41), en az RESET_LEN_MIN = 26
 2. Datagram SEALED türlü ve reset boyundaysa (26..=41 B) son 16 baytı
    msg2'nin jetonuyla **sabit zamanlı** karşılaştırılır
    (`ResetToken::matches`, `subtle`).
-3. Tutarsa oturum hemen biter (`is_established()` → `false`; dışarıda
+3. Tutarsa oturum hemen biter (`is_established()` → `false`,
+   `ended()` → `UdpEnd::Reset`, okuma `Recv::Closed` — B128; dışarıda
    kalan REL çerçeveleri `gave_up`) ve datagram **yalnız**
    `stateless_resets_received` sayılır (§8'in eski açık sorusu: tek ad —
    `seal_forged`'a girmez). Çağıran resume yoluna geçer (yeni soket, yeni
@@ -600,11 +601,12 @@ gizlilik (pasif bağlanabilirlik, §3 son satır); güvenlik değil.
 - **Adres doğrulama jetonu:** QUIC Retry/NEW_TOKEN gibi, yeniden bağlanmada
   çerez turunu atlamak için. Stateless reset sonrası yeniden bağlanma
   bugün tam çerez turu (+1 RTT) yapar.
-- **İstemci kütüphanesinde EOF:** `gsb_client::Conn::recv` rUDP'de hiç
-  `Closed` döndürmez; oturumun bitişi (REL ölümü, sayaç sınırı, reset)
-  yalnız `UdpClient::is_established()`'dan okunur. Reset'i `Closed`
-  olarak yüzeye çıkarmak yük üretecinin ölüm sayımını değiştirir; ayrı
-  karar (BACKLOG).
+- ~~**İstemci kütüphanesinde EOF**~~ — B128 ile kapandı (2026-10-03):
+  `gsb_client::Conn::recv` rUDP'de de oturumun sonunu `Recv::Closed`
+  olarak döndürür (önce alınmış kareler boşaltılır), nedeni
+  `UdpClient::ended()` (`RelDead`, `Reset`, `SealLimit`); yük üreteci her
+  bitişi nedeniyle bir kez sayar (`udp_ends_*`). DESIGN §6 "İstemci
+  tarafında oturumun sonu".
 
 ## 11. Dış güvenlik incelemesi (karar 8, D13) — devir kapsamı
 

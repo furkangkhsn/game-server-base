@@ -2002,6 +2002,43 @@ yeniden iletmez. ACK'ler demux tarafından oturumun writer'ına **out
 kanalı üzerinden** (UDP_ACK frame olarak) verilir — komut kanalı yok,
 tek-beklenen-kaynak özdeşliği korunur.
 
+**İstemci tarafında oturumun sonu (BACKLOG B128 — 2026-10-03).** UDP'de
+FIN yok: istemcinin oturumu, istemcinin kendi hükmüyle biter — üç
+nedenden biriyle (`gsb_net::udp::UdpEnd`, ilk neden kalır, oturum bir
+kez biter): `RelDead` (REL bandı öldü: 5 sn ACK ilerlemesi yok ya da
+yeniden gönderim kuyruğu sınırı), `Reset` (oturumun jetonlu stateless
+reset'i, B5b) ve `SealLimit` (kayıt sayacı tükendi `seal_exhausted` ya
+da sahte kayıt bütünlük sınırı aşıldı `seal_integrity_limit`). Bitişten
+sonra oturum, EOF'undan sonraki bir akış gibidir — TCP'nin anlamı
+referanstır:
+
+- **Önce alınmış kareler boşaltılır:** sıraya girmiş kontrol kareleri
+  (ve elde bekleyen oyun bandı karesi) `recv_frame`'den eskisi gibi
+  döner; bitişten önce gelen kaybolmaz.
+- **Sonra bitiş, hemen:** `recv_frame` penceresini beklemeden ve soketi
+  bir daha okumadan `Ok(None)` döner, `is_established()` `false`'tur;
+  `gsb_client::Conn::recv` bunu `Recv::Closed` yapar (her sonraki okuma
+  yine `Closed`). Bitişten sonra gelen datagram hiçbir oturuma ait
+  değildir. Boş dönüş runtime'ın işbirlikli bütçesinden geçer
+  (`consume_budget`): bitişi kaçırıp okumayı sürdüren çağıran, akış
+  EOF'undaki gibi işçiyi kilitlemez, verir.
+- **Sonra hiçbir şey gönderilmez:** `send_frame` (ve `rebind`)
+  `NotConnected` ile reddeder, hiçbir sayaca dokunmaz — bitiş, olduğu
+  anda, nedeniyle bir kez sayılır. Bitişin geride bıraktığı da yanında
+  sayılır: bekleyen kontrol kareleri `gave_up`, bir boşluğun arkasında
+  kalmış alınmış kareler `oob_at_end` (artık sırayla teslim edilemez).
+
+Yük üreteci bitişi akışınki gibi okur (istemci hemen durur, LEAVE
+gönderemez) ve her oturumun sonunu, teli bırakılırken nedeniyle BİR
+KEZ sayar: RESULT ve `CLIENT` satırlarında `udp_ends_rel_dead`,
+`udp_ends_reset`, `udp_ends_seal_limit` (sıfırlar dahil hep var; churn'de
+döngü başına). Kilitler: `gsb-net` `udp::client::tests::end` (dört
+neden, boşaltma, anında bitiş, bitişten sonra sayılmayan gönderim),
+`gsb-client` `conn::tests` (betikli düz metin sunucu, REL ölümü →
+`Closed`), yük üreteci `view::run::tests::ended` (bir bitiş, bir sayım)
+ve `rudp_resume.rs`'in B5b yeniden başlatma testi (`Closed`, neden
+`Reset`).
+
 **Yeniden gönderim zamanlayıcısı: RTT tahmini + uyarlanan RTO (BACKLOG
 B2 — 2026-09-28).** Eskiden REL bandı en eski ACK'siz karesini her
 eş için sabit 50 ms'de bir yeniden gönderiyordu, geri çekilme yoktu:

@@ -650,13 +650,27 @@ eder; eski oturumun anahtarları onunla gider.
 anahtarla aynı adrese bağlanan sunucu, kaybettiği oturumun bir sonraki
 kaydına o oturumun reset jetonunu taşıyan stateless reset'le cevap verir
 (RUDP-SECURITY §8); istemci 5 sn REL sınırını beklemeden oturumu bitirir
-(`UdpClient::is_established()` → `false`,
-`stateless_resets_received`) ve bu bölümün yolunu izler: yeni soket, yeni
-el sıkışma, aynı adla AUTH. Yeni sunucu eski varlığı bilmediği için bu
-taze bir katılmadır (park yok). Kilit: `rudp_resume.rs`
+(`stateless_resets_received`; `Conn::recv` → `Recv::Closed`) ve bu
+bölümün yolunu izler: yeni soket, yeni el sıkışma, aynı adla AUTH. Yeni
+sunucu eski varlığı bilmediği için bu taze bir katılmadır (park yok).
+Kilit: `rudp_resume.rs`
 `a_restarted_server_resets_the_rudp_client_which_rejoins` (iki sunucu
-örneği, < 1 sn'de bitiş). İstemci kütüphanesinin `Conn::recv`'i rUDP'de
-hâlâ `Closed` döndürmez; bitişi `is_established()` söyler.
+örneği, < 1 sn'de `Closed`, neden `UdpEnd::Reset`).
+
+**İstemci bitişi okur (B128, 2026-10-03).** rUDP'de oturumun sonu artık
+her kapıdaki gibi `gsb_client::Conn::recv` → `Recv::Closed`'dur: önce
+bitişten önce alınmış kareler döner, sonra bitiş — beklemeden, her
+sonraki okumada yine. Bitişin nedeni `UdpClient::ended()`: REL bandının
+ölümü (`RelDead`), stateless reset (`Reset`), kayıt katmanı sınırı
+(`SealLimit`). Bitmiş oturumda gönderim `NotConnected` ile reddedilir.
+Yeniden bağlanma kararı yine çağıranındır (bu kitaplık politika
+taşımaz): `Closed` gören istemci bu bölümün yolunu izler — yeni bağlantı,
+aynı kimlik bilgisi; sunucu oturumu park etmişse resume, etmemişse taze
+katılma. Düz metin kapıda sessizce giden sunucu (FIN yok, reset yok)
+istemcinin söyleyecek bir şeyi olduğunda (heartbeat, LEAVE) REL sınırıyla
+(5 sn) `Closed` olur; hiç kontrol karesi göndermeyen istemci için sessizlik
+sessizlik kalır — heartbeat bu yüzden vardır. Ayrıntı: DESIGN §6
+"İstemci tarafında oturumun sonu".
 
 **Göç ve resume (B3, 2026-10-02; B5a'dan beri mühürlü kapıda
 varsayılan açık).** Göçü açık kapıda

@@ -297,6 +297,20 @@ udp_congestion = "pace"   # vars. "off"
   `udp_game_frames_queued_paced` düşürülen payı verir.
 - **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` ve `[[listeners]]`
   girdisi reddeder. Bilinmeyen değer ayrıştırma hatası.
+- **Yük üretecinde (B104):** `--udp-congestion off|pace` süreç-içi ya da
+  sunulan (`--serve`, orkestratörün sunucu çocuğu) sunucunun
+  `udp_congestion`'ını ayarlar; verilmezse config varsayılanı (`off`).
+  İstemci süreçlerine gitmez. RESULT satırı karşılaştırmanın girdilerini
+  taşır: `transport_udp_game_paced_episodes`, `…_paced_rate_cuts`,
+  `…_frames_queued_paced`, `…_frames_dropped_paced`,
+  `…_datagrams_reported_lost` / `…_reported_sent`, `…_rtt_sum_us` /
+  `…_rtt_samples`, `connect_p50_ms`, `connect_p99_ms`, `snap_per_s`
+  (istemcilerin toplam snapshot hızı), `udp_ends_*` (istemcinin bitirdiği
+  rUDP oturumları, nedeniyle — B128) ve `udp_congestion=off|pace|default`.
+  **Varsayılan ne olmalı:** `scripts/rudp-jitter.sh` aynı yükü iki kipte,
+  loopback'e netem ile titreşim, kayıp ve gerçek darboğaz koyarak koşar
+  (sudo gerekir; `scripts/README.md`) — titreşim tek başına hızlanma
+  tetiklememeli, darboğaz tetiklemeli.
 
 **Sunucu düzeyi: rUDP kayıt katmanı `udp_security`, sunucu anahtarı
 `udp_static_key` / `udp_static_key_file`, el sıkışma bütçesi
