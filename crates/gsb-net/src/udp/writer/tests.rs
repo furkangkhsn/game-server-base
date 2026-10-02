@@ -162,4 +162,5 @@ async fn a_cut_trims_the_queue_and_the_pacer_sets_the_wake() {
 }
 
 mod path;
+mod seal;
 mod signal;

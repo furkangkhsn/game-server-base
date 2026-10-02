@@ -1,0 +1,284 @@
+//! A sealed door's demux driven directly (B5a): the Noise handshake over
+//! a real client socket (every answer read where it went), the record
+//! path, its refusals and the migration rule. Children: `records`
+//! (refusals, limits), `rule` (migration), `budget` (the DH budget).
+
+use super::*;
+use crate::seal::{Accept, Initiator, Sealer, Session, StaticKey};
+use crate::udp::sealed::{DoorSeal, context, encode_sealed_proof};
+use gsb_core::channel::{FrameBatch, Inbox};
+
+/// A sealed, migration-on demux and its endpoint queue.
+pub(super) fn sealed_demux(
+    sock: Arc<UdpSocket>,
+    per_sec: Option<u32>,
+) -> (Demux, crossbeam_channel::Receiver<Queued>, [u8; 32]) {
+    let (mut d, end_rx) = demux_bare(sock);
+    d.migration = true;
+    let key = Arc::new(StaticKey::generate().expect("a key"));
+    let public = key.public();
+    d.seal = Some(DoorSeal::new(key, per_sec).expect("entropy"));
+    (d, end_rx, public)
+}
+
+/// A client socket: a std one, read with a REAL timeout — on a paused
+/// tokio clock a `timeout` around a tokio read can advance the clock past
+/// the DH budget's refill while the datagram is already queued.
+pub(super) fn client() -> Client {
+    let s = Client::bind("127.0.0.1:0").expect("bind a client");
+    s.set_read_timeout(Some(Duration::from_millis(150)))
+        .expect("a read timeout");
+    s
+}
+
+/// A client socket (see [`client`]).
+pub(super) type Client = std::net::UdpSocket;
+
+/// The next datagram `s` receives within 150 ms (any size).
+pub(super) async fn recv(s: &Client) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; 2048];
+    s.recv_from(&mut buf).ok().map(|(n, _)| buf[..n].to_vec())
+}
+
+/// The challenge exchange for `client`: its cookie.
+pub(super) async fn cookie_for(d: &mut Demux, client: &Client, nonce: u64) -> u64 {
+    feed(d, addr(client), &encode_hello(nonce, 0));
+    let ch = recv(client).await.expect("the challenge");
+    assert_eq!(ch.len(), 18, "the challenge is the request's size");
+    u64_at(&ch, 9).unwrap()
+}
+
+/// The client's proof (pinning `server`) for `nonce`/`cookie`.
+pub(super) fn proof(server: &[u8; 32], nonce: u64, cookie: u64) -> (Initiator, Vec<u8>) {
+    let ini = Initiator::new(server, &context(nonce, cookie), &[]).unwrap();
+    let p = encode_sealed_proof(nonce, cookie, CAP_CID, ini.msg1());
+    (ini, p)
+}
+
+pub(super) fn addr(s: &Client) -> SocketAddr {
+    s.local_addr().unwrap()
+}
+
+/// One sealed session on a sealed demux, the client's halves in hand.
+pub(super) struct Rig {
+    pub(super) d: Demux,
+    pub(super) a: Client,
+    pub(super) b: Client,
+    pub(super) key: SessionKey,
+    pub(super) cid: u64,
+    /// The client's c→s sealer.
+    pub(super) tx: Sealer,
+    pub(super) inbox: Inbox<ConnIn>,
+    pub(super) outbox: Inbox<FrameBatch>,
+    pub(super) accept: Vec<u8>,
+    pub(super) proof: Vec<u8>,
+}
+
+/// A full handshake: `(accept, session, the accept bytes, the proof)`.
+pub(super) async fn handshake(
+    d: &mut Demux,
+    client: &Client,
+    server: &[u8; 32],
+) -> (Accept, Session, Vec<u8>, Vec<u8>) {
+    let nonce = 0xA5A5_0000 ^ u64::from(addr(client).port());
+    let cookie = cookie_for(d, client, nonce).await;
+    let (mut ini, p) = proof(server, nonce, cookie);
+    feed(d, addr(client), &p);
+    let acc = recv(client).await.expect("the accept");
+    let (accept, session) = ini.finish(&acc[5..]).expect("message 2 authenticates");
+    (accept, session, acc, p)
+}
+
+pub(super) async fn rig() -> Rig {
+    let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind"));
+    sock.writable().await.expect("writable");
+    let (mut d, end_rx, server) = sealed_demux(sock, None);
+    let a = client();
+    let b = client();
+    let (accept, session, acc, p) = handshake(&mut d, &a, &server).await;
+    let (tx, _rx) = session.into_halves();
+    let mut ep = end_rx.try_recv().expect("an endpoint").into_endpoint();
+    let (_in_tx, inbox) = ep.take_inbox(16);
+    let (_out_tx, outbox) = ep.take_outbox(16);
+    let key = d.sessions.key_at(&addr(&a)).expect("the session");
+    Rig {
+        d,
+        a,
+        b,
+        key,
+        cid: accept.cid,
+        tx,
+        inbox,
+        outbox,
+        accept: acc,
+        proof: p,
+    }
+}
+
+impl Rig {
+    /// The client's next record carrying `inner`.
+    pub(super) fn seal(&mut self, inner: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.tx.seal(inner, &mut out).expect("seal");
+        out
+    }
+
+    /// A sealed RAW game frame carrying `p`.
+    pub(super) fn raw(&mut self, p: &[u8]) -> Vec<u8> {
+        let inner = encode_raw(&FrameBody::new(1000, Bytes::copy_from_slice(p)));
+        self.seal(&inner)
+    }
+
+    /// The payload of the session's next game frame (past move notices).
+    pub(super) fn frame(&mut self) -> Option<Vec<u8>> {
+        loop {
+            match self.inbox.try_recv() {
+                Ok(ConnIn::Frame(f)) => return Some(f.payload.to_vec()),
+                Ok(ConnIn::PeerChanged { .. }) => continue,
+                _ => return None,
+            }
+        }
+    }
+
+    /// The writer's next `UDP_SEND` request: destination and inner.
+    pub(super) fn send_request(&mut self) -> Option<(Option<SocketAddr>, Vec<u8>)> {
+        while let Ok(batch) = self.outbox.try_recv() {
+            for f in batch {
+                if f.op == gsb_protocol::op::base::UDP_SEND {
+                    let (to, inner) = crate::udp::sealed::decode_send(&f.payload)?;
+                    return Some((to, inner.to_vec()));
+                }
+            }
+        }
+        None
+    }
+
+    pub(super) fn counts(&self) -> crate::udp::sealed::Counts {
+        self.d.seal.as_ref().unwrap().counts
+    }
+}
+
+/// The sealed handshake on the demux: 18 → 18 → 67 → 77 bytes; the
+/// session carries the CID message 2 gave the client (always, the routing
+/// key), its opener, and the accept kept for a re-sent proof; a record
+/// from the client opens and its frame reaches the actor; its REL is
+/// acknowledged THROUGH the writer (a `UDP_SEND` to the session's
+/// address — the demux never puts an unsealed byte on the wire again).
+#[tokio::test]
+async fn a_sealed_handshake_establishes_a_session_whose_records_open() {
+    let mut r = rig().await;
+    assert_eq!((r.proof.len(), r.accept.len()), (67, 77));
+    assert_eq!(&r.accept[..5], &[KIND_ACK, 1, 0, 0, 0]);
+    let s = r.d.sessions.get(r.key).unwrap();
+    assert_eq!(s.cid, Some(r.cid), "message 2's CID is the session's");
+    assert!(s.seal.as_ref().is_some_and(|x| x.accept.is_some()));
+    assert_eq!(r.d.mig.cids_assigned, 1);
+
+    let rec = r.raw(b"hi");
+    assert_eq!(
+        rec.len(),
+        1 + 8 + 8 + 5 + 16,
+        "kind, cid, counter, RAW, tag"
+    );
+    assert_eq!(rec[0], crate::seal::wire::KIND_SEALED);
+    assert_eq!(rec[1..9], r.cid.to_le_bytes(), "the CID at bytes 1..9");
+    assert_eq!(rec[9..17], 0u64.to_le_bytes(), "the first counter");
+    feed(&mut r.d, addr(&r.a), &rec);
+    assert_eq!(r.frame().as_deref(), Some(&b"hi"[..]));
+    let s = r.d.sessions.get(r.key).unwrap();
+    assert!(
+        s.seal.as_ref().is_some_and(|x| x.accept.is_none()),
+        "the first record confirms: no proof is re-answered after it"
+    );
+
+    let rel = encode_rel(1, &FrameBody::new(7, Bytes::new()));
+    let rec = r.seal(&rel);
+    feed(&mut r.d, addr(&r.a), &rec);
+    assert!(matches!(r.inbox.try_recv(), Ok(ConnIn::Frame(f)) if f.op == 7));
+    assert_eq!(r.send_request(), Some((None, encode_ack(2))));
+    assert!(recv(&r.a).await.is_none(), "nothing unsealed on the wire");
+    assert_eq!(r.counts().refused, [0; 6]);
+}
+
+/// Idempotent proof: the same proof again, before the session's first
+/// record, gets the SAME accept bytes — the stored message 2, no second
+/// Diffie-Hellman (the one-token budget would have refused one, and a
+/// recomputed message 2 differs: a fresh ephemeral key). Once a record
+/// opened, the stale proof gets nothing.
+#[tokio::test(start_paused = true)]
+async fn a_resent_proof_gets_the_stored_accept_without_a_second_dh() {
+    let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind"));
+    sock.writable().await.expect("writable");
+    let (mut d, end_rx, server) = sealed_demux(sock, Some(10));
+    let a = client();
+    let (_, session, acc, p) = handshake(&mut d, &a, &server).await;
+    feed(&mut d, addr(&a), &p);
+    assert_eq!(recv(&a).await, Some(acc.clone()), "the same bytes");
+    feed(&mut d, addr(&a), &p);
+    assert_eq!(recv(&a).await, Some(acc), "and again");
+    let seal = d.seal.as_ref().unwrap();
+    assert_eq!(seal.budget.refused, 0, "no DH was even asked for");
+    assert_eq!((d.proofs_reanswered, d.established), (2, 1));
+    assert_eq!(end_rx.len(), 1, "one session");
+
+    let (mut tx, _) = session.into_halves();
+    let mut rec = Vec::new();
+    tx.seal(&encode_ack(1), &mut rec).unwrap();
+    feed(&mut d, addr(&a), &rec);
+    feed(&mut d, addr(&a), &p);
+    assert_eq!(
+        recv(&a).await,
+        None,
+        "confirmed: the stale proof is ignored"
+    );
+    assert_eq!(d.proofs_reanswered, 2);
+}
+
+/// A plaintext client at a sealed door: its proof (18 or 19 bytes, no
+/// message 1) verifies but is refused, counted — no session, no accept.
+/// A proof whose message 1 has a wrong length is refused before any DH
+/// (the one token is still there for the next good proof).
+#[tokio::test(start_paused = true)]
+async fn plaintext_and_malformed_proofs_are_refused_before_any_dh() {
+    let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind"));
+    sock.writable().await.expect("writable");
+    let (mut d, end_rx, server) = sealed_demux(sock, Some(10));
+    let a = client();
+    let cookie = cookie_for(&mut d, &a, 5).await;
+    feed(&mut d, addr(&a), &encode_hello(5, cookie));
+    feed(&mut d, addr(&a), &encode_proof(5, cookie, CAP_CID));
+    let (_, p) = proof(&server, 5, cookie);
+    feed(&mut d, addr(&a), &p[..p.len() - 1]);
+    feed(&mut d, addr(&a), &[&p[..], &[0u8; 40]].concat());
+    assert_eq!(recv(&a).await, None, "nothing answers a refused proof");
+    let c = d.seal.as_ref().unwrap().counts;
+    assert_eq!((c.proofs_refused_plaintext, c.handshakes_malformed), (2, 2));
+    assert!(end_rx.is_empty() && d.sessions.is_empty());
+    feed(&mut d, addr(&a), &p);
+    assert_eq!(
+        recv(&a).await.map(|v| v.len()),
+        Some(77),
+        "the token was kept"
+    );
+}
+
+/// A client pinning another server key: message 1 does not authenticate
+/// after the DH — counted as a decrypt failure, nothing created.
+#[tokio::test]
+async fn a_client_pinning_another_key_fails_the_handshake() {
+    let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind"));
+    sock.writable().await.expect("writable");
+    let (mut d, end_rx, _server) = sealed_demux(sock, None);
+    let a = client();
+    let other = StaticKey::generate().unwrap().public();
+    let cookie = cookie_for(&mut d, &a, 6).await;
+    let (_, p) = proof(&other, 6, cookie);
+    feed(&mut d, addr(&a), &p);
+    assert_eq!(recv(&a).await, None);
+    assert_eq!(d.seal.as_ref().unwrap().counts.handshakes_failed_decrypt, 1);
+    assert!(end_rx.is_empty() && d.sessions.is_empty());
+}
+
+mod budget;
+mod records;
+mod rule;

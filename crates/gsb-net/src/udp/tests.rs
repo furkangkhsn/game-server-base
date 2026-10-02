@@ -197,5 +197,6 @@ mod handshake;
 mod migrate;
 mod pace;
 mod reap;
+mod sealed;
 mod unaccepted;
 mod writer_lost;
