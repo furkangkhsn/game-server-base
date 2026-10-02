@@ -45,6 +45,7 @@ pub mod tcp;
 pub mod tls;
 pub mod transport;
 pub mod udp;
+mod wire;
 pub mod ws;
 
 pub use transport::{BoxFuture, Endpoint, Listener, Transport};

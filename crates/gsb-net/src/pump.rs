@@ -81,8 +81,9 @@ pub struct PumpTimeouts {
 /// Only CHANGES are read — the value itself means nothing, and it never
 /// needs to be exact across doors, only to move whenever the socket takes
 /// a byte and never otherwise. Implemented by the stream framing writer
-/// (`FrameWriter`: TCP, TLS, QUIC — bumped on every `poll_write` that
-/// returns `n > 0`) and by the WebSocket door's writer (bumped by the
+/// (`FrameWriter`: TCP, QUIC — bumped on every `poll_write` that returns
+/// `n > 0`; TLS — the socket's count beneath rustls, `crate::wire`) and
+/// by the WebSocket door's writer (bumped by the
 /// door's socket-writer task, the only thing that touches its socket).
 ///
 /// Why a trait on the writer rather than a value passed in: the pump owns
@@ -94,6 +95,13 @@ pub struct PumpTimeouts {
 pub trait WriteProgress {
     /// Bytes the transport has accepted so far (monotonic).
     fn bytes_written(&self) -> u64;
+
+    /// When the count last moved, for a transport whose socket is written
+    /// outside the pump's own polls: the pump may first see such bytes at
+    /// its deadline. `None` (the default): the look is the moment.
+    fn last_write_at(&self) -> Option<tokio::time::Instant> {
+        None
+    }
 }
 
 /// Spawn both pump tasks for a connection.

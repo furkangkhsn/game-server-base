@@ -42,6 +42,7 @@ use crate::framed::FrameWriter;
 use crate::pump::spawn_pumps;
 use crate::transport::intake::{Intake, IntakeHandle, run_tcp_intake};
 use crate::transport::{BoxFuture, Endpoint, HandshakeStats, Listener, Transport};
+use crate::wire::{Wire, WireCount};
 
 /// How long a client may spend in the TLS handshake before the server
 /// drops the socket. A config-free constant (like the rUDP MTU): long
@@ -84,8 +85,11 @@ pub struct TlsTransport {
     pub config: TlsTransportConfig,
 }
 
-/// One accepted TLS connection's concrete stream type.
-type TlsStreamOf = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
+/// One accepted TLS connection's concrete stream type: rustls over the
+/// TCP stream wrapped in [`Wire`], which counts what the SOCKET takes —
+/// the write-stall clock's signal (BACKLOG B15a; rustls holds ciphertext
+/// of its own that the framing writer never sees go out).
+type TlsStreamOf = tokio_rustls::server::TlsStream<Wire<tokio::net::TcpStream>>;
 
 struct TlsListenerHandle {
     local_addr: Option<SocketAddr>,
@@ -251,8 +255,9 @@ async fn handshake(
     metrics: crate::TransportMetrics,
 ) -> io::Result<Endpoint> {
     stream.set_nodelay(true)?;
-    let tls = acceptor.accept(stream).await?;
-    Ok(make_endpoint(tls, peer, max_frame_bytes, metrics))
+    let wire = WireCount::new();
+    let tls = acceptor.accept(Wire::new(stream, wire.clone())).await?;
+    Ok(make_endpoint(tls, wire, peer, max_frame_bytes, metrics))
 }
 
 /// Same wiring as TCP's `make_endpoint`: split the stream halves and
@@ -261,6 +266,7 @@ async fn handshake(
 /// knows TLS is involved.
 fn make_endpoint(
     stream: TlsStreamOf,
+    wire: WireCount,
     peer: SocketAddr,
     max_frame_bytes: usize,
     metrics: crate::TransportMetrics,
@@ -274,7 +280,7 @@ fn make_endpoint(
               out_rx: Inbox<FrameBatch>,
               timeouts: crate::pump::PumpTimeouts| {
             let reader = FrameReader::new(read_half, max_frame_bytes);
-            let writer = FrameWriter::new(write_half);
+            let writer = FrameWriter::new(write_half).with_wire(wire);
             let (read, write) = spawn_pumps(conn, reader, writer, in_tx, out_rx, timeouts, metrics);
             (Some(read), write)
         },

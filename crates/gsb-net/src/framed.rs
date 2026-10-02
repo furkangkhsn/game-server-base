@@ -28,6 +28,7 @@ use tokio_util::codec::LengthDelimitedCodec;
 use gsb_protocol::FrameBody;
 
 use crate::pump::WriteProgress;
+use crate::wire::WireCount;
 
 /// A length-delimited codec configured the gsb way: little-endian prefix,
 /// `max_frame_bytes` body ceiling (the transport-level guard).
@@ -75,6 +76,10 @@ pub(crate) struct FrameWriter<S> {
     /// Bytes the underlying writer has accepted (the write-stall clock's
     /// signal — see [`WriteProgress`]).
     written: u64,
+    /// The socket's own count, when the underlying writer is not the
+    /// socket (TLS: rustls is in between — see [`crate::wire`]). When
+    /// set, it is the clock's signal instead of `written`.
+    wire: Option<WireCount>,
 }
 
 impl<S: AsyncWrite + Unpin> FrameWriter<S> {
@@ -83,7 +88,15 @@ impl<S: AsyncWrite + Unpin> FrameWriter<S> {
             inner: sink,
             buf: BytesMut::with_capacity(1024),
             written: 0,
+            wire: None,
         }
+    }
+
+    /// Run the write-stall clock on the socket's count beneath the
+    /// underlying writer (BACKLOG B15a).
+    pub(crate) fn with_wire(mut self, wire: WireCount) -> Self {
+        self.wire = Some(wire);
+        self
     }
 
     /// Write all queued bytes to the socket; Pending when the socket would
@@ -105,14 +118,21 @@ impl<S: AsyncWrite + Unpin> FrameWriter<S> {
 
 /// The count moves on every `poll_write` that accepted bytes — for TCP the
 /// kernel's socket buffer, for QUIC the stream's flow-control credit (the
-/// peer's reads), for TLS rustls's bounded plaintext buffer. One residual
-/// on TLS: once the frame buffer here is empty, the LAST ≤64 KiB rustls
-/// still holds drain inside `poll_flush`, which reports no byte count;
-/// a peer slower than that per window can still trip the clock at a
-/// frame's tail.
+/// peer's reads). TLS counts beneath rustls instead (`wire`): rustls holds
+/// up to 64 KiB of ciphertext of its own, and a frame's tail drains from
+/// it inside `poll_flush`, which reports no count here — a peer reading
+/// that tail slower than 64 KiB per window was cut off while it read
+/// (BACKLOG B15a).
 impl<S> WriteProgress for FrameWriter<S> {
     fn bytes_written(&self) -> u64 {
-        self.written
+        match &self.wire {
+            Some(wire) => wire.bytes(),
+            None => self.written,
+        }
+    }
+
+    fn last_write_at(&self) -> Option<tokio::time::Instant> {
+        self.wire.as_ref().map(WireCount::last_at)
     }
 }
 
