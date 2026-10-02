@@ -287,7 +287,9 @@ pub trait GameLogic<W>: Send {
     /// [`Self::on_disconnect`] told WHY the membership ended (BACKLOG
     /// F27, `docs/RECONNECT.md` §3.3) — what the room and the shard
     /// actors call at each of the three ends: a closed connection
-    /// ([`DisconnectCause::ConnectionClosed`]), the input-idle ceiling
+    /// ([`DisconnectCause::ConnectionClosed`], or
+    /// [`DisconnectCause::ConnectionClosedBy`] the server verdict that
+    /// closed it — BACKLOG F28), the input-idle ceiling
     /// ([`DisconnectCause::IdleInput`]), the game's kick
     /// ([`DisconnectCause::Kicked`]). Same contract otherwise: once per
     /// end, from the phase that ended it, and the answer's arm runs
