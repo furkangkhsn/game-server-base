@@ -120,7 +120,7 @@ fn a_growing_queue_is_a_signal_and_not_capacity() {
         &[est(1000, 100, 0, floor + 30, floor)],
     );
     assert_eq!(c.state().phase, PathPhase::Suspect);
-    assert_eq!(c.state().queue_delay, ms(30));
+    assert_eq!(c.state().queue_delay, Some(ms(30)));
     // 100 kB sent in 250 ms while the queue grew by 250 ms more: the
     // client received them over 500 ms — 200 kB/s, not 400.
     feed(
@@ -229,4 +229,29 @@ fn two_sessions_on_one_bottleneck_converge_to_equal_shares() {
     }
     let (a, b) = (s[0].rate, s[1].rate);
     assert!((a - b).abs() / (a + b) < 0.1, "{a} vs {b}");
+}
+
+/// The state the room reads (B103, `gsb_core::path::PathState`): before
+/// any report only the phase; once one was applied, the measurements —
+/// the room's demand, the smoothed loss, the newest round trip and the
+/// queue over the floor; a new path starts it over.
+#[test]
+fn the_state_carries_the_measurements_once_reported() {
+    let mut t = Instant::now();
+    let mut c = Control::new(BUDGET, t);
+    assert_eq!(c.state(), PathState::default(), "nothing measured yet");
+    let e = GameEstimate {
+        loss: 0.125,
+        ..est(1000, 100, 0, 50, 20)
+    };
+    feed(&mut c, &mut t, 40_000, &[e]);
+    let s = c.state();
+    assert_eq!(s.phase, PathPhase::Suspect, "a 30 ms queue");
+    assert_eq!(s.rate, None);
+    assert_eq!(s.demand, Some(40_000), "40 kB over a second");
+    assert_eq!(s.loss_permille, Some(125));
+    assert_eq!(s.rtt, Some(ms(50)));
+    assert_eq!(s.queue_delay, Some(ms(30)));
+    c.new_path(t);
+    assert_eq!(c.state(), PathState::default(), "a new path: unmeasured");
 }

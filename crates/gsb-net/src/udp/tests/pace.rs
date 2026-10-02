@@ -14,6 +14,7 @@ use gsb_protocol::op;
 
 mod measure;
 mod relay;
+mod signal;
 
 const BUDGET: usize = 1200;
 

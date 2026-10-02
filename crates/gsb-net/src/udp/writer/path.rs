@@ -36,6 +36,8 @@ impl super::UdpWriter {
             self.pace.control.new_path(now);
             self.feedback
                 .set_interval(self.pace.control.probe_interval());
+            // What the room knows was the old path's (B103).
+            self.pace_new_path();
         }
     }
 

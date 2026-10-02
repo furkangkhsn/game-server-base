@@ -18,6 +18,15 @@ fn report(id: u32, received: u32) -> FrameBody {
 }
 
 async fn writer(congestion: UdpCongestion) -> (UdpWriter, UdpSocket) {
+    let (w, client, _inbox) = writer_with_inbox(congestion, 8).await;
+    (w, client)
+}
+
+/// [`writer`], keeping its actor's inbox (`capacity` messages).
+async fn writer_with_inbox(
+    congestion: UdpCongestion,
+    capacity: usize,
+) -> (UdpWriter, UdpSocket, gsb_core::channel::Inbox<ConnIn>) {
     let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind"));
     sock.writable().await.expect("writable");
     let client = UdpSocket::bind("127.0.0.1:0").await.expect("bind");
@@ -30,9 +39,13 @@ async fn writer(congestion: UdpCongestion) -> (UdpWriter, UdpSocket) {
         metrics: None,
         congestion,
     };
-    let (in_tx, _inbox) = channel::<ConnIn>(8);
+    let (in_tx, inbox) = channel::<ConnIn>(capacity);
     let (_out_tx, out_rx) = channel::<FrameBatch>(8);
-    (UdpWriter::new(link, ConnectionId(3), in_tx, out_rx), client)
+    (
+        UdpWriter::new(link, ConnectionId(3), in_tx, out_rx),
+        client,
+        inbox,
+    )
 }
 
 #[tokio::test]
@@ -148,3 +161,4 @@ async fn a_cut_trims_the_queue_and_the_pacer_sets_the_wake() {
 }
 
 mod path;
+mod signal;

@@ -5,9 +5,23 @@
 //!
 //! Nothing here runs with the response off, and nothing is queued while
 //! the session is open: the game band is sent at once, as it always was.
+//!
+//! **The room is told (BACKLOG B103).** With the response on, every
+//! decision — a report applied, a silent ring, a new path — offers the
+//! controller's state to a `gsb_core::path::PathSignal`; when it is news
+//! (the phase changed, the rate moved by a tenth) it goes to the
+//! connection actor as `ConnIn::Path`, with `try_send`, never awaited. A
+//! full inbox keeps the newest state owed for the next decision (the
+//! probe cadence: a second at most while open, a quarter of one while
+//! suspect or paced); a closed one has nobody to tell. With the response
+//! off the writer posts nothing: the actor's inbox sees what it always
+//! did.
 
 use std::time::{Duration, Instant};
 
+use gsb_core::channel::{TrySend, try_send};
+use gsb_core::conn::ConnIn;
+use gsb_core::path::PathSignal;
 use tracing::debug;
 
 use crate::udp::congestion::{Control, PaceQueue, PathState, QUEUE_BUDGET, UdpCongestion};
@@ -18,6 +32,8 @@ pub(super) struct Pace {
     on: bool,
     pub(super) control: Control,
     pub(super) queue: PaceQueue,
+    /// What the room was told of the path (B103), and what it is owed.
+    signal: PathSignal,
 }
 
 impl Pace {
@@ -26,6 +42,7 @@ impl Pace {
             on: mode == UdpCongestion::Pace,
             control: Control::new(max_datagram, now),
             queue: PaceQueue::new(max_datagram, now),
+            signal: PathSignal::default(),
         }
     }
 
@@ -136,6 +153,36 @@ impl super::UdpWriter {
         if after.phase != before.phase || after.rate != before.rate {
             debug!(conn = %self.conn, peer = %self.peer, ?after, "rUDP: path state");
         }
+        self.pace_tell();
+    }
+
+    /// The session moved to a new IP and the controller started over:
+    /// whatever the room knew was the old path's, so the fresh state —
+    /// open, unmeasured — is told even when the old one was open too
+    /// (B103). Nothing with the response off.
+    pub(super) fn pace_new_path(&mut self) {
+        self.pace.signal.reset();
+        self.pace_tell();
+    }
+
+    /// Tell the connection actor the session's path when it is news, or
+    /// retry the state still owed (see the module docs). Only with the
+    /// response on.
+    pub(super) fn pace_tell(&mut self) {
+        if !self.pace.on {
+            return;
+        }
+        self.pace.signal.offer(self.pace.control.state());
+        let Some(owed) = self.pace.signal.owed() else {
+            return;
+        };
+        match try_send(&self.in_tx, ConnIn::Path(owed)) {
+            TrySend::Sent => self.pace.signal.delivered(),
+            // Owed: the next decision sends the newest.
+            TrySend::Full => {}
+            // The actor is gone; the writer ends with the session.
+            TrySend::Closed => {}
+        }
     }
 
     /// The session is over for the transport: what the pacer still holds
@@ -144,8 +191,8 @@ impl super::UdpWriter {
         self.pace.queue.abandon();
     }
 
-    /// The session's path as the game would read it (the follow-up
-    /// carries it to the room — DESIGN §6 "Tıkanıklık tepkisi").
+    /// The session's path as the game reads it (what [`Self::pace_tell`]
+    /// carries to the room — DESIGN §6 "Tıkanıklık tepkisi").
     pub(super) fn path_state(&self) -> PathState {
         self.pace.control.state()
     }

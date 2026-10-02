@@ -215,14 +215,21 @@ impl Control {
         self.counts.cuts += 1;
     }
 
-    /// The session's path as the game would read it.
+    /// The session's path as the game reads it (`gsb_core::path`): the
+    /// phase and, while paced, the rate; once a report was applied on
+    /// this path, the measurements too — the room's demand, the smoothed
+    /// loss, the newest round trip and the queue over the windowed floor.
+    /// Before that (no report yet, or a new path) only the phase: the
+    /// default state.
     pub(super) fn state(&self) -> PathState {
+        let measured = self.prev_rtt.is_some();
         PathState {
             phase: self.phase,
             rate: self.paced().map(|r| r.min(f64::from(u32::MAX)) as u32),
-            demand: self.demand.min(f64::from(u32::MAX)) as u32,
-            loss_permille: (self.loss * 1000.0).round().min(1000.0) as u16,
-            queue_delay: self.queue_delay,
+            demand: measured.then(|| self.demand.min(f64::from(u32::MAX)) as u32),
+            loss_permille: measured.then(|| (self.loss * 1000.0).round().clamp(0.0, 1000.0) as u16),
+            rtt: self.prev_rtt,
+            queue_delay: measured.then_some(self.queue_delay),
         }
     }
 }
