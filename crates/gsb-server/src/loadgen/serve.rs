@@ -64,6 +64,7 @@ pub(crate) async fn serve(args: Args) {
             listen_backlog: args.listen_backlog,
             udp_recv_buffer: args.udp_recv_buffer,
             udp_security: args.udp_security,
+            udp_handshakes_per_sec: args.udp_handshakes_per_sec,
         },
     );
     // Every door is bound before the SERVING line goes out (BACKLOG

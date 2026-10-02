@@ -48,6 +48,7 @@ pub(crate) async fn run(args: Args) {
                     listen_backlog: args.listen_backlog,
                     udp_recv_buffer: args.udp_recv_buffer,
                     udp_security: args.udp_security,
+                    udp_handshakes_per_sec: args.udp_handshakes_per_sec,
                 },
             )
             .await

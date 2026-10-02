@@ -34,6 +34,8 @@ pub(crate) struct ServerOverrides {
     /// The rUDP record layer (B5a): sealed — under an ephemeral key drawn
     /// here, its public half on the server handle — or plaintext.
     pub(crate) udp_security: gsb_server::UdpSecurityKind,
+    /// The sealed door's handshake budget (`None` = config default, B119).
+    pub(crate) udp_handshakes_per_sec: Option<u32>,
 }
 
 pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides) {
@@ -62,6 +64,9 @@ pub(crate) fn apply_overrides(cfg: &mut gsb_server::Config, o: &ServerOverrides)
     // like a deployment's, under a key of its own (its clients pin the
     // handle's `udp_public_key`), unless the run asks for plaintext.
     cfg.udp_security = o.udp_security;
+    if let Some(n) = o.udp_handshakes_per_sec {
+        cfg.udp_handshakes_per_sec = Some(n);
+    }
     if cfg.transport == gsb_server::TransportKind::Udp
         && o.udp_security == gsb_server::UdpSecurityKind::Sealed
         && cfg.udp_static_key.is_none()
@@ -204,6 +209,7 @@ mod tests {
             listen_backlog: None,
             udp_recv_buffer: None,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
+            udp_handshakes_per_sec: None,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &none);
@@ -234,6 +240,7 @@ mod tests {
             listen_backlog,
             udp_recv_buffer: None,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
+            udp_handshakes_per_sec: None,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &o(None));
@@ -257,6 +264,7 @@ mod tests {
             listen_backlog: None,
             udp_recv_buffer,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
+            udp_handshakes_per_sec: None,
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &o(None));
@@ -281,6 +289,7 @@ mod tests {
             listen_backlog: None,
             udp_recv_buffer: None,
             udp_security,
+            udp_handshakes_per_sec: Some(0),
         };
         let udp = || gsb_server::Config {
             transport: gsb_server::TransportKind::Udp,
@@ -301,5 +310,10 @@ mod tests {
         let mut tcp = gsb_server::Config::default();
         apply_overrides(&mut tcp, &o(gsb_server::UdpSecurityKind::Sealed));
         assert_eq!(tcp.udp_static_key, None);
+        assert_eq!(
+            tcp.udp_handshakes_per_sec,
+            Some(0),
+            "the budget override lands"
+        );
     }
 }

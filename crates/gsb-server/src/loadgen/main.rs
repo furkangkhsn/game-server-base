@@ -255,6 +255,10 @@ struct Args {
     /// (`--udp-server-key HEX`, 64 hex characters; `--addr` runs only —
     /// the orchestrator passes its served child's).
     udp_server_key: Option<[u8; 32]>,
+    /// The in-process / served sealed rUDP door's handshake budget
+    /// (`--udp-handshakes-per-sec N`, BACKLOG B119; unspecified = the
+    /// server config default, 1000; `0` = none).
+    udp_handshakes_per_sec: Option<u32>,
     /// The GLOBAL id of the client that floods (`--flood-id K`): after
     /// joining it writes MOVE_TO frames in a tight loop (as fast as the
     /// socket accepts) until the deadline — the input-flood behaviour
@@ -440,6 +444,9 @@ Server options (in-process server, --serve, or the orchestrator's server):
                                        or served server draws an ephemeral
                                        static key and its clients pin it;
                                        plaintext = the dev/LAN door)
+  --udp-handshakes-per-sec N          the server's sealed rUDP handshake
+                                       budget (default: the config's, 1000;
+                                       0 = none)
   --udp-server-key HEX                the external sealed server's public
                                        key (64 hex; with --addr and
                                        --transport udp)

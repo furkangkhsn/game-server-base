@@ -48,6 +48,7 @@ impl Args {
             udp_recv_buffer: None,
             udp_security: gsb_server::UdpSecurityKind::Sealed,
             udp_server_key: None,
+            udp_handshakes_per_sec: None,
             flood_id: None,
             churn_secs: None,
             churn_cycles: 0,
@@ -239,6 +240,9 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                         )));
                     }
                 };
+            }
+            "--udp-handshakes-per-sec" => {
+                args.udp_handshakes_per_sec = Some(number(&a, v()?)?);
             }
             "--udp-server-key" => {
                 let key = gsb_server::parse_udp_public_key(&v()?)

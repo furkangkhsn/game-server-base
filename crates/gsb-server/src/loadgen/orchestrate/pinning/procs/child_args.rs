@@ -127,6 +127,10 @@ pub(super) fn server_args(args: &Args, pinned_cores: Option<usize>) -> Vec<Strin
         sargs.push("--udp-recv-buffer".into());
         sargs.push(n.to_string());
     }
+    if let Some(n) = args.udp_handshakes_per_sec {
+        sargs.push("--udp-handshakes-per-sec".into());
+        sargs.push(n.to_string());
+    }
     if let Some(f) = args.disconnect_grace_secs {
         sargs.push("--disconnect-grace-secs".into());
         sargs.push(f.to_string());
