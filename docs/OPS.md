@@ -1220,7 +1220,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
 - **Taşıma kapsamı: rUDP kapısının kaynak başına sınırı ve göçte kaynak
   (B89, B113 — u89).** Satırın ve tablonun sonuna iki `counter`;
   `RESULT`'ta `transport_<ad>=`; loadgen telinin taşıma bölümü iki
-  sayaç uzar (sihir birleştirmede atanır). `udp_proofs_refused_per_source`
+  sayaç uzar (**GSNP**, registry bölümünün bir `u64`'üyle birlikte). `udp_proofs_refused_per_source`
   (`gsb_transport_udp_proofs_refused_per_source_total`) — kaynağı
   `max_handshakes_per_source` kadar bekleyen oturum (kurulmuş, accept
   döngüsünün almadığı) tutarken gelen doğrulanmış proof'lar: oturum yok,
@@ -1242,7 +1242,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   kaynak `max_unauth_conns_per_source`'u tuttuğu için sayımı eski
   kaynakta kalan bağlantılar. Göç oldu; kayıp değil, karar sayacı.
   Loadgen telinin registry bölümü `detach_despawns_lost`'tan sonra bir
-  `u64` uzar (sihir birleştirmede).
+  `u64` uzar (**GSNP**).
 - **Oda kapsamı: takım export'unun reddi sebebe göre (F50).** Tek sayaç
   `team_export_drops=` / `gsb_room_team_export_drops_total` dolu ve
   kapalı registry posta kutusunu karıştırıyordu; iki ayrı ada bölündü,

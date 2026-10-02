@@ -281,7 +281,12 @@ mod logic;
 /// GSNO = the GSNN layout plus each room's `snapshots_withheld` (the
 /// group frames a logic withheld from a member whose path its transport
 /// limits — B103), right after `snapshots`.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4F;
+/// GSNP = the GSNO layout with two more transport counters at the end of
+/// that section (B89's per-source cap and B113's migration source:
+/// `udp_proofs_refused_per_source`, `udp_pending_source_moves_kept`) and
+/// one more registry `u64` right after `detach_despawns_lost` (B113:
+/// `unauth_source_moves_kept`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E50;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
