@@ -70,3 +70,5 @@ async fn a_stream_eof_ends_the_client() {
 /// Far past the EOF, far short of the client's deadline: only a client
 /// that did not end at the EOF gets here.
 const HANG_GUARD: Duration = Duration::from_secs(30);
+
+mod join_first;
