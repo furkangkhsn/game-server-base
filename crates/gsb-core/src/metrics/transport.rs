@@ -334,6 +334,31 @@ transport_counters! {
     /// every count is a session the old wall-clock window would have
     /// closed.
     idle_windows_restarted_late,
+    /// rUDP writers (congestion response, `udp_congestion = "pace"`):
+    /// game-band frames that waited in a paced session's pacing queue —
+    /// its path's estimated rate was below what the room sent. Each is
+    /// later sent, dropped (`udp_game_frames_dropped_paced`) or unsent
+    /// (`udp_game_frames_unsent_paced`).
+    udp_game_frames_queued_paced,
+    /// rUDP writers (congestion response): game-band frames dropped
+    /// unsent from a pacing queue because newer frames filled the queue's
+    /// budget (the path's estimated rate × 50 ms) — the oldest first, a
+    /// fragmented frame whole; never the newest, never one with fragments
+    /// already sent.
+    udp_game_frames_dropped_paced,
+    /// rUDP writers (congestion response): game-band frames still in a
+    /// pacing queue when the session ended for the transport (its writer
+    /// stopped, its reliable band died, or the session was over) — never
+    /// sent, or sent in part (a fragmented frame cut short).
+    udp_game_frames_unsent_paced,
+    /// rUDP writers (congestion response): times a session's game band
+    /// started being paced (two congestion signals in a row — loss or a
+    /// standing queue — on an open session).
+    udp_game_paced_episodes,
+    /// rUDP writers (congestion response): pacing-rate decreases — each
+    /// episode's start, every further signal while paced, and a whole
+    /// ring of probes unanswered while paced.
+    udp_game_paced_rate_cuts,
 }
 
 impl TransportCounters {

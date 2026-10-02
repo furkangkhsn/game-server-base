@@ -248,6 +248,16 @@ gsb_transport_ops_http_routes_timed_out sum t=2 mono=true unit="" n=1 | Ops HTTP
   [] 1000..2000 int 64
 gsb_transport_idle_windows_restarted_late sum t=2 mono=true unit="" n=1 | Idle windows (stream reader pumps, the rUDP idle sweep) restarted because their deadline fired more than the stall grace late: the process, not the client, was silent; restarted once per silence, cumulative.
   [] 1000..2000 int 65
+gsb_transport_udp_game_frames_queued_paced sum t=2 mono=true unit="" n=1 | Game-band frames that waited in a paced rUDP session's pacing queue (its path's estimated rate was below the room's sending); each is later sent, dropped or unsent, cumulative.
+  [] 1000..2000 int 66
+gsb_transport_udp_game_frames_dropped_paced sum t=2 mono=true unit="" n=1 | Game-band frames dropped unsent from a pacing queue because newer frames filled its budget (estimated path rate x 50 ms): oldest first, a fragmented frame whole, cumulative.
+  [] 1000..2000 int 67
+gsb_transport_udp_game_frames_unsent_paced sum t=2 mono=true unit="" n=1 | Game-band frames still in a pacing queue when the rUDP session ended for the transport (writer stopped, reliable band died, or session over), never sent or sent in part, cumulative.
+  [] 1000..2000 int 68
+gsb_transport_udp_game_paced_episodes sum t=2 mono=true unit="" n=1 | Times an rUDP session's game band started being paced (two congestion signals in a row, loss or a standing queue, on an open session), cumulative.
+  [] 1000..2000 int 69
+gsb_transport_udp_game_paced_rate_cuts sum t=2 mono=true unit="" n=1 | Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each ring of probes unanswered while paced, cumulative.
+  [] 1000..2000 int 70
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

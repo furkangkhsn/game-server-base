@@ -241,6 +241,7 @@ pub(super) async fn bind_listener(
                 cookie_key,
                 metrics,
                 buffers: udp_buffers(cfg),
+                congestion: cfg.udp_congestion.into(),
             },
         }),
         ListenerSpec::Quic {

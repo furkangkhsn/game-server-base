@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 65] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 70] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -354,6 +354,31 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 65] 
         "gsb_transport_idle_windows_restarted_late_total",
         "Idle windows (stream reader pumps, the rUDP idle sweep) restarted because their deadline fired more than the stall grace late: the process, not the client, was silent; restarted once per silence, cumulative.",
         |t| t.idle_windows_restarted_late,
+    ),
+    tr(
+        "gsb_transport_udp_game_frames_queued_paced_total",
+        "Game-band frames that waited in a paced rUDP session's pacing queue (its path's estimated rate was below the room's sending); each is later sent, dropped or unsent, cumulative.",
+        |t| t.udp_game_frames_queued_paced,
+    ),
+    tr(
+        "gsb_transport_udp_game_frames_dropped_paced_total",
+        "Game-band frames dropped unsent from a pacing queue because newer frames filled its budget (estimated path rate x 50 ms): oldest first, a fragmented frame whole, cumulative.",
+        |t| t.udp_game_frames_dropped_paced,
+    ),
+    tr(
+        "gsb_transport_udp_game_frames_unsent_paced_total",
+        "Game-band frames still in a pacing queue when the rUDP session ended for the transport (writer stopped, reliable band died, or session over), never sent or sent in part, cumulative.",
+        |t| t.udp_game_frames_unsent_paced,
+    ),
+    tr(
+        "gsb_transport_udp_game_paced_episodes_total",
+        "Times an rUDP session's game band started being paced (two congestion signals in a row, loss or a standing queue, on an open session), cumulative.",
+        |t| t.udp_game_paced_episodes,
+    ),
+    tr(
+        "gsb_transport_udp_game_paced_rate_cuts_total",
+        "Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each ring of probes unanswered while paced, cumulative.",
+        |t| t.udp_game_paced_rate_cuts,
     ),
 ];
 

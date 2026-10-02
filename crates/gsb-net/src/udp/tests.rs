@@ -194,6 +194,7 @@ mod buffers;
 mod feedback;
 mod frag;
 mod handshake;
+mod pace;
 mod reap;
 mod unaccepted;
 mod writer_lost;

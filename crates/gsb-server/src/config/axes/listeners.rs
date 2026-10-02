@@ -391,6 +391,17 @@ pub struct Config {
     /// the server refuses to start — a predictable key would invert the
     /// handshake's anti-amplification property (see `gsb_net::udp`).
     pub udp_cookie_key: Option<String>,
+    /// The rUDP writers' **congestion response** (rUDP hardening round
+    /// 3): `"off"` (the default) — every writer sends at once, the door
+    /// as it was; `"pace"` — a session whose client reports (the
+    /// default `UdpClient`) and whose path cannot carry what the room
+    /// sends is paced to the path's estimated rate, and the oldest
+    /// game-band frames it cannot send within 50 ms are dropped and
+    /// counted (`udp_game_frames_dropped_paced`); the control band is
+    /// never paced or dropped, and a client that does not report is
+    /// never paced. Every rUDP door, whichever grammar declared it; not
+    /// a `[[listeners]]` key. See `gsb_net::udp` ("congestion").
+    pub udp_congestion: UdpCongestionKind,
     /// Path to the server certificate chain, PEM (leaf first). Empty (the
     /// default) = plaintext TCP, byte-identical behavior to before the TLS
     /// turn. Set together with [`Self::tls_key`] it serves TCP over rustls
@@ -686,6 +697,7 @@ impl Default for Config {
             transport: TransportKind::default(),
             udp_max_datagram_bytes: gsb_net::udp::DEFAULT_MAX_DATAGRAM_BYTES,
             udp_cookie_key: None,
+            udp_congestion: UdpCongestionKind::Off,
             tls_cert: String::new(),
             tls_key: String::new(),
             listeners: None,

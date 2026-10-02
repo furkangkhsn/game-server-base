@@ -45,6 +45,7 @@ impl super::UdpWriter {
                 if self.sock.try_send_to(&datagram, self.peer).is_ok() {
                     self.rel.resent(now);
                     self.retransmits += 1;
+                    self.pace_charge(datagram.len());
                 } else {
                     // Refused (B66): the next pass (a tick later) tries
                     // again, on the same timer.

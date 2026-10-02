@@ -43,6 +43,19 @@ impl super::UdpWriter {
             udp_game_datagrams_reported_lost: c.reported_lost,
             udp_game_rtt_samples: c.rtt_samples,
             udp_game_rtt_sum_us: c.rtt_sum_us,
+            ..self.pace_totals()
+        }
+    }
+
+    /// The congestion response's counters (module `crate::udp::congestion`).
+    fn pace_totals(&self) -> TransportCounters {
+        let (q, c) = (&self.pace.queue.counts, &self.pace.control.counts);
+        TransportCounters {
+            udp_game_frames_queued_paced: q.queued,
+            udp_game_frames_dropped_paced: q.dropped,
+            udp_game_frames_unsent_paced: q.unsent,
+            udp_game_paced_episodes: c.episodes,
+            udp_game_paced_rate_cuts: c.cuts,
             ..Default::default()
         }
     }

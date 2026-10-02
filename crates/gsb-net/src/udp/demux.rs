@@ -116,6 +116,8 @@ pub(super) struct Demux {
     /// each session's writer gets for its own.
     flusher: crate::metrics::Flusher,
     metrics: crate::TransportMetrics,
+    /// The writers' congestion response (module `crate::udp::congestion`).
+    congestion: UdpCongestion,
 }
 
 impl Demux {
@@ -171,6 +173,7 @@ impl Demux {
             challenges_send_failed: 0,
             flusher: crate::metrics::Flusher::new(None),
             metrics: None,
+            congestion: UdpCongestion::Off,
         }
     }
 
@@ -206,6 +209,7 @@ pub(super) async fn demux(
     );
     d.flusher = crate::metrics::Flusher::new(cfg.metrics.clone());
     d.metrics = cfg.metrics;
+    d.congestion = cfg.congestion;
     loop {
         // Arm the read: if any session has an idle deadline pending, the
         // read is bounded by the EARLIEST one (the deadline fires only

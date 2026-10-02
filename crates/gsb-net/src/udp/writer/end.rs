@@ -21,6 +21,9 @@ impl super::UdpWriter {
             return;
         }
         self.reap_signalled = true;
+        // The address may carry a new session from here on: what the
+        // pacer still holds is never sent (counted).
+        self.pace_abandon();
         if !self.reaper.signal(self.peer).await {
             debug!(conn = %self.conn, peer = %self.peer, "rUDP: reap queue full; the idle sweep frees the session");
         }

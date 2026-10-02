@@ -78,8 +78,9 @@ impl super::UdpWriter {
     pub(super) async fn send(&mut self, datagram: &[u8], control: bool) {
         match self.sock.send_to(datagram, self.peer).await {
             // A game datagram on the wire: the feedback's sent count.
-            Ok(_) if !control => self.feedback.game_sent(),
-            Ok(_) => {}
+            Ok(_) if !control => self.feedback.game_sent(datagram.len()),
+            // A control one: the paced game band yields its bytes.
+            Ok(_) => self.pace_charge(datagram.len()),
             Err(e) => self.send_failed(&e, control),
         }
     }

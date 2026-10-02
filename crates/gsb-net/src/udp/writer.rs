@@ -76,6 +76,9 @@ pub(super) struct UdpWriter {
     /// The game band's feedback: the probes, the client's reports and the
     /// session's estimate (module `feedback`).
     feedback: Feedback,
+    /// The congestion response: its controller and pacing queue (module
+    /// `crate::udp::congestion`; inert unless the door's is on).
+    pace: pace::Pace,
 }
 
 impl UdpWriter {
@@ -84,8 +87,9 @@ impl UdpWriter {
             // One awaited source: the outbound channel, bounded by the
             // oldest frame's retransmit timer (at most the housekeeping
             // tick; the deadline fires only while the recv stays pending
-            // — a ready batch always wins).
-            let wait = self.rel.wait(Instant::now(), RETRANSIT_TICK);
+            // — a ready batch always wins), and by the pacer's next
+            // release while the session is paced.
+            let wait = self.wake(Instant::now());
             let batch = match tokio::time::timeout(wait, self.out_rx.recv()).await {
                 Ok(Some(b)) => Some(b),
                 Ok(None) => break, // the actor (and the room) are gone
@@ -106,6 +110,9 @@ impl UdpWriter {
                     continue;
                 }
                 fatal = self.send_batch(batch).await;
+            }
+            if fatal.is_none() && !self.reap_signalled {
+                self.pace_pass().await;
             }
             if fatal.is_none() {
                 fatal = self.retransmit_pass();
@@ -130,6 +137,7 @@ impl UdpWriter {
         // Whatever ended the writer (the REL band died; every sender is
         // gone), the session has no writer any more: the demux may free it.
         self.signal_reap().await;
+        self.pace_abandon();
         self.feedback.end();
         self.flush_metrics(true);
         if let Some((in_tx, msg)) = self.deferred_verdict.take() {
@@ -143,6 +151,7 @@ impl UdpWriter {
             || self.retransmits > 0
             || self.abandoned > 0
             || self.drained > 0
+            || self.pace.queue.counts.queued > 0
         {
             info!(
                 conn = %self.conn,
@@ -158,6 +167,10 @@ impl UdpWriter {
                 game_reports = self.feedback.counts.reports,
                 game_loss = self.game_estimate().map(|e| e.loss),
                 game_min_rtt_us = self.game_estimate().map(|e| e.min_rtt.as_micros() as u64),
+                path = ?self.path_state(),
+                paced_queued = self.pace.queue.counts.queued,
+                paced_dropped = self.pace.queue.counts.dropped,
+                paced_unsent = self.pace.queue.counts.unsent,
                 "rUDP writer session counters"
             );
         }
@@ -194,6 +207,10 @@ pub(super) use spawn::udp_pump_spawner;
 /// The game band's feedback: the probe pass and the client's reports
 /// (module `crate::udp::feedback`). A CHILD module too.
 mod feedback;
+
+/// The congestion response: the controller, the pacing queue and the
+/// pass that releases it. A CHILD module too.
+mod pace;
 
 #[cfg(test)]
 mod tests;

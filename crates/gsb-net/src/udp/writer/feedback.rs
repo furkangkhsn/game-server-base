@@ -17,8 +17,10 @@ impl super::UdpWriter {
         let Some((id, received)) = parse_two_u32(&frame.payload) else {
             return; // the demux forwards only whole reports
         };
-        if let Report::Applied(rtt) = self.feedback.on_report(id, received, Instant::now()) {
+        let now = Instant::now();
+        if let Report::Applied(rtt) = self.feedback.on_report(id, received, now) {
             self.rel.sample(rtt);
+            self.pace_report(now);
         }
     }
 
@@ -33,7 +35,10 @@ impl super::UdpWriter {
         }
         let (id, echo) = self.feedback.next_probe();
         match self.sock.try_send_to(&encode_probe(id, echo), self.peer) {
-            Ok(_) => self.feedback.probe_sent(now),
+            // A whole ring unanswered: silence (B91), and for a paced
+            // session the timeout response.
+            Ok(_) if self.feedback.probe_sent(now) => self.pace_silence(now),
+            Ok(_) => {}
             Err(_) => self.feedback.probe_failed(now),
         }
     }

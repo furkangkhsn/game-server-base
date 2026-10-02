@@ -270,7 +270,10 @@ mod logic;
 /// `metrics_dropped` (F70: `reports_torn_at_cut_grace`) and one more
 /// transport counter at the end of that section (F72:
 /// `idle_windows_restarted_late`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4C;
+/// GSNM = the GSNL layout with five more transport counters at the end
+/// of that section (rUDP hardening round 3's congestion response:
+/// `udp_game_frames_queued_paced` .. `udp_game_paced_rate_cuts`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E4D;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

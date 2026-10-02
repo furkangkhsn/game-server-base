@@ -16,7 +16,11 @@ impl super::UdpWriter {
     pub(super) async fn send_game(&mut self, frame: &FrameBody) {
         let datagram = encode_raw(frame);
         if datagram.len() <= self.max_datagram {
-            self.send(&datagram, false).await;
+            // The pacer takes it while the session is paced (module
+            // `crate::udp::congestion`); otherwise it goes at once.
+            if let Some(d) = self.pace_offer(vec![datagram], false) {
+                self.send(&d[0], false).await;
+            }
             return;
         }
         // The message is what the RAW datagram carries after its kind
@@ -41,6 +45,11 @@ impl super::UdpWriter {
             return;
         };
         self.frag_id = self.frag_id.wrapping_add(1);
+        // Whole or not at all (FRAG atomicity): a paced session queues
+        // the set as one message; the pass counts it as it goes out.
+        let Some(fragments) = self.pace_offer(fragments, true) else {
+            return;
+        };
         for d in &fragments {
             self.send(d, false).await;
         }

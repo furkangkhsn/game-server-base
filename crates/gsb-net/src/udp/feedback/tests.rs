@@ -20,7 +20,7 @@ fn announced(t0: Instant) -> Feedback {
 
 fn send(f: &mut Feedback, n: u64) {
     for _ in 0..n {
-        f.game_sent();
+        f.game_sent(100);
     }
 }
 
@@ -273,3 +273,7 @@ fn the_id_wrap_keeps_late_and_invalid_apart() {
         assert_eq!(f.on_report(id, 0, t0), Report::Invalid, "id {id}");
     }
 }
+
+/// Round 3: the cadence the writer sets, the silent client's backoff
+/// (B91), the interval's bytes and the windowed minimum RTT (B93).
+mod cadence;

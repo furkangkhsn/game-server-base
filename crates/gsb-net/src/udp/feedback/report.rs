@@ -61,11 +61,17 @@ impl Feedback {
     fn apply(&mut self, probe: Probe, received: u32, delta: u64, now: Instant) -> Report {
         let rtt = now.saturating_duration_since(probe.at);
         let sent = probe.sent - self.base_sent;
+        let sent_bytes = probe.sent_bytes - self.base_sent_bytes;
         let delivered = delta + self.carry;
         let lost = sent.saturating_sub(delivered);
         self.carry = delivered.saturating_sub(sent);
         let interval = probe.at.saturating_duration_since(self.base_at);
         (self.base_at, self.base_sent) = (probe.at, probe.sent);
+        self.base_sent_bytes = probe.sent_bytes;
+        // An answer ends a silent spell (B91): the cadence is the
+        // writer's again.
+        self.silent = 0;
+        let window_min = self.window.sample(rtt, now);
         self.recv_base = received;
         self.recv_total += delta;
         let rtt_us = u64::try_from(rtt.as_micros()).unwrap_or(u64::MAX);
@@ -82,7 +88,9 @@ impl Feedback {
         });
         e.latest_rtt = rtt;
         e.min_rtt = e.min_rtt.min(rtt);
+        e.window_min_rtt = window_min;
         (e.interval, e.interval_sent, e.interval_lost) = (interval, sent, lost);
+        e.interval_sent_bytes = sent_bytes;
         if sent > 0 {
             let frac = lost as f64 / sent as f64;
             e.loss = match e.loss_intervals {

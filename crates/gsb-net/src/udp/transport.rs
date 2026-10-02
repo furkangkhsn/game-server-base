@@ -38,6 +38,10 @@ pub struct UdpTransportConfig {
     /// The shared socket's kernel buffers (BACKLOG B4; unset = the
     /// system default, untouched). See [`crate::listen::bind_udp`].
     pub buffers: crate::listen::UdpBuffers,
+    /// The writers' congestion response (rUDP hardening round 3; the
+    /// server's `udp_congestion`). `Off` (the default): the writer as it
+    /// was. See `crate::udp::congestion`.
+    pub congestion: UdpCongestion,
 }
 
 impl Default for UdpTransportConfig {
@@ -50,6 +54,7 @@ impl Default for UdpTransportConfig {
             cookie_key: None,
             metrics: None,
             buffers: crate::listen::UdpBuffers::default(),
+            congestion: UdpCongestion::Off,
         }
     }
 }

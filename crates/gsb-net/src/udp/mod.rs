@@ -563,17 +563,15 @@
 //! was written; none of them is a one-line fix, and each is the kind of
 //! thing a hardened transport ships with.
 //!
-//! - **No congestion control and no pacing.** Nothing in this module
-//!   limits the rate at which a session's writer puts datagrams on the
-//!   socket: the only thing bounding server pps is the room's own tick
-//!   and snapshot budget. On loopback that is invisible; on a real
-//!   network a room fan-out plus retransmissions can push a slow path
-//!   into a loss spiral it has no way to back out of. (Verified: no
-//!   token bucket, no pacer, no window anywhere under `udp/`.) The
-//!   SIGNALS exist since round 2 — a reporting client's game-band loss
-//!   and round trip per session (`feedback::GameEstimate`), the kernel's
-//!   drops on the door's socket (`kernel`) — and nothing acts on them
-//!   yet: the response is round 3.
+//! - **The congestion response is opt-in, and the game is not told.**
+//!   Since round 3 a writer can pace a reporting session's game band to
+//!   its path's estimated rate and drop the oldest frames it cannot
+//!   carry, each counted (module `congestion`; the server's
+//!   `udp_congestion = "pace"`). The default is off (not yet measured on
+//!   a jittery real path), a client that does not report is never paced,
+//!   and the session's [`PathState`] does not reach the room yet — so a
+//!   game cannot thin its content to the path on its own (the follow-up
+//!   round carries it writer → connection actor → room).
 //! - **NAT rebinding ends the session.** Sessions are keyed by the
 //!   peer's 4-tuple, so a rebind is a new address: a new handshake, a new
 //!   `ConnectionId`, and the old session lingering until the idle sweep.
@@ -591,6 +589,7 @@
 //!   64 KiB.
 
 mod client;
+mod congestion;
 mod cookie;
 mod demux;
 mod feedback;
@@ -605,6 +604,7 @@ mod writer;
 mod tests;
 
 pub use client::{UdpClient, UdpClientConfig, UdpClientStats};
+pub use congestion::{PathPhase, PathState, UdpCongestion};
 pub use transport::{UdpTransport, UdpTransportConfig};
 
 // Re-homed internals: each lives in the module that owns its concern,

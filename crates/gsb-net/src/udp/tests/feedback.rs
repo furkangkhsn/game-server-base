@@ -55,6 +55,7 @@ async fn the_writer_probes_an_announced_session_and_counts_its_reports() {
         1200,
         reaper,
         Some(metrics_tx),
+        UdpCongestion::Off,
     );
     let w = spawn(
         ConnectionId(5),

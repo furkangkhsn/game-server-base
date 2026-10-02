@@ -52,6 +52,14 @@
 //! - **Cost:** 9 bytes each way per [`PROBE_INTERVAL`] — 37 B/s down and
 //!   up per session on IPv4 (57 on IPv6), plus the announcements. State:
 //!   at most [`PROBE_RING`] outstanding probes per session.
+//! - **The cadence is the writer's** (rUDP hardening round 3): a session
+//!   the congestion response suspects or paces is probed faster
+//!   (`congestion::FAST_PROBE_INTERVAL`, [`Feedback::set_interval`]); a
+//!   client that stopped answering — a whole ring of probes evicted
+//!   unanswered — is probed at a doubling interval, up to
+//!   2^[`SILENT_BACKOFF_MAX`] of it, until it answers again (BACKLOG B91:
+//!   a client that stopped reading costs a probe every 8 s, not every
+//!   second).
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -66,28 +74,9 @@ pub(super) const ANNOUNCE_EVERY: Duration = Duration::from_secs(1);
 /// How many announcements a client sends before it concludes the server
 /// does not probe (an older server).
 pub(super) const ANNOUNCE_MAX: u32 = 3;
-
-/// The session's game-band estimate — what congestion control (round 3)
-/// reads. The smoothed RTT is the reliable band's (`rel::Rto`), which the
-/// probes feed.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub(crate) struct GameEstimate {
-    /// The newest probe round trip, and the smallest one seen.
-    pub(crate) latest_rtt: Duration,
-    pub(crate) min_rtt: Duration,
-    /// The last interval between two answered probes: its length, the
-    /// game datagrams sent in it and how many of them the client missed.
-    pub(crate) interval: Duration,
-    pub(crate) interval_sent: u64,
-    pub(crate) interval_lost: u64,
-    /// The loss fraction, smoothed over the intervals that sent anything
-    /// (weight 1/4 per interval; the first such interval sets it).
-    pub(crate) loss: f64,
-    /// The intervals that sent anything.
-    pub(crate) loss_intervals: u64,
-    /// Answered probes so far.
-    pub(crate) reports: u64,
-}
+/// The silent client's backoff (B91): after this many consecutive probes
+/// evicted unanswered, the interval stops doubling (2^3 = 8×).
+pub(super) const SILENT_BACKOFF_MAX: u32 = 3;
 
 /// What a report did (the writer counts and acts on it).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -120,13 +109,14 @@ pub(super) struct Counts {
     pub(super) rtt_sum_us: u64,
 }
 
-/// A probe on the wire: its id, when it left, and the game datagrams the
-/// socket had taken before it.
+/// A probe on the wire: its id, when it left, and the game datagrams
+/// (and their bytes) the socket had taken before it.
 #[derive(Debug, Clone, Copy)]
 struct Probe {
     id: u32,
     at: Instant,
     sent: u64,
+    sent_bytes: u64,
 }
 
 /// One session's feedback state, server side. Pure: every method takes
@@ -137,18 +127,26 @@ pub(super) struct Feedback {
     next_id: u32,
     last_probe: Option<Instant>,
     ring: VecDeque<Probe>,
-    /// Game datagrams the socket took, since the session began.
+    /// The probe interval the writer asked for, and the probes evicted
+    /// unanswered in a row since the last answer (B91).
+    interval: Duration,
+    silent: u32,
+    /// Game datagrams the socket took, and their bytes, since the session
+    /// began.
     sent: u64,
+    sent_bytes: u64,
     /// The baseline of the next interval: the last answered probe's send
-    /// time and count, the client's counter then (as it reported it, and
+    /// time and counts, the client's counter then (as it reported it, and
     /// as accepted), and the surplus carried forward.
     base_at: Instant,
     base_sent: u64,
+    base_sent_bytes: u64,
     recv_base: u32,
     recv_total: u64,
     carry: u64,
     /// The newest RTT sample not yet echoed, in µs (0 = none).
     echo_us: u32,
+    window: WindowMin,
     estimate: Option<GameEstimate>,
     pub(super) counts: Counts,
 }
@@ -160,21 +158,28 @@ impl Feedback {
             next_id: 1,
             last_probe: None,
             ring: VecDeque::with_capacity(PROBE_RING),
+            interval: PROBE_INTERVAL,
+            silent: 0,
             sent: 0,
+            sent_bytes: 0,
             base_at: now,
             base_sent: 0,
+            base_sent_bytes: 0,
             recv_base: 0,
             recv_total: 0,
             carry: 0,
             echo_us: 0,
+            window: WindowMin::new(now),
             estimate: None,
             counts: Counts::default(),
         }
     }
 
-    /// One more game-band datagram (RAW or FRAG) went on the wire.
-    pub(super) fn game_sent(&mut self) {
+    /// One more game-band datagram (RAW or FRAG), `bytes` long, went on
+    /// the wire.
+    pub(super) fn game_sent(&mut self, bytes: usize) {
         self.sent += 1;
+        self.sent_bytes += bytes as u64;
     }
 
     /// The estimate, once a probe was answered (never for a session whose
@@ -184,12 +189,20 @@ impl Feedback {
     }
 
     /// Whether a probe is due: the session announced, and the last probe
-    /// (sent or refused by the socket) is an interval old.
+    /// (sent or refused by the socket) is an interval old — the writer's
+    /// interval, doubled for each probe evicted unanswered in a row (B91).
     pub(super) fn probe_due(&self, now: Instant) -> bool {
+        let every = self.interval * (1 << self.silent.min(SILENT_BACKOFF_MAX));
         self.probing
             && self
                 .last_probe
-                .is_none_or(|t| now.saturating_duration_since(t) >= PROBE_INTERVAL)
+                .is_none_or(|t| now.saturating_duration_since(t) >= every)
+    }
+
+    /// The probe interval from now on (the congestion response's: fast
+    /// while a session is suspected or paced).
+    pub(super) fn set_interval(&mut self, interval: Duration) {
+        self.interval = interval;
     }
 
     /// The next probe's fields: its id and the echo.
@@ -197,21 +210,27 @@ impl Feedback {
         (self.next_id, self.echo_us)
     }
 
-    /// The probe of [`Self::next_probe`] went out.
-    pub(super) fn probe_sent(&mut self, now: Instant) {
-        if self.ring.len() == PROBE_RING {
+    /// The probe of [`Self::next_probe`] went out. True when it pushed an
+    /// unanswered probe off a full ring: a whole ring of probes without
+    /// an answer — the client is silent (B91), or the path lost them all.
+    pub(super) fn probe_sent(&mut self, now: Instant) -> bool {
+        let evicted = self.ring.len() == PROBE_RING;
+        if evicted {
             self.ring.pop_front();
             self.counts.probes_unanswered += 1;
+            self.silent = self.silent.saturating_add(1);
         }
         self.ring.push_back(Probe {
             id: self.next_id,
             at: now,
             sent: self.sent,
+            sent_bytes: self.sent_bytes,
         });
         self.next_id = self.next_id.wrapping_add(1).max(1);
         self.echo_us = 0;
         self.last_probe = Some(now);
         self.counts.probes_sent += 1;
+        evicted
     }
 
     /// The socket refused the probe: counted, tried again an interval on.
@@ -232,6 +251,11 @@ impl Feedback {
 /// Applying a report: its validation and the interval arithmetic. A
 /// CHILD module, so it reaches the state above directly.
 mod report;
+
+/// The estimate and its windowed minimum RTT (B93). A CHILD module too.
+mod estimate;
+pub(crate) use estimate::GameEstimate;
+use estimate::WindowMin;
 
 #[cfg(test)]
 mod tests;

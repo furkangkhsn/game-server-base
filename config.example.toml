@@ -168,6 +168,16 @@ udp_max_datagram_bytes = 1472
 # security posture). Ignored when transport = "tcp".
 #udp_cookie_key = "0123456789abcdef0123456789abcdef"
 
+# rUDP only: the writers' congestion response. "off" (the default): every
+# frame is sent at once, as the door always did. "pace": a session whose
+# client reports (the default UdpClient) and whose path cannot carry what
+# the room sends is paced to the path's estimated rate; the oldest
+# game-band frames it cannot send within 50 ms are dropped and counted
+# (gsb_transport_udp_game_frames_dropped_paced_total). The control band
+# is never paced or dropped; a client that does not report is never
+# paced. Thinning the content itself is the game's decision. Server-wide.
+#udp_congestion = "pace"
+
 # Global tick rate (ticks per second). One ticker task feeds all rooms over
 # a broadcast channel. A room may run slower, at any rate that divides this
 # one (e.g. global 60 → a room at 15 steps every 4th tick).

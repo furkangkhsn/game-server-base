@@ -24,6 +24,8 @@ pub(in crate::udp) struct Link {
     pub(in crate::udp) max_datagram: usize,
     pub(in crate::udp) reaper: Reaper,
     pub(in crate::udp) metrics: crate::TransportMetrics,
+    /// The door's congestion response (module `crate::udp::congestion`).
+    pub(in crate::udp) congestion: UdpCongestion,
 }
 
 /// The per-session outbound pump spawner: ONLY a writer task (the reader
@@ -34,6 +36,7 @@ pub(in crate::udp) fn udp_pump_spawner(
     max_datagram: usize,
     reaper: Reaper,
     metrics: crate::TransportMetrics,
+    congestion: UdpCongestion,
 ) -> PumpSpawner {
     let link = Link {
         sock,
@@ -41,6 +44,7 @@ pub(in crate::udp) fn udp_pump_spawner(
         max_datagram,
         reaper,
         metrics,
+        congestion,
     };
     Box::new(
         move |conn: ConnectionId,
@@ -102,6 +106,7 @@ impl UdpWriter {
             verdicts_deferred: 0,
             flusher: crate::metrics::Flusher::new(link.metrics),
             feedback: Feedback::new(Instant::now()),
+            pace: super::pace::Pace::new(link.congestion, link.max_datagram, Instant::now()),
         }
     }
 }

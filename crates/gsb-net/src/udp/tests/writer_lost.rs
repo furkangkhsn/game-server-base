@@ -43,7 +43,14 @@ fn writer(
     metrics: mpsc::Sender<MetricsEvent>,
 ) -> tokio::task::JoinHandle<()> {
     let (reaper, _reap_rx) = Reaper::new(sock.clone());
-    let spawn = udp_pump_spawner(sock, peer, max_datagram, reaper, Some(metrics));
+    let spawn = udp_pump_spawner(
+        sock,
+        peer,
+        max_datagram,
+        reaper,
+        Some(metrics),
+        UdpCongestion::Off,
+    );
     spawn(
         ConnectionId(71),
         in_tx,
