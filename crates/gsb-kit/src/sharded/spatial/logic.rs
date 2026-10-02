@@ -6,6 +6,7 @@
 //! it as an inherent method.)
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
@@ -122,7 +123,16 @@ where
     }
 
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
-        let admission = self.inner.on_join_as(world, conn, identity);
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
+        let admission = self.inner.on_join_verified(world, conn, joiner);
         // Member bookkeeping for the birth arithmetic (the wrapped shard
         // owns the tables; the spatial layer owns membership).
         if let Some(&entity) = self.inner.player_entity.get(&admission.player) {

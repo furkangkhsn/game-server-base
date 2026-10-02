@@ -4,6 +4,7 @@
 //! NOT split further: a trait impl is one block.
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{
     Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, RoomLogic, TickCtx,
@@ -204,6 +205,15 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     }
 
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
         // Shared spawn path (input session reset included): deterministic
         // spawn point, fresh stable player + wire identity, player→entity
         // table. `baselines` deliberately gets NO entry here: the first
@@ -218,7 +228,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
             &mut self.minter,
             world,
             conn,
-            identity,
+            joiner,
             &mut self.input,
         );
         // Maintain the member-entity set (the dirty loop's O(1)

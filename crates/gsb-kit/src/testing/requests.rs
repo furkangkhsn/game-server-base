@@ -56,6 +56,14 @@ impl Game for Recording {
     fn spawn_player_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Entity {
         self.game.spawn_player_as(world, conn, identity)
     }
+    fn spawn_player_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &gsb_core::auth::Joiner<'_>,
+    ) -> Entity {
+        self.game.spawn_player_verified(world, conn, joiner)
+    }
     fn ingest(
         &mut self,
         world: &mut World,

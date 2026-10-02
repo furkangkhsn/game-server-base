@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use bevy_ecs::prelude::{Entity, World};
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::metrics::LogicCounters;
 use gsb_core::room::{Action, TickCtx};
@@ -151,6 +152,24 @@ pub trait Game: Send + 'static {
         _identity: &str,
     ) -> Entity {
         self.spawn_player(world, conn)
+    }
+
+    /// [`Self::spawn_player_as`] with the joiner's VERIFIED claims besides
+    /// its identity (B21) — what the kit's rooms call on every fresh join
+    /// (the core's `GameLogic::on_join_verified`). `joiner.claims` are the
+    /// game's own claims the ticket validator verified (a character id, a
+    /// class, a loadout — `gsb-ticket` hands over their JSON); `None` on
+    /// the local-auth path. Override it to spawn what the platform
+    /// vouched for instead of what the client says. The team rooms call
+    /// [`TeamGame::spawn_team_player_verified`] instead. Default:
+    /// `spawn_player_as` — the claims are ignored.
+    fn spawn_player_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Entity {
+        self.spawn_player_as(world, conn, joiner.identity)
     }
 
     /// Synthesize the input of the bot-fed players (a parked player's
@@ -290,6 +309,19 @@ pub trait TeamGame: Game {
         _identity: &str,
     ) -> (Entity, Team) {
         self.spawn_team_player(world, conn)
+    }
+
+    /// [`Self::spawn_team_player_as`] with the joiner's verified claims
+    /// (B21): the team counterpart of [`Game::spawn_player_verified`],
+    /// what the team rooms call on every fresh join. Default:
+    /// `spawn_team_player_as` — the claims are ignored.
+    fn spawn_team_player_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> (Entity, Team) {
+        self.spawn_team_player_as(world, conn, joiner.identity)
     }
 
     /// The team of the player whose entity [`Game::spawn_player`] just

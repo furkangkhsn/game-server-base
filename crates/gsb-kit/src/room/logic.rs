@@ -5,6 +5,7 @@
 //! NOT split further: a trait impl is one block.
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{
     Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, RoomLogic, TickCtx,
@@ -131,6 +132,15 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
     }
 
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
         // Shared join path (`common::join`): the game's spawn, a fresh
         // stable player identity + wire identity through their minting
         // counters, and the player→entity table update. The entity value
@@ -146,7 +156,7 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
             &mut self.minter,
             world,
             conn,
-            identity,
+            joiner,
             &mut self.input,
         )
     }

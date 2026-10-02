@@ -4,6 +4,7 @@
 //! NOT split further: a trait impl is one block.
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{
     Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, RoomLogic, TickCtx,
@@ -80,9 +81,18 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     }
 
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
         // Team assignment is game policy, decided in the spawn step
-        // (`TeamGame::spawn_team_player_as`, given the authenticated
-        // identity — K4; by default `spawn_team_player`, i.e.
+        // (`TeamGame::spawn_team_player_verified`, given the authenticated
+        // identity and the verified claims — K4; by default `spawn_team_player`, i.e.
         // `spawn_player` then `team_of`: the demo hashes the TRANSPORT
         // session id, as it always has — the load generator's team
         // distribution pairs with it; an arena overrides it to spawn at
@@ -97,7 +107,7 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
             conn,
             &mut self.input,
             |game, world, conn| {
-                let (entity, t) = game.spawn_team_player_as(world, conn, identity);
+                let (entity, t) = game.spawn_team_player_verified(world, conn, joiner);
                 team = Some(t);
                 entity
             },

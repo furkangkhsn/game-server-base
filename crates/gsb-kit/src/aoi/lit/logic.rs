@@ -6,6 +6,7 @@
 //! NOT split further: a trait impl is one block.
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::metrics::LogicCounters;
 use gsb_core::room::{
@@ -114,7 +115,16 @@ impl<G: LitGame, S: CellSpace<Wire<G>>> GameLogic<World> for LitAoiRoom<G, S> {
     }
 
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
-        self.room.on_join_as(world, conn, identity)
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
+        self.room.on_join_verified(world, conn, joiner)
     }
 
     fn on_leave(&mut self, world: &mut World, player: PlayerId) {

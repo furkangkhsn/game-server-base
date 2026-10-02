@@ -4,6 +4,7 @@
 //! NOT split further: a trait impl is one block.
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
@@ -84,9 +85,18 @@ where
     /// ([`TeamGame::spawn_team_player_as`]); the team goes into the world
     /// as the entity's [`TeamMember`].
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
         let mut team = None;
         let admission = self.inner.admit(world, |game, world| {
-            let (entity, t) = game.spawn_team_player_as(world, conn, identity);
+            let (entity, t) = game.spawn_team_player_verified(world, conn, joiner);
             team = Some(t);
             entity
         });

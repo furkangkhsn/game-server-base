@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, TickCtx};
 use gsb_core::rpc::RequestDecision;
@@ -123,13 +124,23 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
     }
 
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
-        // The spawn is the game's, given the authenticated identity (the
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
+        // The spawn is the game's, given the authenticated identity and
+        // the verified claims (the
         // demo derives the spawn point from the TRANSPORT session id —
         // the load generator's home distribution pairs with it; the MMO
         // places a saved character by its player — the registry routed
         // the join to that character's shard).
         self.admit(world, |game, world| {
-            game.spawn_player_as(world, conn, identity)
+            game.spawn_player_verified(world, conn, joiner)
         })
     }
 

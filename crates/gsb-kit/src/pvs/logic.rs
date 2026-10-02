@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::World;
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, EntityId, PlayerId};
 use gsb_core::room::{
     Action, Admission, Detach, DisconnectCause, GameLogic, ResumeFound, RoomLogic, TickCtx,
@@ -91,6 +92,15 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
     }
 
     fn on_join_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Admission {
+        self.on_join_verified(world, conn, &Joiner::new(identity))
+    }
+
+    fn on_join_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &Joiner<'_>,
+    ) -> Admission {
         crate::common::join(
             &mut self.game,
             &mut self.player_entity,
@@ -98,7 +108,7 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
             &mut self.minter,
             world,
             conn,
-            identity,
+            joiner,
             &mut self.input,
         )
     }

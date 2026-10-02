@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::{Entity, World};
+use gsb_core::auth::Joiner;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, Admission, TickCtx};
 
@@ -19,7 +20,8 @@ use crate::identity::Minter;
 /// `PlayerId` counter — resume stability comes from the park ledger
 /// carrying it, not from re-minting), a fresh input session (a (re)join
 /// is a new session — see [`InputSeq`]), the GAME's spawn of the player
-/// who authenticated as `identity` ([`Game::spawn_player_as`]), then the
+/// who joins as `joiner` ([`Game::spawn_player_verified`]: the
+/// authenticated identity and the verified claims), then the
 /// KIT's identity stamp from the room's single [`Minter`] and the
 /// player→entity table. The wire id also goes to the joiner in
 /// `JOIN_ROOM_RESULT`, so both paths share one space.
@@ -31,7 +33,7 @@ pub(crate) fn join<G: Game>(
     minter: &mut Minter,
     world: &mut World,
     conn: ConnectionId,
-    identity: &str,
+    joiner: &Joiner<'_>,
     input: &mut InputSeq,
 ) -> Admission {
     join_with(
@@ -42,7 +44,7 @@ pub(crate) fn join<G: Game>(
         world,
         conn,
         input,
-        |g, w, c| g.spawn_player_as(w, c, identity),
+        |g, w, c| g.spawn_player_verified(w, c, joiner),
     )
 }
 

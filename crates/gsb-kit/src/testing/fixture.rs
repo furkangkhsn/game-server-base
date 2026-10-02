@@ -65,6 +65,10 @@ pub(crate) struct MoveTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Component)]
 pub(crate) struct Login(pub String);
 
+/// The verified claims a join carried (`Game::spawn_player_verified`).
+#[derive(Debug, Clone, PartialEq, Eq, Component)]
+pub(crate) struct Vouched(pub bytes::Bytes);
+
 /// A player's speed (players have one, NPCs the tests spawn may not).
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub(crate) struct Speed(pub f32);
@@ -152,6 +156,21 @@ impl Game for Fixture {
         entity
     }
 
+    /// A join with verified claims spawns like a named login and carries
+    /// them ([`Vouched`]).
+    fn spawn_player_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &gsb_core::auth::Joiner<'_>,
+    ) -> Entity {
+        let entity = self.spawn_player_as(world, conn, joiner.identity);
+        if let Some(claims) = joiner.claims {
+            world.entity_mut(entity).insert(Vouched(claims.clone()));
+        }
+        entity
+    }
+
     /// The fixture decodes no input.
     fn ingest(
         &mut self,
@@ -183,6 +202,18 @@ impl TeamGame for Fixture {
         identity: &str,
     ) -> (Entity, Team) {
         let entity = self.spawn_player_as(world, conn, identity);
+        let team = self.team_of(world, conn, entity);
+        (entity, team)
+    }
+
+    /// The same with the verified claims ([`Vouched`]).
+    fn spawn_team_player_verified(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        joiner: &gsb_core::auth::Joiner<'_>,
+    ) -> (Entity, Team) {
+        let entity = self.spawn_player_verified(world, conn, joiner);
         let team = self.team_of(world, conn, entity);
         (entity, team)
     }
