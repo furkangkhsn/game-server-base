@@ -254,8 +254,31 @@ function v(k,    i) { return (k in kv) ? kv[k] : 0 }
     p99[key] += v("connect_p99_ms")
     if (v("connect_p99_ms") > p99max[key]) p99max[key] = v("connect_p99_ms")
     snap[key] += v("snap_per_s")
+    stot[key] += v("snap_total")
     ends[key] += v("udp_ends_rel_dead") + v("udp_ends_reset") + v("udp_ends_seal_limit")
     ok[key]++
+}
+# The B104 verdict for one scenario (both modes measured): jitter alone
+# must not pace (snapshots within 2 % of off, under 1 % of them dropped by
+# the pacer, at most one rate cut per client a run); a bottleneck must be
+# seen (episodes, loss at most half that of off, probe RTT at most a
+# third, no more sessions ended than off).
+function verdict(s,    on, off, k, ko, drp, cpc, sr, lr, rr, good) {
+    on = s SUBSEP "pace"; off = s SUBSEP "off"; k = ok[on]; ko = ok[off]
+    if (!k || !ko || s == "baseline") return ""
+    if (s ~ /^bottleneck/) {
+        lr = sent[off] && lost[off] ? (lost[on] / sent[on]) / (lost[off] / sent[off]) : 0
+        rr = rtn[off] && rtn[on] && rtt[off] ? (rtt[on] / rtn[on]) / (rtt[off] / rtn[off]) : 0
+        good = ep[on] > 0 && lr <= 0.5 && rr <= 1 / 3 && ends[on] <= ends[off]
+        return sprintf("%-18s episodes %6.1f  lost %3.0f%% of off  rtt %3.0f%% of off  ends %d/%d  %s", \
+            s, ep[on] / k, 100 * lr, 100 * rr, ends[on], ends[off], good ? "PASS" : "FAIL")
+    }
+    sr = snap[off] ? (snap[on] / k) / (snap[off] / ko) : 0
+    drp = stot[on] ? drop[on] / stot[on] : 0
+    cpc = clients ? cut[on] / k / clients : 0
+    good = sr >= 0.98 && drp <= 0.01 && cpc <= 1
+    return sprintf("%-18s snaps %5.1f%% of off  dropped %4.2f%%  cuts/client %4.2f  %s", \
+        s, 100 * sr, 100 * drp, cpc, good ? "PASS" : "FAIL")
 }
 END {
     printf "%-18s %-4s %4s %8s %8s %9s %9s %7s %8s %9s %9s %10s %5s\n", \
@@ -276,6 +299,22 @@ END {
     print "RTT over all samples; p99_max = the worst run; ends = sessions that"
     print "ended under their clients, all runs (B128). A run count marked ! had runs"
     print "without a RESULT line (see their logs)."
-}' "$RESULTS" | tee "$OUT_DIR/summary.txt"
+    print ""
+    print "verdict (B104; scripts/README.md): jitter* pass with pace snaps/s within"
+    print "2% of off, under 1% of the delivered snapshots dropped by the pacer and at"
+    print "most one rate cut per client a run; bottleneck* pass with episodes, lost%"
+    print "at most half and rtt_ms at most a third of those of off, ends no more."
+    fails = 0; seen = 0
+    for (j = 1; j <= nk; j++) {
+        split(order[j], sm, SUBSEP)
+        if (sm[1] in done) continue
+        done[sm[1]] = 1
+        line = verdict(sm[1])
+        if (line == "") continue
+        print line; seen++
+        if (line ~ /FAIL$/) fails++
+    }
+    if (seen) printf "overall: %s (%d of %d scenarios pass)\n", fails ? "FAIL" : "PASS", seen - fails, seen
+}' clients="$CLIENTS" "$RESULTS" | tee "$OUT_DIR/summary.txt"
 
 say "done: $OUT_DIR"

@@ -74,9 +74,21 @@ ve tablo (`summary.txt`, ekrana da basılır). Sütunlar:
 | `snaps/s` | `snap_per_s` | istemcilerin aldığı toplam snapshot hızı |
 | `ends` | `udp_ends_*` | istemcinin bitirdiği oturumlar (B128) — 0 olmalı |
 
-**Karar için:** `jitter*` satırlarında `pace`'in `episodes`/`cuts`/
-`dropped` değerleri `off`'unkine (hep 0) yakın ve `snaps/s` aynıysa
-titreşim yanlış hızlanma üretmiyor; `bottleneck*` satırlarında `pace`
-bölüm açıp kesiyor ve `lost%` `off`'tan düşükse darboğaz görülüyor. İkisi
-de tutarsa `udp_congestion` varsayılanı `"pace"` olabilir. Sonucu ve
-`summary.txt`'yi BACKLOG B104'e işleyin.
+**Karar için — `summary.txt`'nin sonundaki `verdict` bölümü** (tur 4,
+DESIGN §6 "Tıkanıklık tepkisi"; her senaryo iki kipte de ölçüldüyse):
+
+- `jitter*` (kayıplı olan dahil) **PASS**: `pace`'in `snaps/s`'i `off`'unkinin
+  en az %98'i, hızlanmanın düşürdüğü kare (`dropped`) istemcilere ulaşan
+  snapshot'ların (`snap_total`) en çok %1'i ve koşu başına istemci başına
+  en çok bir hız kesmesi (`cuts` ÷ `CLIENTS`). Titreşim tek başına
+  sağlıklı oyuncuyu kısmıyor.
+- `bottleneck*` **PASS**: `pace` bölüm açıyor (`episodes` > 0), `lost%`
+  `off`'unkinin en çok yarısı, `rtt_ms` (ayakta kuyruk) en çok üçte biri
+  ve `ends` `off`'unkinden fazla değil. Darboğaz görülüyor ve kuyruk
+  boşalıyor.
+- `overall: PASS` — hepsi geçti: `udp_congestion` varsayılanı `"pace"`
+  olabilir (bakımcının kararı). Tur 3'ün kodu bu ölçütle 6 senaryonun
+  6'sında kalır (2026-10-03 ölçümü: titreşimde istemci başına 4–47 kesinti,
+  darboğazda tur `off`'un %96'sı).
+
+Sonucu ve `summary.txt`'yi BACKLOG B104'e işleyin.
