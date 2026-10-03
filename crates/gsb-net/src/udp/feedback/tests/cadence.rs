@@ -12,8 +12,9 @@ fn probe(f: &mut Feedback, at: Instant) -> bool {
 }
 
 /// A client that stopped answering: once a probe was unanswered for a
-/// whole horizon, every further eviction doubles the interval, up to 8×;
-/// one answer brings the writer's cadence back.
+/// whole horizon, each probe evicts one; after SILENT_GRACE evictions in
+/// a row every further one doubles the interval, up to 8×; one answer
+/// brings the writer's cadence back.
 #[test]
 fn a_silent_client_is_probed_ever_less_often() {
     let t0 = Instant::now();
@@ -23,8 +24,9 @@ fn a_silent_client_is_probed_ever_less_often() {
         at += PROBE_INTERVAL;
         assert!(!probe(&mut f, at), "nothing a horizon old yet");
     }
+    assert_eq!(SILENT_GRACE, 4);
     let mut gaps = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..9 {
         let mut next = at + PROBE_INTERVAL;
         while !f.probe_due(next) {
             next += ms(100);
@@ -33,8 +35,8 @@ fn a_silent_client_is_probed_ever_less_often() {
         at = next;
         assert!(probe(&mut f, at), "one evicted unanswered");
     }
-    assert_eq!(gaps, [1, 2, 4, 8, 8]);
-    assert_eq!(f.counts.probes_unanswered, 5);
+    assert_eq!(gaps, [1, 1, 1, 1, 1, 2, 4, 8, 8], "the grace, then 2^n");
+    assert_eq!(f.counts.probes_unanswered, 9);
     let id = f.next_probe().0 - 1;
     assert!(matches!(f.on_report(id, 0, at + ms(5)), Report::Applied(_)));
     assert!(!f.probe_due(at + PROBE_INTERVAL - ms(1)));

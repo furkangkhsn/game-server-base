@@ -57,8 +57,9 @@
 //! - **The cadence is the writer's** (rUDP hardening round 3): a session
 //!   the congestion response suspects or paces is probed faster
 //!   (`congestion::FAST_PROBE_INTERVAL`, [`Feedback::set_interval`]); a
-//!   client that stopped answering — a probe evicted unanswered after a
-//!   whole horizon — is probed at a doubling interval, up to
+//!   client that stopped answering — [`SILENT_GRACE`] probes evicted
+//!   unanswered in a row, each after a whole horizon — is probed at a
+//!   doubling interval, up to
 //!   2^[`SILENT_BACKOFF_MAX`] of it, until it answers again (BACKLOG B91:
 //!   a client that stopped reading costs a probe every 8 s, not every
 //!   second).
@@ -84,6 +85,12 @@ pub(super) const ANNOUNCE_MAX: u32 = 3;
 /// The silent client's backoff (B91): after this many consecutive probes
 /// evicted unanswered, the interval stops doubling (2^3 = 8×).
 pub(super) const SILENT_BACKOFF_MAX: u32 = 3;
+/// Probes evicted unanswered in a row before the backoff starts (round
+/// 5): a congested path loses most probes or their reports — the B104
+/// bottleneck answered one in five — and its runs of evictions are not a
+/// client that stopped reading; backing off from them left sessions on
+/// that path probed every four seconds, their congestion unmeasured.
+pub(super) const SILENT_GRACE: u32 = 4;
 
 /// What a report did (the writer counts and acts on it).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -197,9 +204,14 @@ impl Feedback {
 
     /// Whether a probe is due: the session announced, and the last probe
     /// (sent or refused by the socket) is an interval old — the writer's
-    /// interval, doubled for each probe evicted unanswered in a row (B91).
+    /// interval, doubled for each probe evicted unanswered in a row past
+    /// the first [`SILENT_GRACE`] (B91).
     pub(super) fn probe_due(&self, now: Instant) -> bool {
-        let every = self.interval * (1 << self.silent.min(SILENT_BACKOFF_MAX));
+        let backoff = self
+            .silent
+            .saturating_sub(SILENT_GRACE)
+            .min(SILENT_BACKOFF_MAX);
+        let every = self.interval * (1 << backoff);
         self.probing
             && self
                 .last_probe
