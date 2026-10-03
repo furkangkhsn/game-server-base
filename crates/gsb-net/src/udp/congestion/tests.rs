@@ -8,6 +8,7 @@
 
 use super::*;
 
+mod base;
 mod path;
 mod queue;
 mod signal;
@@ -266,6 +267,26 @@ fn a_draining_queue_holds_the_rate() {
     feed(&mut c, &mut t, 100_000, &[est(250, 50, 10, 60, 20)]);
     assert!(c.paced().unwrap() < r2, "loss cuts, draining or not");
     assert_eq!(c.counts.cuts, 5);
+}
+
+/// The base (round 5, module `base`): a queue that stood longer than the
+/// window lifted the window's floor to itself (`window_min_rtt` 380 ms
+/// here) — round 4 read it as no queue at all and grew the rate. The
+/// floor is never a threshold over the base, so the queue still cuts.
+#[test]
+fn a_floor_that_rose_with_the_queue_is_still_a_queue() {
+    let mut t = Instant::now();
+    let mut c = paced_at(&mut t, 100, 40);
+    for _ in 0..8 {
+        feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 20, 20)]);
+    }
+    assert_eq!(c.track.threshold(), QUEUE_DELAY_LIMIT);
+    let r0 = c.paced().unwrap();
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 400, 380)]);
+    assert!(c.paced().unwrap() < r0, "a 380 ms queue cuts");
+    // A new path starts the base over.
+    c.new_path(t);
+    assert_eq!(c.base.base(), None);
 }
 
 /// A whole ring of probes unanswered: a paced session halves its rate

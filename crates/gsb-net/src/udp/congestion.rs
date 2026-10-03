@@ -1,5 +1,6 @@
 //! The game band's congestion response (rUDP hardening round 3, BACKLOG
-//! B1; its delay signal, increase and floor reworked by round 4, B104):
+//! B1; its delay signal, increase and floor reworked by round 4, B104;
+//! its base by round 5, B142):
 //! what a session's writer does when its client's reports say the path
 //! carries less than the room sends.
 //!
@@ -25,9 +26,13 @@
 //!   least [`LOSS_MIN`] game datagrams and at least 1/[`LOSS_DIV`] of
 //!   them (a policer or a shallow buffer: loss without delay). Delay: a
 //!   standing queue — the smallest of the newest round trips stands over
-//!   the windowed minimum (`feedback::RTT_WINDOW`, B93) by the path's
-//!   threshold: [`QUEUE_DELAY_LIMIT`] on a steady path, five times its
-//!   jitter on a jittery one, never over [`QUEUE_DELAY_MAX`] (module
+//!   the floor by the path's threshold. The floor is the windowed
+//!   minimum (`feedback::RTT_WINDOW`, B93), never more than the
+//!   threshold over the path's base delay (module `base`, round 5: a
+//!   queue that stands longer than the window would become the window's
+//!   floor and stop being a signal). The threshold: [`QUEUE_DELAY_LIMIT`]
+//!   on a steady path, five times its jitter on a jittery one, never
+//!   over [`QUEUE_DELAY_MAX`] (module
 //!   `signal`). A deep buffer filling, the latency a game feels long
 //!   before the buffer overflows — and not jitter, which the round-3
 //!   test (the newest sample [`QUEUE_DELAY_LIMIT`] over the floor) took
@@ -77,6 +82,8 @@ use std::time::{Duration, Instant};
 
 use crate::udp::feedback::{GameEstimate, PROBE_INTERVAL};
 
+mod base;
+use base::BaseDelay;
 mod queue;
 pub(super) use queue::PaceQueue;
 mod signal;
@@ -152,6 +159,9 @@ pub(super) struct Control {
     /// the previous report's recent minimum (a draining queue) and queue
     /// level (the receive-span correction).
     track: RttTrack,
+    /// The path's base delay (module `base`): the floor a queue stands
+    /// over.
+    base: BaseDelay,
     prev_recent: Option<Duration>,
     prev_level: Option<Duration>,
     /// Reports since the session was suspected; whether the last report
@@ -178,6 +188,7 @@ impl Control {
             min_rate: MIN_RATE * max_datagram as f64,
             prev_rtt: None,
             track: RttTrack::default(),
+            base: BaseDelay::new(now),
             prev_recent: None,
             prev_level: None,
             suspect_reports: 0,
@@ -236,7 +247,10 @@ impl Control {
         // over the path's threshold in the newest samples.
         self.track
             .sample(e.latest_rtt, now, self.phase != PathPhase::Open);
-        let floor = e.window_min_rtt;
+        let base = self.base.sample(e.window_min_rtt, now);
+        // The window's floor, never a threshold over the base: a floor
+        // that rose by more than a queue is a queue that stood.
+        let floor = e.window_min_rtt.min(base + self.track.threshold());
         let level = self.track.recent_min(QUEUE_SAMPLES);
         let growth = level
             .zip(self.prev_level)
