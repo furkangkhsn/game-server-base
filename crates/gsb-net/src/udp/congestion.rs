@@ -1,6 +1,6 @@
 //! The game band's congestion response (rUDP hardening round 3, BACKLOG
 //! B1; its delay signal, increase and floor reworked by round 4, B104;
-//! its base and silence by round 5, B142):
+//! its base, silence and drain by round 5, B142):
 //! what a session's writer does when its client's reports say the path
 //! carries less than the room sends.
 //!
@@ -87,6 +87,13 @@
 //!   sessions behind one link can go below it together (round 4: at four
 //!   budgets each, the B104 run's 64 sessions' floor was its 3.6 Mbit/s
 //!   link itself).
+//! - *The drain* (round 5; BBR's ProbeRTT). A paced session that saw no
+//!   round trip near its base (under base + threshold) for
+//!   [`DRAIN_AFTER`] paces at [`DRAIN_GAIN`] of its rate until the next
+//!   report — counted (`udp_game_paced_drains`), the frames it drops
+//!   counted as any the pacer drops — so a queue it shares can empty and
+//!   the base's newest slot hold the path's floor, not the queue's. The
+//!   room is told the rate, not the drain.
 
 use std::time::{Duration, Instant};
 
@@ -141,6 +148,11 @@ pub(super) const MIN_RATE: f64 = 1.0;
 /// A paced session opens again once its rate is this much over the
 /// episode's highest demand.
 pub(super) const EXIT_HEADROOM: f64 = 1.25;
+/// A paced session that saw no round trip near its base (under base +
+/// threshold) for this long drains: BBR's ProbeRTT interval.
+pub(super) const DRAIN_AFTER: Duration = Duration::from_secs(10);
+/// A drain paces at this share of the rate, for one report.
+pub(super) const DRAIN_GAIN: f64 = 0.5;
 /// The longest a paced game-band frame may wait for the path: the
 /// pacing queue holds at most rate × this many bytes (and always the
 /// newest frame); older frames are dropped and counted.
@@ -156,6 +168,9 @@ pub(super) struct ControlCounts {
     pub(super) episodes: u64,
     /// Rate decreases (the entry's included).
     pub(super) cuts: u64,
+    /// Drains: a paced session that saw no round trip near its base for
+    /// [`DRAIN_AFTER`] halved its rate for one report.
+    pub(super) drains: u64,
 }
 
 /// One session's congestion controller (see the module docs).
@@ -176,6 +191,10 @@ pub(super) struct Control {
     base: BaseDelay,
     prev_recent: Option<Duration>,
     prev_level: Option<Duration>,
+    /// The last report whose round trip was near the base, and whether
+    /// the session is draining until the next report (BBR's ProbeRTT).
+    near: Instant,
+    drain: bool,
     /// Reports since the session was suspected; whether the last report
     /// was a loss signal.
     suspect_reports: u32,
@@ -203,6 +222,8 @@ impl Control {
             base: BaseDelay::new(now),
             prev_recent: None,
             prev_level: None,
+            near: now,
+            drain: false,
             suspect_reports: 0,
             last_loss: false,
             offered: 0,
@@ -230,9 +251,14 @@ impl Control {
         self.offered += bytes as u64;
     }
 
-    /// The pacing rate in bytes per second, while paced.
+    /// The pacing rate in bytes per second, while paced: [`DRAIN_GAIN`]
+    /// of the rate while draining.
     pub(super) fn paced(&self) -> Option<f64> {
-        (self.phase == PathPhase::Paced).then_some(self.rate)
+        let rate = match self.drain {
+            true => (self.rate * DRAIN_GAIN).max(self.min_rate),
+            false => self.rate,
+        };
+        (self.phase == PathPhase::Paced).then_some(rate)
     }
 
     /// The probe interval the session needs now.
@@ -250,6 +276,8 @@ impl Control {
             self.demand = self.offered as f64 / elapsed;
         }
         (self.offered, self.since) = (0, now);
+        // A drain lasts until the next report.
+        self.drain = false;
         let loss = loss_signal(e);
         let last_loss = std::mem::replace(&mut self.last_loss, loss);
         self.prev_rtt = Some(e.latest_rtt);
@@ -260,6 +288,9 @@ impl Control {
         self.track
             .sample(e.latest_rtt, now, self.phase != PathPhase::Open);
         let base = self.base.sample(e.window_min_rtt, now);
+        if e.latest_rtt < base + self.track.threshold() {
+            self.near = now;
+        }
         // The window's floor, never a threshold over the base: a floor
         // that rose by more than a queue is a queue that stood.
         let floor = e.window_min_rtt.min(base + self.track.threshold());
@@ -310,7 +341,12 @@ impl Control {
                     self.rate += INCREASE * self.peak_demand * e.interval.as_secs_f64();
                     if self.rate >= self.peak_demand * EXIT_HEADROOM {
                         self.phase = PathPhase::Open;
+                        return;
                     }
+                }
+                if now.saturating_duration_since(self.near) >= DRAIN_AFTER {
+                    (self.drain, self.near) = (true, now);
+                    self.counts.drains += 1;
                 }
             }
         }
@@ -359,7 +395,8 @@ impl Control {
         let measured = self.prev_rtt.is_some();
         PathState {
             phase: self.phase,
-            rate: self.paced().map(|r| r.min(f64::from(u32::MAX)) as u32),
+            rate: (self.phase == PathPhase::Paced)
+                .then(|| self.rate.min(f64::from(u32::MAX)) as u32),
             demand: measured.then(|| self.demand.min(f64::from(u32::MAX)) as u32),
             loss_permille: measured.then(|| (self.loss * 1000.0).round().clamp(0.0, 1000.0) as u16),
             rtt: self.prev_rtt,

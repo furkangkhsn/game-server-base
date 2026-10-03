@@ -360,6 +360,8 @@ fn assert_metric_queue(kv: &std::collections::HashMap<String, String>, result_li
         "transport_udp_stateless_resets_sent",
         "transport_udp_stateless_resets_rate_limited",
         "transport_udp_stateless_resets_send_failed",
+        // The congestion response's drains (rUDP round 5).
+        "transport_udp_game_paced_drains",
         // What the stopping rooms/shards still held (B68).
         "joins_unprocessed",
         "resumes_unprocessed",

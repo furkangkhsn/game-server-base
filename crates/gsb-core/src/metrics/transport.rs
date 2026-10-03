@@ -353,11 +353,13 @@ transport_counters! {
     udp_game_frames_unsent_paced,
     /// rUDP writers (congestion response): times a session's game band
     /// started being paced (two congestion signals in a row — loss or a
-    /// standing queue — on an open session).
+    /// standing queue — or, round 5, one loss signal over an interval of
+    /// 2 s or more, or a probe unanswered for 4 s on a suspected
+    /// session).
     udp_game_paced_episodes,
     /// rUDP writers (congestion response): pacing-rate decreases — each
-    /// episode's start, every further signal while paced, and a whole
-    /// ring of probes unanswered while paced.
+    /// episode's start, every further signal while paced, and every
+    /// probe unanswered for 4 s (the feedback horizon) while paced.
     udp_game_paced_rate_cuts,
     /// rUDP demux (connection migration, B3; `udp_migration = true`):
     /// sessions granted a connection id (CID) — the clients that asked,
@@ -514,6 +516,13 @@ transport_counters! {
     /// rUDP demux (sealed door, stateless reset, B5b): resets the socket
     /// refused (the client's next datagram triggers another).
     udp_stateless_resets_send_failed,
+    /// rUDP writers (congestion response, round 5): drains — a paced
+    /// session that saw no round trip near its path's base delay for
+    /// 10 s paced at half its rate for one report, so a queue it shares
+    /// can empty and its base be measured again (BBR's ProbeRTT). Not a
+    /// loss: the frames the lower rate drops are
+    /// `udp_game_frames_dropped_paced`.
+    udp_game_paced_drains,
 }
 
 impl TransportCounters {

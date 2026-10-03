@@ -114,6 +114,12 @@
 //! B5b's five transport counters at the end of that line and table
 //! (`udp_rekeys`, `udp_rekeys_unconfirmed`, `udp_stateless_resets_sent`,
 //! `udp_stateless_resets_rate_limited`, `udp_stateless_resets_send_failed`).
+//! rUDP round 5's drain count at the end of that line and table
+//! (`udp_game_paced_drains`), and its deliberate HELP changes of
+//! `gsb_transport_udp_game_paced_episodes_total` and
+//! `gsb_transport_udp_game_paced_rate_cuts_total` (a long lossy
+//! interval and a silent horizon start an episode; a horizon, not a
+//! ring, of unanswered probes cuts).
 //! B21's ticket-auth counts (the report carries two accepted, an expired
 //! and a game refusal): the `gsb-metric scope=tickets` line (present once
 //! a ticket-auth server decided an AUTH) and, after the server closes,

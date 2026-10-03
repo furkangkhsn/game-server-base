@@ -157,7 +157,8 @@ fn sustained_loss_paces_at_the_delivered_rate() {
         c.counts,
         ControlCounts {
             episodes: 1,
-            cuts: 1
+            cuts: 1,
+            drains: 0
         }
     );
 }
@@ -339,6 +340,38 @@ fn a_floor_that_rose_with_the_queue_is_still_a_queue() {
     // A new path starts the base over.
     c.new_path(t);
     assert_eq!(c.base.base(), None);
+}
+
+/// The drain (round 5, BBR's ProbeRTT): a paced session that saw no round
+/// trip near its base for DRAIN_AFTER (10 s) paces at DRAIN_GAIN (half)
+/// of its rate for one report, counted; the room is told the rate, not
+/// the drain. Round trips near the base keep it from draining.
+#[test]
+fn a_paced_session_far_from_its_base_drains_once_in_a_while() {
+    let mut t = Instant::now();
+    let mut c = paced_at(&mut t, 100, 40);
+    // Near the base for 15 s, grown and cut in turn: no drain.
+    for k in 0..60 {
+        feed(&mut c, &mut t, 100_000, &[est(250, 50, k % 2 * 10, 25, 20)]);
+    }
+    assert!(c.paced().is_some());
+    assert_eq!(c.counts.drains, 0, "near: never");
+    // A queue far over the base, draining 6 ms a report: the rate is
+    // held — and after 10 s without a round trip near the base, it
+    // drains for one report.
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 420, 20)]);
+    let rate = c.paced().unwrap();
+    let mut drained = vec![];
+    for k in 1..48u64 {
+        feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 420 - 6 * k, 20)]);
+        assert_eq!(c.state().rate, Some(rate as u32), "held, told as held");
+        if c.paced() != Some(rate) {
+            assert_eq!(c.paced(), Some(rate / 2.0), "half");
+            drained.push(k);
+        }
+    }
+    assert_eq!(drained, [39], "10 s on, one report");
+    assert_eq!(c.counts.drains, 1);
 }
 
 /// Two paced sessions behind one bottleneck, one starting with nine

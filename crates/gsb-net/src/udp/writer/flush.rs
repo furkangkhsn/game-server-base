@@ -70,6 +70,7 @@ impl super::UdpWriter {
             udp_game_frames_unsent_paced: q.unsent,
             udp_game_paced_episodes: c.episodes,
             udp_game_paced_rate_cuts: c.cuts,
+            udp_game_paced_drains: c.drains,
             ..Default::default()
         }
     }

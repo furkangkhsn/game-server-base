@@ -276,9 +276,9 @@ gsb_transport_udp_game_frames_dropped_paced sum t=2 mono=true unit="" n=1 | Game
   [] 1000..2000 int 67
 gsb_transport_udp_game_frames_unsent_paced sum t=2 mono=true unit="" n=1 | Game-band frames still in a pacing queue when the rUDP session ended for the transport (writer stopped, reliable band died, or session over), never sent or sent in part, cumulative.
   [] 1000..2000 int 68
-gsb_transport_udp_game_paced_episodes sum t=2 mono=true unit="" n=1 | Times an rUDP session's game band started being paced (two congestion signals in a row, loss or a standing queue, on an open session), cumulative.
+gsb_transport_udp_game_paced_episodes sum t=2 mono=true unit="" n=1 | Times an rUDP session's game band started being paced (two congestion signals in a row, loss or a standing queue; one loss signal over 2 s or more; or, suspected, a probe unanswered for 4 s), cumulative.
   [] 1000..2000 int 69
-gsb_transport_udp_game_paced_rate_cuts sum t=2 mono=true unit="" n=1 | Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each ring of probes unanswered while paced, cumulative.
+gsb_transport_udp_game_paced_rate_cuts sum t=2 mono=true unit="" n=1 | Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each probe unanswered for 4 s while paced, cumulative.
   [] 1000..2000 int 70
 gsb_transport_udp_cids_assigned sum t=2 mono=true unit="" n=1 | rUDP sessions granted a connection id (the clients that asked, on a door with udp_migration on), cumulative.
   [] 1000..2000 int 71
@@ -356,6 +356,8 @@ gsb_transport_udp_stateless_resets_rate_limited sum t=2 mono=true unit="" n=1 | 
   [] 1000..2000 int 107
 gsb_transport_udp_stateless_resets_send_failed sum t=2 mono=true unit="" n=1 | rUDP stateless resets the socket refused, cumulative.
   [] 1000..2000 int 108
+gsb_transport_udp_game_paced_drains sum t=2 mono=true unit="" n=1 | Drains of paced rUDP sessions: no round trip near the path's base delay for 10 s, so half the rate for one report (frames it drops count as dropped_paced), cumulative.
+  [] 1000..2000 int 109
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

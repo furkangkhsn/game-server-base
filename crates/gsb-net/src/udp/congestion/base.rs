@@ -32,7 +32,10 @@
 //!   most (LEDBAT's answer: a new path's base is learned by forgetting
 //!   the old one). A new path the session migrated to (B3) starts the
 //!   ring over at once (`Control::new_path`: RFC 9000 §9.4 resets the
-//!   controller with it).
+//!   controller with it). And a session paced for long without a sample
+//!   near its base drains once in a while (`super::DRAIN_AFTER`, BBR's
+//!   ProbeRTT), so the newest slots hold the path's floor, not the
+//!   queue's — the base stays honest when the old slots age out.
 
 use std::time::{Duration, Instant};
 

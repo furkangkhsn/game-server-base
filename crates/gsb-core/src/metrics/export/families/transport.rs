@@ -19,7 +19,7 @@ const fn tr(
 }
 
 /// The transport scope, in exposition order (the counters' order).
-pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 108] = [
+pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 109] = [
     tr(
         "gsb_transport_udp_requests_dropped_full_total",
         "RPC requests the rUDP demux dropped on a session's full inbox (acknowledged on the reliable band, never reached the connection, never answered), cumulative.",
@@ -372,12 +372,12 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 108]
     ),
     tr(
         "gsb_transport_udp_game_paced_episodes_total",
-        "Times an rUDP session's game band started being paced (two congestion signals in a row, loss or a standing queue, on an open session), cumulative.",
+        "Times an rUDP session's game band started being paced (two congestion signals in a row, loss or a standing queue; one loss signal over 2 s or more; or, suspected, a probe unanswered for 4 s), cumulative.",
         |t| t.udp_game_paced_episodes,
     ),
     tr(
         "gsb_transport_udp_game_paced_rate_cuts_total",
-        "Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each ring of probes unanswered while paced, cumulative.",
+        "Pacing-rate decreases of rUDP sessions: each episode's start, each further congestion signal while paced, and each probe unanswered for 4 s while paced, cumulative.",
         |t| t.udp_game_paced_rate_cuts,
     ),
     tr(
@@ -569,6 +569,11 @@ pub(in crate::metrics::export) const TRANSPORT: [Scalar<TransportCounters>; 108]
         "gsb_transport_udp_stateless_resets_send_failed_total",
         "rUDP stateless resets the socket refused, cumulative.",
         |t| t.udp_stateless_resets_send_failed,
+    ),
+    tr(
+        "gsb_transport_udp_game_paced_drains_total",
+        "Drains of paced rUDP sessions: no round trip near the path's base delay for 10 s, so half the rate for one report (frames it drops count as dropped_paced), cumulative.",
+        |t| t.udp_game_paced_drains,
     ),
 ];
 
