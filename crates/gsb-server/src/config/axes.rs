@@ -32,13 +32,14 @@ pub enum TransportKind {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UdpCongestionKind {
-    /// No response: every rUDP writer sends at once, as it always did
-    /// (the default).
-    #[default]
+    /// No response: every rUDP writer sends at once, as it did before
+    /// round 3 (the explicit opt-out).
     Off,
     /// Pace a reporting session's game band to its path's estimated rate
     /// and drop the oldest frames the path cannot carry (counted); a
-    /// client that does not report is never paced.
+    /// client that does not report is never paced. The default (BACKLOG
+    /// B104, closed by the round-5 measurement).
+    #[default]
     Pace,
 }
 

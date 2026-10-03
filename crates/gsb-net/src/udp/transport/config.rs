@@ -28,8 +28,9 @@ pub struct UdpTransportConfig {
     /// system default, untouched). See [`crate::listen::bind_udp`].
     pub buffers: crate::listen::UdpBuffers,
     /// The writers' congestion response (rUDP hardening round 3; the
-    /// server's `udp_congestion`). `Off` (the default): the writer as it
-    /// was. See `crate::udp::congestion`.
+    /// server's `udp_congestion`). `Pace` (the default since B104): a
+    /// reporting session is paced to its path; `Off`: the writer as it
+    /// was before round 3. See `crate::udp::congestion`.
     pub congestion: UdpCongestion,
     /// Connection migration (BACKLOG B3; the server's `udp_migration`):
     /// `true` grants a connection id to every client that asks, so its
@@ -88,7 +89,7 @@ impl Default for UdpTransportConfig {
             cookie_key: None,
             metrics: None,
             buffers: crate::listen::UdpBuffers::default(),
-            congestion: UdpCongestion::Off,
+            congestion: UdpCongestion::Pace,
             migration: false,
             max_handshakes_per_source: None,
             security: UdpSecurity::Plaintext,

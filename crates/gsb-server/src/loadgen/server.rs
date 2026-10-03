@@ -282,7 +282,7 @@ mod tests {
     }
 
     /// `--udp-congestion` (B104) lands in the config's `udp_congestion`;
-    /// unset, the config default (off) stays.
+    /// unset, the config default (pace) stays.
     #[test]
     fn the_udp_congestion_override_sets_the_config_key() {
         let o = |udp_congestion| ServerOverrides {
@@ -301,13 +301,13 @@ mod tests {
         };
         let mut cfg = gsb_server::Config::default();
         apply_overrides(&mut cfg, &o(None));
-        assert_eq!(cfg.udp_congestion, gsb_server::UdpCongestionKind::Off);
-        apply_overrides(&mut cfg, &o(Some(gsb_server::UdpCongestionKind::Pace)));
         assert_eq!(cfg.udp_congestion, gsb_server::UdpCongestionKind::Pace);
+        apply_overrides(&mut cfg, &o(Some(gsb_server::UdpCongestionKind::Off)));
+        assert_eq!(cfg.udp_congestion, gsb_server::UdpCongestionKind::Off);
         apply_overrides(&mut cfg, &o(None));
         assert_eq!(
             cfg.udp_congestion,
-            gsb_server::UdpCongestionKind::Pace,
+            gsb_server::UdpCongestionKind::Off,
             "unset touches nothing"
         );
     }

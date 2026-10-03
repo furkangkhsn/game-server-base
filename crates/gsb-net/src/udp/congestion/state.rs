@@ -14,13 +14,16 @@ pub use gsb_core::path::{PathPhase, PathState};
 /// server's `udp_congestion`; module `crate::udp::congestion`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum UdpCongestion {
-    /// No response: every frame is sent at once, as the writer always
-    /// did (the default) — and nothing is told to the room.
-    #[default]
+    /// No response: every frame is sent at once, as the writer did
+    /// before round 3 — and nothing is told to the room. The explicit
+    /// opt-out.
     Off,
     /// Pace a reporting session's game band to its path's estimated rate
     /// and drop the oldest frames it cannot carry (counted); tell the
     /// room what the path carries (`ConnIn::Path`, on change). A client
     /// that does not report is never paced and its path is never told.
+    /// The default since BACKLOG B104 closed (round 5 measured: no
+    /// false alarm under jitter, the bottleneck's loss and delay cut).
+    #[default]
     Pace,
 }

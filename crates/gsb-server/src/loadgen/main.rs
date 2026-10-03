@@ -246,8 +246,9 @@ struct Args {
     udp_recv_buffer: Option<u32>,
     /// The in-process / served server's rUDP congestion response
     /// (`--udp-congestion off|pace`, BACKLOG B104; unspecified = the
-    /// server config default, `off`): `pace` paces a reporting session's
-    /// game band to its path's estimated rate. The jitter measurement
+    /// server config default, `pace`): `pace` paces a reporting session's
+    /// game band to its path's estimated rate, `off` sends every frame at
+    /// once. The jitter measurement
     /// (`scripts/rudp-jitter.sh`) runs the same load under both.
     udp_congestion: Option<gsb_server::UdpCongestionKind>,
     /// The rUDP record layer (`--udp-security sealed|plaintext`, default
@@ -457,9 +458,10 @@ Server options (in-process server, --serve, or the orchestrator's server):
                                        key (64 hex; with --addr and
                                        --transport udp)
   --udp-congestion off|pace           the server's rUDP congestion response
-                                       (default: the config's, off; pace =
-                                       pace a reporting session's game band
-                                       to its path's estimated rate)
+                                       (default: the config's, pace = pace
+                                       a reporting session's game band to
+                                       its path's estimated rate; off =
+                                       send every frame at once)
   --udp-recv-buffer N                 receive buffer (SO_RCVBUF, bytes) of
                                        the server's UDP door (default: the
                                        server config default, untouched;

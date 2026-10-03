@@ -14,8 +14,9 @@
 //! band yields to it. What the room should send instead is the game's
 //! decision; the transport says what the path carries ([`PathState`]).
 //!
-//! **Opt-in** ([`UdpCongestion`]; the server's `udp_congestion`): `Off`
-//! is the writer as it was. `Pace` changes nothing for a client that
+//! **On by default** ([`UdpCongestion`]; the server's `udp_congestion`,
+//! since BACKLOG B104 closed): `Off` is the opt-out, the writer as it
+//! was. `Pace` changes nothing for a client that
 //! never reports (no estimate, so never anything but [`PathPhase::Open`])
 //! and nothing while a reporting client's path keeps up: an open session
 //! sends at once, as it always did.

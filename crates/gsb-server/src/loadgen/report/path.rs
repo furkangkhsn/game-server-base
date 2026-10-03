@@ -19,7 +19,7 @@ pub(crate) fn path_segment(
     let mode = match congestion {
         Some(gsb_server::UdpCongestionKind::Off) => "off",
         Some(gsb_server::UdpCongestionKind::Pace) => "pace",
-        // The server's own config decides (its default, off; an external
+        // The server's own config decides (its default, pace; an external
         // server: whatever it was started with).
         None => "default",
     };

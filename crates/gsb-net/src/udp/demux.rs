@@ -177,7 +177,7 @@ impl Demux {
             mig: migrate::Counts::default(),
             flusher: crate::metrics::Flusher::new(None),
             metrics: None,
-            congestion: UdpCongestion::Off,
+            congestion: UdpCongestion::default(),
             seal: None,
         }
     }

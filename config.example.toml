@@ -172,17 +172,18 @@ udp_max_datagram_bytes = 1472
 # security posture). Ignored when transport = "tcp".
 #udp_cookie_key = "0123456789abcdef0123456789abcdef"
 
-# rUDP only: the writers' congestion response. "off" (the default): every
-# frame is sent at once, as the door always did. "pace": a session whose
-# client reports (the default UdpClient) and whose path cannot carry what
-# the room sends is paced to the path's estimated rate; the oldest
-# game-band frames it cannot send within 50 ms are dropped and counted
-# (gsb_transport_udp_game_frames_dropped_paced_total). The control band
-# is never paced or dropped; a client that does not report is never
-# paced. Thinning the content itself is the game's decision: with "pace"
-# the room is told each session's path (TickCtx::budget; a kit room opts
-# in with with_snapshot_budget). Server-wide.
-#udp_congestion = "pace"
+# rUDP only: the writers' congestion response. "pace" (the default): a
+# session whose client reports (the default UdpClient) and whose path
+# cannot carry what the room sends is paced to the path's estimated rate;
+# the oldest game-band frames it cannot send within 50 ms are dropped and
+# counted (gsb_transport_udp_game_frames_dropped_paced_total). The control
+# band is never paced or dropped; a client that does not report is never
+# paced. Thinning the content itself is the game's decision: the room is
+# told each session's path (TickCtx::budget; a kit room opts in with
+# with_snapshot_budget). "off" (the opt-out): every frame is sent at
+# once, as the door did before, and the room is told nothing.
+# Server-wide.
+#udp_congestion = "off"
 
 # rUDP only: the record layer (BACKLOG B5a, docs/RUDP-SECURITY.md).
 # "sealed" (the default — production): Noise NK_25519_ChaChaPoly_BLAKE2s

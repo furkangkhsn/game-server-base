@@ -594,16 +594,18 @@
 //! was written; none of them is a one-line fix, and each is the kind of
 //! thing a hardened transport ships with.
 //!
-//! - **The congestion response is opt-in, and off by default.**
+//! - **The congestion response is measured on emulated paths only.**
 //!   Since round 3 a writer can pace a reporting session's game band to
 //!   its path's estimated rate and drop the oldest frames it cannot
 //!   carry, each counted (module `congestion`; the server's
-//!   `udp_congestion = "pace"`). The default is off (not yet measured on
-//!   a jittery real path), and a client that does not report is never
-//!   paced. With it on, the game IS told (B103): every decision's news
-//!   reaches the connection actor as `ConnIn::Path` (the core's
-//!   [`PathState`]), the room as `TickCtx::budget`, and a kit room that
-//!   opted in thins with `SnapshotBudget`; with it off nothing is told.
+//!   `udp_congestion`). It is on by default since B104 closed (round 5:
+//!   netem jitter and a netem bottleneck, plus a userspace relay — not
+//!   yet a real WAN path); `"off"` is the opt-out, and a client that
+//!   does not report is never paced. With it on, the game IS told
+//!   (B103): every decision's news reaches the connection actor as
+//!   `ConnIn::Path` (the core's [`PathState`]), the room as
+//!   `TickCtx::budget`, and a kit room that opted in thins with
+//!   `SnapshotBudget`; with it off nothing is told.
 //! - **Connection migration** (B3, module `path`): a session carries a
 //!   server-assigned connection id (CID) and moves to a new client
 //!   address after path validation, so a NAT rebinding or a Wi-Fi ↔
