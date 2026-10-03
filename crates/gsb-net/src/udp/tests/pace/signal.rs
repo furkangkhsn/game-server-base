@@ -56,11 +56,11 @@ async fn a_paced_session_tells_its_actor_the_path() {
     assert!((BUDGET as u32..2_500).contains(&rate), "{rate} B/s");
     assert_eq!(paced.loss_permille.map(|l| l > 0), Some(true));
     assert!(paced.rtt.is_some() && paced.demand.is_some());
-    // What the room will read per 30 Hz tick.
-    assert_eq!(
-        paced.budget(Duration::from_secs(1) / 30),
-        Some((f64::from(rate) / 30.0) as usize)
-    );
+    // What the room will read per 30 Hz tick: a thirtieth of it.
+    let tick = Duration::from_secs(1) / 30;
+    let per_tick = paced.budget(tick).expect("paced: a budget");
+    assert_eq!(per_tick, (f64::from(rate) * tick.as_secs_f64()) as usize);
+    assert!(per_tick >= BUDGET / 30, "{per_tick} B a tick");
 }
 
 /// The same session, the response off: the actor's inbox carries

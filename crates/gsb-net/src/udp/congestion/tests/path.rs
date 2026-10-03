@@ -11,26 +11,6 @@ use std::collections::VecDeque;
 
 use super::*;
 
-/// xorshift64*: the generator, seeded per test.
-struct Rng(u64);
-
-impl Rng {
-    fn unit(&mut self) -> f64 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        let x = self.0.wrapping_mul(0x2545_F491_4F6C_DD1D);
-        ((x >> 11) as f64 + 0.5) / (1u64 << 53) as f64
-    }
-
-    /// One direction's delay in ms: mean ± sd, normal, clipped at zero.
-    fn leg(&mut self, mean: f64, sd: f64) -> f64 {
-        let (u, v) = (self.unit(), self.unit());
-        let z = (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos();
-        (mean + sd * z).max(0.0)
-    }
-}
-
 /// One session on a modelled path: a report at every probe interval the
 /// controller asks for, the room sending `demand` bytes a second in
 /// `datagram`-byte datagrams (the datagram budget, the floor's unit, is
@@ -100,16 +80,16 @@ impl Session {
 }
 
 /// The B104 jitter scenarios (per direction, ms): no loss, no queue —
-/// only jitter, ten minutes each, thirty seeds. After a session's first
-/// minute and a half — when its jitter estimate rests on a few suspect
-/// windows' fast samples — not one report paces it; before that an
-/// episode is rare (at most one session in five) and short (two cuts at
-/// most, on average). Measured: 2, 4 and 5 young episodes of 3, 7 and 9
-/// cuts in all, the last at 62 s. Round 3's single-sample test paced
-/// all three scenarios all the time (the B104 run cut snapshots by up to
-/// 34 %).
+/// only jitter, ten minutes each, thirty seeds. A jitter-only path draws
+/// two samples in a row five of its σ over the floor rarely, and an
+/// estimate of σ is sometimes low: an episode is allowed, rarely — at
+/// most one per twenty-five session-minutes — and short (three cuts at
+/// most, on average). Measured: 10, 8 and 7 episodes of 25, 21 and 17
+/// cuts in 300 session-minutes each. Round 3 paced these paths all the
+/// time: the B104 run's 64 sessions had 136–327 episodes and 240–2 996
+/// cuts in 32 session-minutes, and up to 34 % fewer snapshots.
 #[test]
-fn jitter_alone_paces_rarely_and_never_once_measured() {
+fn jitter_alone_paces_rarely() {
     for (mean, sd) in [(20.0, 10.0), (40.0, 20.0), (60.0, 40.0)] {
         let mut counts = ControlCounts::default();
         for seed in 1..=30u64 {
@@ -117,44 +97,47 @@ fn jitter_alone_paces_rarely_and_never_once_measured() {
             let mut s = Session::new(15_000.0);
             while s.secs < 600.0 {
                 let rtt = rng.leg(mean, sd) + rng.leg(mean, sd);
-                let paced = s.report(rtt, 0) == PathPhase::Paced;
-                assert!(
-                    !(paced && s.secs > 90.0),
-                    "{mean}±{sd} seed {seed}: paced at {:.1} s",
-                    s.secs
-                );
+                s.report(rtt, 0);
             }
             counts.episodes += s.c.counts.episodes;
             counts.cuts += s.c.counts.cuts;
         }
-        assert!(counts.episodes <= 6, "{mean}±{sd}: {counts:?}");
+        assert!(counts.episodes <= 12, "{mean}±{sd}: {counts:?}");
         assert!(
-            counts.cuts <= 2 * counts.episodes,
+            counts.cuts <= 3 * counts.episodes,
             "{mean}±{sd}: {counts:?}"
         );
     }
 }
 
 /// A standing queue appears and stays: the first report that carries it
-/// suspects the session, the suspect window confirms it — paced within
-/// 1 + SUSPECT_REPORTS reports, on a steady path (a queue just over the
-/// limit), a jittery one (a queue over its learned threshold) and the
-/// wildest (a queue over QUEUE_DELAY_MAX, however high the jitter).
+/// suspects the session, and it is paced within a bounded number of
+/// reports — the two a standing pair needs, plus, on a path never
+/// suspected before, the samples a young jitter estimate needs (the
+/// first fast distance needs three fast samples): at most
+/// 3 + JITTER_KNOWN. On a steady path (a queue just over the limit), a
+/// jittery one whose jitter is known (a queue over its threshold) and
+/// the wildest (a queue over QUEUE_DELAY_MAX, however high the jitter).
 #[test]
-fn a_standing_queue_paces_within_the_suspect_window() {
-    for (mean, sd, queue) in [(20.0, 0.0, 40.0), (20.0, 10.0, 100.0), (60.0, 40.0, 250.0)] {
+fn a_standing_queue_paces_within_bounded_reports() {
+    let bound = 3 + JITTER_KNOWN;
+    for (mean, sd, queue, most) in [
+        (20.0, 0.0, 40.0, bound),
+        (20.0, 10.0, 120.0, 2),
+        (60.0, 40.0, 350.0, 2),
+    ] {
         let mut rng = Rng(7);
         let mut s = Session::new(15_000.0);
         while s.secs < 60.0 {
             let rtt = rng.leg(mean, sd) + rng.leg(mean, sd);
             s.report(rtt, 0);
         }
-        assert_ne!(s.c.state().phase, PathPhase::Paced, "{mean}±{sd}: jitter");
+        assert_eq!(s.c.counts.episodes, 0, "{mean}±{sd}: jitter alone");
         let mut reports = 0;
         while s.c.state().phase != PathPhase::Paced {
             reports += 1;
             assert!(
-                reports <= 1 + SUSPECT_REPORTS,
+                reports <= most,
                 "{mean}±{sd}, a {queue} ms queue: still {:?}",
                 s.c.state().phase
             );

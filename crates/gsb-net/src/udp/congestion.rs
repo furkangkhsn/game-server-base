@@ -24,50 +24,54 @@
 //! - *Signals — both, per probe interval.* Loss: the interval lost at
 //!   least [`LOSS_MIN`] game datagrams and at least 1/[`LOSS_DIV`] of
 //!   them (a policer or a shallow buffer: loss without delay). Delay: a
-//!   standing queue — the smallest of the newest round trips over the
-//!   windowed minimum (`feedback::RTT_WINDOW`, B93) by the path's
-//!   threshold: [`QUEUE_DELAY_LIMIT`] on a steady path, a multiple of
-//!   its jitter on a jittery one, never over [`QUEUE_DELAY_MAX`] (module
+//!   standing queue — the smallest of the newest round trips stands over
+//!   the windowed minimum (`feedback::RTT_WINDOW`, B93) by the path's
+//!   threshold: [`QUEUE_DELAY_LIMIT`] on a steady path, five times its
+//!   jitter on a jittery one, never over [`QUEUE_DELAY_MAX`] (module
 //!   `signal`). A deep buffer filling, the latency a game feels long
-//!   before the buffer overflows — and not one unlucky sample, which
-//!   jitter alone draws (round 4: under netem jitter the single-sample
-//!   test paced healthy sessions and cut their snapshots by up to 34 %).
-//! - *Burst vs sustained.* An open session that sees a hint — a loss
-//!   signal, or the newest round trip over the threshold — is only
-//!   *suspected* ([`PathPhase::Suspect`]: probed every
-//!   [`FAST_PROBE_INTERVAL`], still unpaced) for [`SUSPECT_REPORTS`]
-//!   reports. Two loss signals in a row pace it; so does, at the end, a
-//!   queue that stood over the threshold in each of its newest
-//!   [`QUEUE_SAMPLES`] round trips (a second of them at the fast
-//!   cadence); otherwise it opens again. A burst costs a few faster
-//!   probes.
+//!   before the buffer overflows — and not jitter, which the round-3
+//!   test (the newest sample [`QUEUE_DELAY_LIMIT`] over the floor) took
+//!   for a queue: under netem jitter it paced healthy sessions and cut
+//!   their snapshots by up to 34 % (B104).
+//! - *Burst vs sustained.* An open session whose newest round trip is
+//!   [`QUEUE_DELAY_LIMIT`] over the floor, or whose interval lost enough,
+//!   is only *suspected* ([`PathPhase::Suspect`]: probed every
+//!   [`FAST_PROBE_INTERVAL`], still unpaced) — cheap, and the fast
+//!   samples are what the jitter estimate learns from. Two loss signals
+//!   in a row pace it; so does a queue standing over the threshold in
+//!   the newest [`QUEUE_SAMPLES`] round trips, once the jitter estimate
+//!   rests on [`JITTER_KNOWN`] samples (a young estimate cannot tell a
+//!   jittery path from a queue; a queue over [`QUEUE_DELAY_MAX`] needs
+//!   no estimate). [`SUSPECT_REPORTS`] reports without either open it
+//!   again; a queue that stands but is not yet known keeps it suspected.
 //! - *The rate.* Entering: the rate the path DELIVERED in the interval,
 //!   times [`BETA`]. While paced, each report decides once: a loss signal
 //!   cuts (to the delivered rate times [`BETA`], never above the rate
-//!   already paced to); a draining queue — the smallest of the newest
-//!   [`PACED_QUEUE_SAMPLES`] round trips fell by more than [`DRAIN_MIN`]
-//!   since the last report — holds the rate (the last cut is working:
-//!   another would empty the path, growing would refill the queue before
-//!   it drained); a queue over the threshold in those samples cuts; a
-//!   clean report adds [`INCREASE`] of the room's demand per second (the
-//!   episode's highest demand: a room that thins its content to the
-//!   budget does not slow its own recovery). Additive, so sessions
-//!   sharing a bottleneck converge to equal shares; and a share of each
-//!   session's demand, so a room's sessions behind one link grow by a
-//!   share of what they ask together — not by a fixed step each, which
-//!   64 sessions sharing a link turn into most of the link per interval
-//!   (round 4). A rate at [`EXIT_HEADROOM`] × the demand opens the
-//!   session again. Delivered bytes are the interval's sent bytes times
-//!   its delivered fraction (the report counts datagrams); the span is
-//!   the interval as the client saw it — the send-time interval
-//!   stretched by the growth of the round trip (a filling queue spreads
-//!   the same datagrams over a longer receive span), so a growing queue
-//!   does not read as capacity. A whole ring of probes unanswered while
-//!   paced halves the rate (no sample: the classic timeout response).
-//!   Floor: [`MIN_RATE`] datagram budget per second — the newest frame
-//!   still reaches the client, and a room's sessions sharing one link
-//!   can go below it together (round 4: at four budgets each, 64
-//!   sessions could not go below the 3.6 Mbit/s link of the B104 run).
+//!   already paced to); a draining queue — the newest round trip fell by
+//!   more than [`DRAIN_MIN`] since the last report — holds the rate (the
+//!   last cut is working: another would empty the path, growing would
+//!   refill the queue before it drained); a queue over the threshold in
+//!   the newest [`PACED_QUEUE_SAMPLES`] cuts (a paced path is known to
+//!   be congested: it reacts at once); a clean report adds [`INCREASE`]
+//!   of the room's demand per second — the episode's highest demand, so
+//!   a room that thins its content to the budget does not slow its own
+//!   recovery, nor a noisy interval open the session early. Additive, so
+//!   sessions sharing a bottleneck converge to equal shares; and a share
+//!   of each session's demand, so a room's sessions behind one link grow
+//!   together by a share of what they ask (round 3's fixed step, sized
+//!   for four sessions, was most of the B104 link per interval for 64).
+//!   A rate at [`EXIT_HEADROOM`] × that demand opens the session again.
+//!   Delivered bytes are the interval's sent bytes times its delivered
+//!   fraction (the report counts datagrams); the span is the interval as
+//!   the client saw it — stretched by the growth of the queue (the
+//!   smallest of the newest two round trips: one jittered sample does not
+//!   move it), so a growing queue does not read as capacity. A whole ring
+//!   of probes unanswered while paced halves the rate (no sample: the
+//!   classic timeout response). Floor: [`MIN_RATE`] datagram budget per
+//!   second — the newest frame still reaches the client, and a room's
+//!   sessions behind one link can go below it together (round 4: at four
+//!   budgets each, the B104 run's 64 sessions' floor was its 3.6 Mbit/s
+//!   link itself).
 
 use std::time::{Duration, Instant};
 
@@ -85,22 +89,24 @@ mod tests;
 
 /// The probe interval of a suspected or paced session.
 pub(super) const FAST_PROBE_INTERVAL: Duration = Duration::from_millis(250);
-/// Queueing delay over the windowed minimum RTT that is a signal on a
-/// path without jitter: the threshold's floor.
+/// Queueing delay over the windowed minimum RTT that suspects a session,
+/// and the threshold of a path without jitter.
 pub(super) const QUEUE_DELAY_LIMIT: Duration = Duration::from_millis(30);
 /// The threshold's ceiling: a standing queue this long is a signal on
-/// any path, however jittery.
-pub(super) const QUEUE_DELAY_MAX: Duration = Duration::from_millis(200);
+/// any path, however jittery, and paces before the jitter is known.
+pub(super) const QUEUE_DELAY_MAX: Duration = Duration::from_millis(300);
 /// The newest round trips whose smallest must stand over the threshold
 /// to pace a suspected session…
-pub(super) const QUEUE_SAMPLES: usize = 4;
+pub(super) const QUEUE_SAMPLES: usize = 2;
 /// …and to cut a paced one.
-pub(super) const PACED_QUEUE_SAMPLES: usize = 2;
-/// The reports a suspected session waits for before it is paced or
-/// opened again (unless two loss signals pace it first).
-pub(super) const SUSPECT_REPORTS: u32 = 3;
-/// A paced session's queue is draining when the smallest of its newest
-/// round trips fell by more than this since the last report.
+pub(super) const PACED_QUEUE_SAMPLES: usize = 1;
+/// The reports without a signal after which a suspected session opens.
+pub(super) const SUSPECT_REPORTS: u32 = 4;
+/// The fast-cadence samples the jitter estimate must rest on before a
+/// standing queue (under [`QUEUE_DELAY_MAX`]) paces a session.
+pub(super) const JITTER_KNOWN: u32 = 4;
+/// A paced session's queue is draining when its newest round trip fell
+/// by more than this since the last report.
 pub(super) const DRAIN_MIN: Duration = Duration::from_millis(5);
 /// A loss signal: at least this many datagrams lost in the interval…
 pub(super) const LOSS_MIN: u64 = 2;
@@ -110,11 +116,11 @@ pub(super) const LOSS_DIV: u64 = 10;
 pub(super) const BETA: f64 = 0.85;
 /// The additive increase per clean report: this share of the episode's
 /// highest demand, per second of interval.
-pub(super) const INCREASE: f64 = 0.125;
+pub(super) const INCREASE: f64 = 0.25;
 /// The floor, in datagram budgets per second.
 pub(super) const MIN_RATE: f64 = 1.0;
 /// A paced session opens again once its rate is this much over the
-/// room's demand.
+/// episode's highest demand.
 pub(super) const EXIT_HEADROOM: f64 = 1.25;
 /// The longest a paced game-band frame may wait for the path: the
 /// pacing queue holds at most rate × this many bytes (and always the
@@ -140,19 +146,21 @@ pub(super) struct Control {
     /// Bytes per second (meaningful while paced).
     rate: f64,
     min_rate: f64,
-    /// The previous report's round trip (the receive-span correction).
+    /// The previous report's round trip (the path state's).
     prev_rtt: Option<Duration>,
-    /// The newest round trips and the path's jitter (the delay signal),
-    /// and the previous report's recent minimum (a draining queue).
+    /// The newest round trips and the path's jitter (the delay signal);
+    /// the previous report's recent minimum (a draining queue) and queue
+    /// level (the receive-span correction).
     track: RttTrack,
     prev_recent: Option<Duration>,
+    prev_level: Option<Duration>,
     /// Reports since the session was suspected; whether the last report
     /// was a loss signal.
     suspect_reports: u32,
     last_loss: bool,
     /// Game-band bytes the room offered since the last report, and the
     /// demand they made (bytes per second, the last report interval);
-    /// the episode's highest demand (the increase's base).
+    /// the episode's highest demand (the increase's base and the exit's).
     offered: u64,
     since: Instant,
     demand: f64,
@@ -171,6 +179,7 @@ impl Control {
             prev_rtt: None,
             track: RttTrack::default(),
             prev_recent: None,
+            prev_level: None,
             suspect_reports: 0,
             last_loss: false,
             offered: 0,
@@ -220,17 +229,21 @@ impl Control {
         (self.offered, self.since) = (0, now);
         let loss = loss_signal(e);
         let last_loss = std::mem::replace(&mut self.last_loss, loss);
-        let delivered = delivered_rate(e, self.prev_rtt);
         self.prev_rtt = Some(e.latest_rtt);
         self.loss = e.loss;
-        // The delay signal (module `signal`): the newest round trip over
-        // the threshold is a hint; the smallest of the newest few, a
-        // standing queue.
+        // The delay signal (module `signal`): a sample of the jitter at
+        // the fast cadence, the queue's level, and whether a queue stands
+        // over the path's threshold in the newest samples.
         self.track
             .sample(e.latest_rtt, now, self.phase != PathPhase::Open);
         let floor = e.window_min_rtt;
+        let level = self.track.recent_min(QUEUE_SAMPLES);
+        let growth = level
+            .zip(self.prev_level)
+            .map_or(0.0, |(l, p)| l.as_secs_f64() - p.as_secs_f64());
+        self.prev_level = level;
+        let delivered = delivered_rate(e, growth);
         let over = floor + self.track.threshold();
-        let hint = loss || e.latest_rtt >= over;
         let samples = match self.phase {
             PathPhase::Paced => PACED_QUEUE_SAMPLES,
             PathPhase::Open | PathPhase::Suspect => QUEUE_SAMPLES,
@@ -245,19 +258,20 @@ impl Control {
         self.queue_delay = recent_floor.saturating_sub(floor);
         match self.phase {
             PathPhase::Open => {
-                if hint {
+                if loss || e.latest_rtt >= floor + QUEUE_DELAY_LIMIT {
                     (self.phase, self.suspect_reports) = (PathPhase::Suspect, 0);
                 }
             }
             PathPhase::Suspect => {
                 self.suspect_reports += 1;
-                let decided = self.suspect_reports >= SUSPECT_REPORTS;
-                if (loss && last_loss) || (decided && standing) {
+                let known = self.track.deviations() >= JITTER_KNOWN
+                    || recent.is_some_and(|r| r >= floor + QUEUE_DELAY_MAX);
+                if (loss && last_loss) || (standing && known) {
                     self.phase = PathPhase::Paced;
                     self.counts.episodes += 1;
                     self.peak_demand = self.demand;
                     self.cut(delivered.unwrap_or(self.demand), f64::INFINITY);
-                } else if decided {
+                } else if !standing && self.suspect_reports >= SUSPECT_REPORTS {
                     self.phase = PathPhase::Open;
                 }
             }
@@ -267,7 +281,7 @@ impl Control {
                     self.cut(delivered.unwrap_or(self.rate), self.rate);
                 } else if !draining {
                     self.rate += INCREASE * self.peak_demand * e.interval.as_secs_f64();
-                    if self.rate >= self.demand * EXIT_HEADROOM {
+                    if self.rate >= self.peak_demand * EXIT_HEADROOM {
                         self.phase = PathPhase::Open;
                     }
                 }
@@ -314,15 +328,15 @@ fn loss_signal(e: &GameEstimate) -> bool {
     e.interval_lost >= LOSS_MIN && e.interval_lost * LOSS_DIV >= e.interval_sent
 }
 
-/// The bytes per second the path delivered in the interval (see the
-/// module docs): `None` when it sent nothing.
-fn delivered_rate(e: &GameEstimate, prev_rtt: Option<Duration>) -> Option<f64> {
+/// The bytes per second the path delivered in the interval, its receive
+/// span stretched by `growth` seconds of queue (see the module docs):
+/// `None` when it sent nothing.
+fn delivered_rate(e: &GameEstimate, growth: f64) -> Option<f64> {
     if e.interval_sent == 0 || e.interval.is_zero() {
         return None;
     }
     let got = (e.interval_sent - e.interval_lost.min(e.interval_sent)) as f64;
     let bytes = e.interval_sent_bytes as f64 * got / e.interval_sent as f64;
     let interval = e.interval.as_secs_f64();
-    let stretch = prev_rtt.map_or(0.0, |p| e.latest_rtt.as_secs_f64() - p.as_secs_f64());
-    Some(bytes / (interval + stretch).max(interval / 2.0))
+    Some(bytes / (interval + growth).max(interval / 2.0))
 }

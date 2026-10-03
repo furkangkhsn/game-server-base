@@ -18,6 +18,31 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
+/// xorshift64*: a seeded generator for the jitter models.
+struct Rng(u64);
+
+impl Rng {
+    fn unit(&mut self) -> f64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        let x = self.0.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        ((x >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    }
+
+    /// A normal draw: mean ± sd.
+    fn normal(&mut self, mean: f64, sd: f64) -> f64 {
+        let (u, v) = (self.unit(), self.unit());
+        mean + sd * (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+    }
+
+    /// One direction's delay in ms: mean ± sd, normal, clipped at zero
+    /// (netem's `delay mean sd distribution normal`).
+    fn leg(&mut self, mean: f64, sd: f64) -> f64 {
+        self.normal(mean, sd).max(0.0)
+    }
+}
+
 /// One report's estimate: the interval, its datagrams (each `BUDGET`
 /// bytes) and losses, the newest RTT and the window's floor.
 fn est(interval: u64, sent: u64, lost: u64, rtt: u64, floor: u64) -> GameEstimate {
@@ -104,10 +129,10 @@ fn one_unlucky_sample_is_only_a_hint() {
     let mut c = Control::new(BUDGET, t);
     feed(&mut c, &mut t, 100_000, &[est(1000, 100, 0, 150, 20)]);
     assert_eq!(c.state().phase, PathPhase::Suspect);
-    for rtt in [25, 140, 30] {
+    for rtt in [25, 140, 30, 25] {
         feed(&mut c, &mut t, 25_000, &[est(250, 25, 0, rtt, 20)]);
     }
-    assert_eq!(c.state().phase, PathPhase::Open, "a sample near the floor");
+    assert_eq!(c.state().phase, PathPhase::Open, "no two in a row");
     assert_eq!(c.counts, ControlCounts::default());
 }
 
@@ -130,11 +155,12 @@ fn sustained_loss_paces_at_the_delivered_rate() {
     );
 }
 
-/// A standing queue is a signal without any loss: every one of the
-/// newest QUEUE_SAMPLES round trips QUEUE_DELAY_LIMIT over the window's
-/// floor paces the session once the suspect window ends. And a queue
-/// that grew within the interval stretched its receive span: the rate
-/// is what the client could have received, not what was sent.
+/// A standing queue is a signal without any loss: the smallest of the
+/// newest QUEUE_SAMPLES round trips over the window's floor by the
+/// threshold — here a queue over QUEUE_DELAY_MAX, which paces before the
+/// path's jitter is known. And a queue that grew within the interval
+/// stretched its receive span: the rate is what the client could have
+/// received, not what was sent.
 #[test]
 fn a_standing_queue_is_a_signal_and_a_growing_one_not_capacity() {
     let mut t = Instant::now();
@@ -161,6 +187,7 @@ fn a_standing_queue_is_a_signal_and_a_growing_one_not_capacity() {
         100_000,
         &[est(250, 100, 0, floor + 780, floor)],
     );
+    assert_eq!(c.counts.episodes, 1, "over QUEUE_DELAY_MAX: no wait");
     let rate = c.paced().expect("paced");
     assert!((rate - 200_000.0 * BETA).abs() < 1.0, "{rate}");
     assert_eq!(c.state().queue_delay, Some(ms(30)), "the smallest of four");
@@ -168,8 +195,8 @@ fn a_standing_queue_is_a_signal_and_a_growing_one_not_capacity() {
 
 /// While paced: every loss signal cuts (never above the current rate,
 /// never below the floor); every clean report adds INCREASE of the
-/// episode's highest demand per second; at EXIT_HEADROOM × the demand
-/// the session opens.
+/// episode's highest demand per second; at EXIT_HEADROOM × that demand
+/// the session opens — not at a quieter interval's.
 #[test]
 fn paced_rates_cut_grow_and_open() {
     let mut t = Instant::now();
@@ -186,7 +213,7 @@ fn paced_rates_cut_grow_and_open() {
     assert_eq!(c.paced(), Some(MIN_RATE * BUDGET as f64), "the floor");
     assert_eq!(c.counts.cuts, 42);
     // Clean: + INCREASE × 400 kB/s × 0.25 s per report, whatever the
-    // room offers now (15 kB per 250 ms: 60 kB/s, so it opens at 75).
+    // room offers now (15 kB per 250 ms); it opens at 1.25 × 400 kB/s.
     let step = INCREASE * 400_000.0 * 0.25;
     let mut last = c.paced().unwrap();
     for _ in 0..100 {
@@ -195,36 +222,38 @@ fn paced_rates_cut_grow_and_open() {
         last = r;
         feed(&mut c, &mut t, 15_000, &[est(250, 15, 0, 20, 20)]);
     }
-    assert!(last + step >= 60_000.0 * EXIT_HEADROOM);
-    assert!(last < 60_000.0 * EXIT_HEADROOM);
+    assert!(last + step >= 400_000.0 * EXIT_HEADROOM);
+    assert!(last < 400_000.0 * EXIT_HEADROOM);
     assert_eq!(c.state().phase, PathPhase::Open);
     assert_eq!(c.probe_interval(), PROBE_INTERVAL);
 }
 
-/// While paced, one high round trip is not a queue (the smallest of the
-/// newest PACED_QUEUE_SAMPLES is); a queue over the threshold cuts; a
-/// queue that is draining — its recent minimum fell by over DRAIN_MIN —
-/// holds the rate, neither cut nor grown; loss cuts, draining or not.
+/// While paced, a round trip over the threshold cuts at once (the path
+/// is known to be congested); a queue that is draining — the newest
+/// round trip fell by over DRAIN_MIN — holds the rate, neither cut nor
+/// grown; loss cuts, draining or not.
 #[test]
 fn a_draining_queue_holds_the_rate() {
     let mut t = Instant::now();
     let mut c = paced_at(&mut t, 100, 40);
-    // A queue builds steadily from the floor (no jitter learned)…
-    for rtt in [20, 60] {
-        feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, rtt, 20)]);
+    // A calm stretch: the jitter estimate learns the path is steady…
+    for _ in 0..8 {
+        feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 20, 20)]);
     }
-    assert_eq!(c.counts.cuts, 1, "one high sample is not a queue");
+    assert_eq!(c.counts.cuts, 1, "calm: grown, not cut");
+    assert_eq!(c.track.threshold(), QUEUE_DELAY_LIMIT);
+    // …then a queue builds: over the limit, cut at once, and again.
     let r0 = c.paced().unwrap();
-    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 100, 20)]);
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 60, 20)]);
     let r1 = c.paced().unwrap();
-    assert!(r1 < r0, "two over the threshold: a standing queue cuts");
-    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 140, 20)]);
+    assert!(r1 < r0, "a queue over the threshold cuts");
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 100, 20)]);
     let r2 = c.paced().unwrap();
-    assert!(r2 < r1, "still standing and growing: cut again");
-    // …and drains: the newest two's minimum fell from 100 to 90 ms.
-    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 90, 20)]);
+    assert!(r2 < r1, "still over and growing: cut again");
+    // …and drains: 100 → 70 ms.
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 70, 20)]);
     assert_eq!(c.paced(), Some(r2), "a draining queue holds");
-    feed(&mut c, &mut t, 100_000, &[est(250, 50, 10, 40, 20)]);
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 10, 60, 20)]);
     assert!(c.paced().unwrap() < r2, "loss cuts, draining or not");
     assert_eq!(c.counts.cuts, 4);
 }
@@ -270,7 +299,7 @@ fn two_sessions_on_one_bottleneck_converge_to_equal_shares() {
                 true => (sent as f64 * (total - cap) / total).round() as u64,
                 false => 0,
             };
-            c.offered(200_000); // the room asks twice the link
+            c.offered(100_000); // the room asks for the link
             c.on_estimate(&est(250, sent, lost, 20, 20), t);
         }
     }
@@ -301,6 +330,7 @@ fn the_state_carries_the_measurements_once_reported() {
     assert_eq!(s.queue_delay, Some(ms(30)));
     c.new_path(t);
     assert_eq!(c.state(), PathState::default(), "a new path: unmeasured");
+    assert_eq!(c.track.recent_min(1), None, "its round trips forgotten");
     let floor = Control::new(BUDGET, t).min_rate;
     assert_eq!(c.min_rate, floor, "the floor stays");
 }

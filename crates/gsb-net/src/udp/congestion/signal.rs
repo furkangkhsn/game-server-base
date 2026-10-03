@@ -12,105 +12,108 @@
 //!   every one of them ([`RttTrack::recent_min`]; LEDBAT's "current
 //!   delay" filter, RFC 6817 §3.4.2, against BBR's windowed floor).
 //! - **The threshold is the path's jitter, at least the limit.** A jitter
-//!   of σ puts the window's floor some 2σ under the mean, so a sample
-//!   over floor + [`JITTER_MULT`]·σ is some 2σ over the mean — one in
-//!   forty draws on a jittery path, four in a row one in millions, with
-//!   room left for the estimate's own error while it is young; on a path
-//!   without jitter the threshold is the old [`QUEUE_DELAY_LIMIT`], and
-//!   no path's jitter hides a queue of [`QUEUE_DELAY_MAX`].
-//! - **Jitter is what a straight line cannot follow.** A queue grows and
-//!   drains smoothly between samples a quarter-second apart; jitter does
-//!   not. The estimate is the mean deviation of a sample from the line
-//!   through its two neighbours (time-weighted: the cadence changes), so
-//!   a queue that fills or drains at a steady pace adds nothing to it.
-//!   Only samples taken at the fast cadence raise it (a suspected or
-//!   paced session; [`RttTrack::sample`]'s `fast`): at one a second, a
-//!   queue that other sessions' pacing raises and lowers every few
-//!   seconds looks like jitter, and a session that took it for jitter
-//!   would never yield its share (measured: one latecomer in a shared
-//!   bottleneck kept the link). At the slow cadence a deviation can only
-//!   lower it — one spike learned while suspected does not blind an
-//!   open session for good. Each fast deviation counts at most
-//!   [`JITTER_CLIP`] times the estimate (at least the limit): the corner
-//!   of a cut or of a queue's onset, where the line breaks once, does
-//!   not inflate it. The first [`JITTER_SAMPLES`] fast deviations are
-//!   averaged, then it moves by 1/[`JITTER_SAMPLES`] (RFC 3550's
-//!   interarrival jitter gain).
+//!   of σ puts the window's floor some 2σ under the mean, so a queue
+//!   over floor + [`JITTER_MULT`]·σ is some 3σ over the mean — a sample
+//!   a jittery path draws about once in 700, two in a row almost never,
+//!   with room left for the estimate's own error; on a path without
+//!   jitter the threshold is [`QUEUE_DELAY_LIMIT`], as in round 3, and no
+//!   path's jitter hides a queue of [`QUEUE_DELAY_MAX`] (the B104
+//!   scenarios: σ up to 40 ms a direction, some 55 ms a round trip —
+//!   the threshold 275 ms; a jitter-free path keeps the round-3 30 ms).
+//! - **Jitter is what a parabola cannot follow.** A queue moves smoothly
+//!   between samples a quarter-second apart — it fills or drains at a
+//!   steady pace, or (a paced session's own additive increase) at a
+//!   steadily growing one; jitter does not. The estimate is the mean
+//!   distance of the newest sample from the parabola through the three
+//!   before it (Lagrange, so an uneven cadence is no trend either),
+//!   scaled by the noise that extrapolation carries so that it is σ for
+//!   normal jitter: a queue that fills, drains or accelerates adds
+//!   nothing to it (a straight line was not enough: the queue a paced
+//!   session's own growth builds bends, and a line read it as jitter).
+//!   Only samples taken at the fast cadence count (a suspected or paced
+//!   session; [`RttTrack::sample`]'s `fast`): at one a second, a queue
+//!   that other sessions' pacing raises and lowers every few seconds
+//!   looks like jitter, and a session that took it for jitter would
+//!   never yield its share. Each distance counts at most [`JITTER_CLIP`]
+//!   times the estimate — at least the jitter whose threshold is
+//!   [`QUEUE_DELAY_LIMIT`] (so the corner of a cut, where no parabola
+//!   fits, does not inflate a calm path's estimate), and while the
+//!   estimate is young (its first [`JITTER_SAMPLES`] distances) at least
+//!   the one whose threshold is [`QUEUE_DELAY_MAX`] (so a jittery path's
+//!   estimate grows to its jitter in a few samples). The first
+//!   [`JITTER_SAMPLES`] distances are averaged, then it moves by
+//!   1/[`JITTER_SAMPLES`] (RFC 3550's interarrival jitter gain).
 
 use std::time::{Duration, Instant};
 
-use super::{QUEUE_DELAY_LIMIT, QUEUE_DELAY_MAX, QUEUE_SAMPLES};
+use super::{QUEUE_DELAY_LIMIT, QUEUE_DELAY_MAX};
 
 /// The threshold over the path's jitter.
-pub(in crate::udp) const JITTER_MULT: f64 = 4.0;
-/// A deviation counts at most this many times the jitter estimate (at
-/// least [`QUEUE_DELAY_LIMIT`]).
+pub(in crate::udp) const JITTER_MULT: f64 = 5.0;
+/// A distance counts at most this many times the jitter estimate (at
+/// least the jitter whose threshold is [`QUEUE_DELAY_LIMIT`]; while the
+/// estimate is young, [`QUEUE_DELAY_MAX`]).
 pub(in crate::udp) const JITTER_CLIP: f64 = 3.0;
-/// Deviations averaged before the estimate moves by a fixed gain of
+/// Distances averaged before the estimate moves by a fixed gain of
 /// 1/this.
 pub(in crate::udp) const JITTER_SAMPLES: u32 = 16;
+/// The round trips kept: the newest and the three its parabola needs.
+const KEPT: usize = 4;
 
-/// One round trip and when its report arrived.
+/// One round trip, when its report arrived, and whether it was probed
+/// at the fast cadence.
 #[derive(Debug, Clone, Copy)]
 struct Sample {
     rtt: Duration,
     at: Instant,
+    fast: bool,
 }
 
 /// See the module docs.
 #[derive(Debug, Default)]
 pub(in crate::udp) struct RttTrack {
     /// The newest samples, oldest first.
-    recent: [Option<Sample>; QUEUE_SAMPLES],
-    /// The jitter estimate (seconds) and the deviations it averaged.
+    recent: [Option<Sample>; KEPT],
+    /// The jitter estimate (seconds) and the distances it averaged.
     jitter: f64,
     deviations: u32,
-    /// Whether the newest sample was taken at the fast cadence.
-    fast: bool,
 }
 
 impl RttTrack {
     /// One more round trip, arrived `at`; `fast` when the session was
     /// probed at the fast cadence (suspected or paced).
     pub(in crate::udp) fn sample(&mut self, rtt: Duration, at: Instant, fast: bool) {
-        let [.., Some(a), Some(b)] = self.recent else {
-            return self.push(rtt, at, fast);
-        };
-        if fast == self.fast {
-            let span = at.saturating_duration_since(a.at).as_secs_f64();
-            let part = b.at.saturating_duration_since(a.at).as_secs_f64();
-            let (ra, rb, rc) = (a.rtt.as_secs_f64(), b.rtt.as_secs_f64(), rtt.as_secs_f64());
-            let line = if span > 0.0 {
-                ra + (rc - ra) * part / span
-            } else {
-                (ra + rc) / 2.0
-            };
-            let d = (rb - line).abs();
-            if fast {
-                self.deviate(d);
-            }
+        let new = Sample { rtt, at, fast };
+        if let [.., Some(a), Some(b), Some(c)] = self.recent
+            && fast
+            && b.fast
+            && c.fast
+            && let Some(d) = distance([a, b, c], new)
+        {
+            self.deviate(d);
         }
-        self.push(rtt, at, fast);
+        self.recent.rotate_left(1);
+        self.recent[KEPT - 1] = Some(new);
     }
 
-    /// A fast-cadence deviation: averaged, then a fixed gain; clipped.
+    /// One fast-cadence distance: averaged, then a fixed gain; clipped.
     fn deviate(&mut self, d: f64) {
-        let clip = (JITTER_CLIP * self.jitter).max(QUEUE_DELAY_LIMIT.as_secs_f64());
+        let young = self.deviations < JITTER_SAMPLES;
+        let least = if young {
+            QUEUE_DELAY_MAX
+        } else {
+            QUEUE_DELAY_LIMIT
+        };
+        let clip = (JITTER_CLIP * self.jitter).max(least.as_secs_f64() / JITTER_MULT);
         self.deviations = self.deviations.saturating_add(1);
         let gain = 1.0 / f64::from(self.deviations.min(JITTER_SAMPLES));
         self.jitter += (d.min(clip) - self.jitter) * gain;
     }
 
-    fn push(&mut self, rtt: Duration, at: Instant, fast: bool) {
-        self.recent.rotate_left(1);
-        self.recent[QUEUE_SAMPLES - 1] = Some(Sample { rtt, at });
-        self.fast = fast;
-    }
-
-    /// The smallest of the newest `n` samples (at most
-    /// [`QUEUE_SAMPLES`]); `None` until there are `n`.
+    /// The smallest of the newest `n` samples (at most four); `None`
+    /// until there are `n`.
     pub(in crate::udp) fn recent_min(&self, n: usize) -> Option<Duration> {
-        let newest = &self.recent[QUEUE_SAMPLES - n.min(QUEUE_SAMPLES)..];
+        let newest = &self.recent[KEPT - n.min(KEPT)..];
         newest
             .iter()
             .map(|s| s.map(|s| s.rtt))
@@ -122,8 +125,9 @@ impl RttTrack {
         self.recent.iter().flatten().map(|s| s.rtt).min()
     }
 
-    /// The fast-cadence deviations the jitter estimate rests on.
-    #[cfg(test)]
+    /// The fast-cadence distances the jitter estimate rests on (the
+    /// controller paces on a queue under [`QUEUE_DELAY_MAX`] only once
+    /// there are enough).
     pub(in crate::udp) fn deviations(&self) -> u32 {
         self.deviations
     }
@@ -132,4 +136,26 @@ impl RttTrack {
     pub(in crate::udp) fn threshold(&self) -> Duration {
         Duration::from_secs_f64(self.jitter * JITTER_MULT).clamp(QUEUE_DELAY_LIMIT, QUEUE_DELAY_MAX)
     }
+}
+
+/// How far `new` lies from the parabola through `p` (seconds), divided
+/// by the spread jitter alone gives that distance, times √(π/2): for
+/// independent normal jitter of σ its mean is σ, whatever the spacing.
+/// `None` when two samples share an instant (no parabola).
+fn distance(p: [Sample; 3], new: Sample) -> Option<f64> {
+    let t = |s: &Sample| s.at.saturating_duration_since(p[0].at).as_secs_f64();
+    let (x, x1, x2) = (t(&new), t(&p[1]), t(&p[2]));
+    // Lagrange's weights of the three samples at the new one's instant.
+    let l = [
+        (x - x1) * (x - x2) / (x1 * x2),
+        x * (x - x2) / (x1 * (x1 - x2)),
+        x * (x - x1) / (x2 * (x2 - x1)),
+    ];
+    if l.iter().any(|w| !w.is_finite()) {
+        return None;
+    }
+    let fit: f64 = l.iter().zip(&p).map(|(w, s)| w * s.rtt.as_secs_f64()).sum();
+    let spread = (1.0 + l.iter().map(|w| w * w).sum::<f64>()).sqrt();
+    let half_pi = std::f64::consts::FRAC_PI_2;
+    Some((new.rtt.as_secs_f64() - fit).abs() / spread * half_pi.sqrt())
 }

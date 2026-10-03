@@ -1,7 +1,8 @@
 //! The delay signal's inputs (module `signal`, round 4): the recent
 //! minimum, and the jitter estimate seen through the threshold it sets —
-//! a steady ramp adds nothing, alternating samples do, the slow cadence
-//! does not move it, a corner counts at most the clip, the clamps.
+//! a steady or accelerating queue adds nothing, normal jitter is its σ,
+//! the slow cadence does not move it, a corner counts at most the clip,
+//! the clamps.
 
 use super::*;
 use crate::udp::congestion::signal::{JITTER_MULT, JITTER_SAMPLES, RttTrack};
@@ -34,19 +35,20 @@ fn the_recent_minimum_needs_its_samples() {
     assert_eq!((r.recent_min(1), r.floor()), (None, None));
     feed(&mut r, &mut t, 250, true, &[50, 30]);
     assert_eq!(r.recent_min(2), Some(ms(30)));
-    assert_eq!(r.recent_min(QUEUE_SAMPLES), None, "two of four");
+    assert_eq!(r.recent_min(4), None, "two of four");
     feed(&mut r, &mut t, 250, true, &[60, 70, 80]);
-    assert_eq!(r.recent_min(QUEUE_SAMPLES), Some(ms(30)));
-    assert_eq!(r.recent_min(PACED_QUEUE_SAMPLES), Some(ms(70)));
+    assert_eq!(r.recent_min(4), Some(ms(30)));
+    assert_eq!(r.recent_min(2), Some(ms(70)));
     assert_eq!(r.floor(), Some(ms(30)));
     feed(&mut r, &mut t, 250, true, &[90]);
-    assert_eq!(r.recent_min(QUEUE_SAMPLES), Some(ms(60)), "30 is out");
+    assert_eq!(r.recent_min(4), Some(ms(60)), "30 is out");
 }
 
 /// A queue growing steadily — 400 ms a second, even where the cadence
-/// changes under it — is no jitter: the threshold stays the limit.
+/// changes under it — or at a steadily growing pace (a paced session's
+/// own additive increase) is no jitter: the threshold stays the limit.
 #[test]
-fn a_steady_ramp_is_no_jitter() {
+fn a_steady_or_accelerating_queue_is_no_jitter() {
     let mut t = Instant::now();
     let mut r = RttTrack::default();
     feed(&mut r, &mut t, 1000, false, &[20, 420]);
@@ -55,18 +57,29 @@ fn a_steady_ramp_is_no_jitter() {
         rtt += 400 * every / 1000;
         feed(&mut r, &mut t, every, true, &[rtt]);
     }
-    assert_eq!(r.threshold(), QUEUE_DELAY_LIMIT);
+    assert_eq!(r.threshold(), QUEUE_DELAY_LIMIT, "steady");
+    assert_eq!(r.deviations(), 4, "a slow sample may open a fit");
+    let mut r = RttTrack::default();
+    for k in 0..12u64 {
+        feed(&mut r, &mut t, 250, true, &[20 + 3 * k * k]);
+    }
+    assert_eq!(r.deviations(), 9);
+    assert_eq!(r.threshold(), QUEUE_DELAY_LIMIT, "accelerating");
 }
 
-/// Samples alternating 40 ms apart at the fast cadence are jitter of 40:
-/// the threshold settles at JITTER_MULT × 40 ms.
+/// Normal jitter of σ is an estimate of σ: the threshold settles near
+/// JITTER_MULT × σ (seeded draws, two hundred fast samples).
 #[test]
-fn alternating_samples_are_jitter() {
+fn normal_jitter_is_its_sigma() {
     let mut t = Instant::now();
     let mut r = RttTrack::default();
-    alternate(&mut r, &mut t, 40, 80, 2 * JITTER_SAMPLES as usize);
-    let want = JITTER_MULT * 40.0;
-    assert!((thr_ms(&r) - want).abs() < 0.05 * want, "{}", thr_ms(&r));
+    let mut rng = Rng(11);
+    for _ in 0..200 {
+        let rtt = rng.normal(100.0, 20.0).max(0.0).round() as u64;
+        feed(&mut r, &mut t, 250, true, &[rtt]);
+    }
+    let want = JITTER_MULT * 20.0;
+    assert!((thr_ms(&r) - want).abs() < 0.15 * want, "{}", thr_ms(&r));
 }
 
 /// The slow cadence teaches it nothing: a wider swing at one sample a
@@ -90,21 +103,26 @@ fn the_slow_cadence_does_not_move_it() {
     assert_eq!(r.threshold(), learned, "a wide swing");
     feed(&mut r, &mut t, 1000, false, &[60; 20]);
     assert_eq!(r.threshold(), learned, "a calm path");
-    assert_eq!(r.deviations(), 2 * JITTER_SAMPLES - 2);
+    assert_eq!(r.deviations(), 2 * JITTER_SAMPLES - 3);
 }
 
-/// A spike — one sample 450 ms over a calm path — breaks the line three
-/// times (as the middle, and as each neighbour); each break counts at
-/// most the clip (three times the estimate, at least the limit), not
+/// A spike — one sample 450 ms over a calm path — breaks the parabola
+/// four times (as the newest, and in each of the three fits after it);
+/// each break counts at most the clip (three times the estimate), not
 /// hundreds of milliseconds.
 #[test]
 fn a_corner_counts_at_most_the_clip() {
     let mut t = Instant::now();
     let mut r = RttTrack::default();
-    alternate(&mut r, &mut t, 50, 60, 2 * JITTER_SAMPLES as usize);
-    assert!((thr_ms(&r) - 40.0).abs() < 1.0, "jitter 10: {}", thr_ms(&r));
-    feed(&mut r, &mut t, 250, true, &[50, 500, 50, 50]);
-    assert!(thr_ms(&r) < 60.0, "{}", thr_ms(&r));
+    let mut rng = Rng(5);
+    for _ in 0..64 {
+        let rtt = rng.normal(50.0, 10.0).round() as u64;
+        feed(&mut r, &mut t, 250, true, &[rtt]);
+    }
+    let calm = thr_ms(&r);
+    assert!((30.0..75.0).contains(&calm), "jitter 10: {calm}");
+    feed(&mut r, &mut t, 250, true, &[50, 500, 50, 50, 50]);
+    assert!(thr_ms(&r) < 1.6 * calm, "{calm} → {}", thr_ms(&r));
 }
 
 /// The threshold is the limit on a calm path and QUEUE_DELAY_MAX on the
