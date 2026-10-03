@@ -611,6 +611,27 @@ keepalive_hz = 1.0
 #interval_secs = 10
 #service_name = "gsb"
 
+# ── İmzalı bilet doğrulaması: [ticket] (docs/TICKETS.md, BACKLOG B21) ──
+# Platformun (lobi, eşleştirme) imzaladığı PASETO v4.public biletlerini
+# doğrular: güvenilen yayıncı AÇIK anahtarları (`kid:<64 hex>`; anahtar
+# döndürmede eskisi ve yenisi birlikte listelenir), biletin `aud`'u,
+# saat kayması payı ve en uzun ömür. Varsayılan: bilet süresi içinde
+# yeniden kullanılabilir (yeniden bağlanan istemci aynı bileti sunar);
+# `single_use = true` her bilet kimliğini bir kez kabul eder. Bu tablo
+# yalnız `ticket` cargo feature'ıyla derlenmiş sunucuda çalışır;
+# feature'sız derlemede başlatmayı adıyla durdurur. Bilinmeyen anahtar
+# reddedilir; hata iletisi anahtarın hiçbir karakterini yazmaz. Oyuna
+# özel kontrol (`with_check`) gereken oyun doğrulayıcıyı kodda kurar
+# (`ServerHooks::ticket`); ikisi birlikte verilirse başlatma durur.
+#[ticket]
+#issuer_keys = ["lobby-2026-10:<64 hex: Ed25519 açık anahtar>"]
+#audience = "eu-1"
+#max_skew_secs = 30
+#max_lifetime_secs = 900
+#single_use = false
+#replay_capacity = 100000
+#timeout_ms = 2000
+
 # ── Hosted games' own tables ──────────────────────────────────────────
 # game = "arena", game = "mmo" and game = "war" read ONLY the table named
 # after them (a

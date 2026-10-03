@@ -41,6 +41,10 @@ prometheus = ["gsb-core/prometheus"]
 # `otlp`: the `[metrics.otlp]` push exporter (OTLP/HTTP protobuf to a
 # collector). Off by default; without it the table refuses startup.
 otlp = ["gsb-core/otlp"]
+# `ticket`: the `[ticket]` table builds a signed-ticket validator
+# (gsb-ticket, docs/TICKETS.md). Off by default: without it the table
+# refuses startup by name.
+ticket = ["dep:gsb-ticket"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -87,6 +91,8 @@ socket2 = { version = "0.6", features = ["all"] }
 # The sealed rUDP door's static key is wiped from memory once parsed
 # (BACKLOG B5a); already in the lock through gsb-net.
 zeroize = { version = "1", default-features = false }
+# The `[ticket]` validator (feature `ticket`, BACKLOG B21).
+gsb-ticket = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Test certificates are minted at runtime (docs/SECURITY.md §2 decision 5):

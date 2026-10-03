@@ -272,6 +272,25 @@ pub enum ServerError {
     #[error("invalid `[metrics.otlp]`: {0}")]
     BadOtlp(String),
 
+    #[error(
+        "`[ticket]` is set but this gsb-server was built without the ticket \
+             validator: rebuild with the `ticket` cargo feature, or remove the \
+             table (an authentication the operator asked for is never \
+             silently skipped)"
+    )]
+    TicketNotBuilt,
+
+    /// A `[ticket]` table the validator refuses; the reason never carries
+    /// a character of a key.
+    #[error("invalid `[ticket]`: {0}")]
+    BadTicket(String),
+
+    #[error(
+        "`[ticket]` is set and the caller passed its own ticket hook \
+             (`ServerHooks::ticket`): one authority per server — remove one"
+    )]
+    TicketHookConflict,
+
     /// A room-level key (flat, or in `[rooms.<id>]`) whose value no room
     /// can run with; `at` names the key and where it was written.
     #[error("{at} {reason}")]

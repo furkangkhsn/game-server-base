@@ -107,7 +107,7 @@ pub struct ListenerEntry {
 /// [`Self::check_top_level_keys`], `GameModule::owned_keys`). Every
 /// table the engine owns below it refuses an unknown key when it parses:
 /// a `[[listeners]]` entry, `[rooms.<id>]`, `[metrics]`,
-/// `[metrics.otlp]`.
+/// `[metrics.otlp]`, `[ticket]` (at startup).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -685,6 +685,16 @@ pub struct Config {
     /// build has no exporter for refuses startup
     /// ([`ServerError::OtlpNotBuilt`]).
     pub metrics: MetricsConfig,
+    /// `[ticket]` (BACKLOG B21, docs/TICKETS.md): validate the platform's
+    /// signed tickets (PASETO v4.public) — trusted issuer keys
+    /// (`issuer_keys = ["kid:<64 hex>"]`), the `audience`, the skew and
+    /// lifetime bounds, the single-use switch. Kept as a table here and
+    /// read by `gsb-ticket`'s `ValidatorConfig` (which refuses an unknown
+    /// key) when the server starts: a build without the `ticket` cargo
+    /// feature refuses it by name ([`ServerError::TicketNotBuilt`]).
+    /// Absent (the default) = no validator from config; the caller's
+    /// `ServerHooks::ticket`, or local auth.
+    pub ticket: Option<toml::Table>,
     /// The game this server hosts (docs/GAME-MODULE.md §6 decision 3): the
     /// name of one of the games compiled into the build (cargo features;
     /// see `gsb_server::games::compiled_in`). Default `"demo"`, the 2D
@@ -801,6 +811,7 @@ impl Default for Config {
             http_write_timeout_secs: DEFAULT_HTTP_WRITE_TIMEOUT_SECS,
             http_route_timeout_secs: DEFAULT_HTTP_ROUTE_TIMEOUT_SECS,
             metrics: MetricsConfig::default(),
+            ticket: None,
             game: crate::games::DEFAULT_GAME.into(),
             raw: toml::Table::new(),
             origin: crate::config::ConfigOrigin::default(),
