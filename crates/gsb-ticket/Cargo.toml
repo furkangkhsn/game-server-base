@@ -1,0 +1,36 @@
+[package]
+name = "gsb-ticket"
+description = "Opt-in signed tickets for gsb: PASETO v4.public (Ed25519) issuer and validator, generic over the game's own claims, as a gsb_core::auth::TicketAuth; plus the lobby's join grant."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+# Opt-in: neither gsb-core nor gsb-server depends on this crate by
+# default (gsb-server's `ticket` feature, gsb-client's `grant` feature).
+# Pure Rust only: no ring, no aws-lc, no C (docs/TICKETS.md "Biçim").
+[dependencies]
+gsb-core = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+# The PASETO payload is JSON; `raw_value` hands the game its verified
+# claims as the exact bytes the issuer signed.
+serde_json = { workspace = true }
+# Ed25519 over the curve25519-dalek the lock already has (through snow).
+ed25519-dalek = { workspace = true }
+# base64url (no padding), the PASETO token alphabet; already locked.
+base64 = { workspace = true }
+# A fresh issuer key and ticket id from the OS entropy source.
+getrandom = { workspace = true }
+# Constant-time comparison (the expected footer); already locked.
+subtle = { version = "2", default-features = false }
+# Key material is wiped from memory once parsed.
+zeroize = { version = "1", default-features = false }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

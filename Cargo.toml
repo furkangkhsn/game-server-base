@@ -13,6 +13,7 @@ members = [
     "crates/gsb-demo-mmo",
     "crates/gsb-demo-war",
     "crates/gsb-server",
+    "crates/gsb-ticket",
 ]
 
 [workspace.package]
@@ -40,6 +41,7 @@ gsb-demo-arena = { path = "crates/gsb-demo-arena" }
 gsb-demo-mmo = { path = "crates/gsb-demo-mmo" }
 gsb-demo-war = { path = "crates/gsb-demo-war" }
 gsb-server = { path = "crates/gsb-server" }
+gsb-ticket = { path = "crates/gsb-ticket" }
 
 # async runtime
 tokio = { version = "1", features = [
@@ -103,6 +105,19 @@ socket2 = "0.6"
 # OS entropy (rUDP cookie key): the getrandom(2)/BCryptGenRandom reader.
 # Not a crypto layer — 16 bytes of uniform material is all the key needs.
 getrandom = "0.4"
+
+# Signed tickets (gsb-ticket, BACKLOG B21): Ed25519 for PASETO v4.public
+# — pure Rust, over the curve25519-dalek 4 the lock already has through
+# snow (2.x, not 3.x: 3.x would pull a second curve25519-dalek). No
+# default features: `std` + `fast` (precomputed tables) + `zeroize`; no
+# `rand_core` (keys come from getrandom), no `pkcs8`/`pem`.
+ed25519-dalek = { version = "2.2", default-features = false, features = [
+    "std",
+    "fast",
+    "zeroize",
+] }
+# The PASETO payload (claims) is JSON.
+serde_json = { version = "1", features = ["raw_value"] }
 
 # config / errors / logging
 serde = { version = "1", features = ["derive"] }
