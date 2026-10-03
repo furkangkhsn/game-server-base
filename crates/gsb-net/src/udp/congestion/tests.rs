@@ -1,12 +1,16 @@
 //! The controller on synthetic estimates and clocks: what is a signal
 //! and what is noise, a burst against a sustained signal, the rate it
 //! sets (delivered, not sent), how it grows back and opens again, the
-//! silent ring, and two sessions sharing one bottleneck converging to
-//! equal shares.
+//! draining hold, the silent ring, and two sessions sharing one
+//! bottleneck converging to equal shares. Round 4's path models (jitter,
+//! a standing queue, a room's sessions behind one link) are in `path`,
+//! the delay signal's own rules in `signal`.
 
 use super::*;
 
+mod path;
 mod queue;
+mod signal;
 
 const BUDGET: usize = 1000;
 
@@ -39,6 +43,7 @@ fn feed(c: &mut Control, t: &mut Instant, offer: usize, reports: &[GameEstimate]
     }
 }
 
+/// Paced by two loss signals in a row, the room offering what was sent.
 fn paced_at(t: &mut Instant, sent: u64, lost: u64) -> Control {
     let mut c = Control::new(BUDGET, *t);
     let bad = est(250, sent, lost, 20, 20);
@@ -48,8 +53,8 @@ fn paced_at(t: &mut Instant, sent: u64, lost: u64) -> Control {
 }
 
 /// Clean reports leave a session open, probed once a second; loss below
-/// the bar (one datagram, or under a tenth) and jitter below the queue
-/// limit are noise.
+/// the bar (one datagram, or under a tenth) and a queue below the limit
+/// are noise.
 #[test]
 fn noise_is_not_a_signal() {
     let mut t = Instant::now();
@@ -69,19 +74,40 @@ fn noise_is_not_a_signal() {
     assert_eq!(c.counts, ControlCounts::default());
 }
 
-/// One signal is a burst until a second one confirms it: the session is
-/// probed faster, nothing else; a clean interval clears it.
+/// One signal is a burst until the suspect window confirms it: the
+/// session is probed faster for SUSPECT_REPORTS reports, nothing else;
+/// clean ones open it again.
 #[test]
 fn a_burst_only_quickens_the_probes() {
     let mut t = Instant::now();
     let mut c = Control::new(BUDGET, t);
     feed(&mut c, &mut t, 100_000, &[est(1000, 100, 30, 20, 20)]);
-    assert_eq!(c.state().phase, PathPhase::Suspect);
-    assert_eq!(c.probe_interval(), FAST_PROBE_INTERVAL);
-    assert_eq!(c.paced(), None, "not paced on one interval");
+    for _ in 1..SUSPECT_REPORTS {
+        assert_eq!(c.state().phase, PathPhase::Suspect);
+        assert_eq!(c.probe_interval(), FAST_PROBE_INTERVAL);
+        assert_eq!(c.paced(), None, "not paced on one interval");
+        feed(&mut c, &mut t, 25_000, &[est(250, 25, 0, 20, 20)]);
+    }
     feed(&mut c, &mut t, 25_000, &[est(250, 25, 0, 20, 20)]);
     assert_eq!(c.state().phase, PathPhase::Open);
     assert_eq!(c.probe_interval(), PROBE_INTERVAL);
+    assert_eq!(c.counts, ControlCounts::default());
+}
+
+/// One unlucky round trip — far over the floor, once — is a hint, not a
+/// queue: the samples after it are back near the floor, and the session
+/// opens again unpaced (round 4: the single-sample test paced jittery
+/// paths; B104).
+#[test]
+fn one_unlucky_sample_is_only_a_hint() {
+    let mut t = Instant::now();
+    let mut c = Control::new(BUDGET, t);
+    feed(&mut c, &mut t, 100_000, &[est(1000, 100, 0, 150, 20)]);
+    assert_eq!(c.state().phase, PathPhase::Suspect);
+    for rtt in [25, 140, 30] {
+        feed(&mut c, &mut t, 25_000, &[est(250, 25, 0, rtt, 20)]);
+    }
+    assert_eq!(c.state().phase, PathPhase::Open, "a sample near the floor");
     assert_eq!(c.counts, ControlCounts::default());
 }
 
@@ -104,12 +130,13 @@ fn sustained_loss_paces_at_the_delivered_rate() {
     );
 }
 
-/// A standing queue is a signal without any loss: the newest round trip
-/// QUEUE_DELAY_LIMIT over the window's floor. And a queue that grew
-/// within the interval stretched its receive span: the rate is what the
-/// client could have received, not what was sent.
+/// A standing queue is a signal without any loss: every one of the
+/// newest QUEUE_SAMPLES round trips QUEUE_DELAY_LIMIT over the window's
+/// floor paces the session once the suspect window ends. And a queue
+/// that grew within the interval stretched its receive span: the rate
+/// is what the client could have received, not what was sent.
 #[test]
-fn a_growing_queue_is_a_signal_and_not_capacity() {
+fn a_standing_queue_is_a_signal_and_a_growing_one_not_capacity() {
     let mut t = Instant::now();
     let mut c = Control::new(BUDGET, t);
     let floor = 20;
@@ -121,24 +148,32 @@ fn a_growing_queue_is_a_signal_and_not_capacity() {
     );
     assert_eq!(c.state().phase, PathPhase::Suspect);
     assert_eq!(c.state().queue_delay, Some(ms(30)));
+    // The queue grows by 250 ms every 250 ms: steadily, so no jitter.
+    for rtt in [floor + 280, floor + 530] {
+        feed(&mut c, &mut t, 100_000, &[est(250, 100, 0, rtt, floor)]);
+        assert_eq!(c.state().phase, PathPhase::Suspect);
+    }
     // 100 kB sent in 250 ms while the queue grew by 250 ms more: the
     // client received them over 500 ms — 200 kB/s, not 400.
     feed(
         &mut c,
         &mut t,
         100_000,
-        &[est(250, 100, 0, floor + 280, floor)],
+        &[est(250, 100, 0, floor + 780, floor)],
     );
     let rate = c.paced().expect("paced");
     assert!((rate - 200_000.0 * BETA).abs() < 1.0, "{rate}");
+    assert_eq!(c.state().queue_delay, Some(ms(30)), "the smallest of four");
 }
 
-/// While paced: every signal cuts (never above the current rate, never
-/// below the floor); every clean interval adds INCREASE budgets per
-/// second per second; at EXIT_HEADROOM × the demand the session opens.
+/// While paced: every loss signal cuts (never above the current rate,
+/// never below the floor); every clean report adds INCREASE of the
+/// episode's highest demand per second; at EXIT_HEADROOM × the demand
+/// the session opens.
 #[test]
 fn paced_rates_cut_grow_and_open() {
     let mut t = Instant::now();
+    // Entered at a demand of 100 kB per 250 ms: 400 kB/s.
     let mut c = paced_at(&mut t, 100, 40);
     let r0 = c.paced().unwrap();
     // A signal whose delivered rate is above the paced rate still cuts.
@@ -150,37 +185,48 @@ fn paced_rates_cut_grow_and_open() {
     }
     assert_eq!(c.paced(), Some(MIN_RATE * BUDGET as f64), "the floor");
     assert_eq!(c.counts.cuts, 42);
-    // Clean: + INCREASE × 0.25 s budgets per second, per interval; the
-    // room offers 15 kB per 250 ms (60 kB/s), so the session opens at 75.
+    // Clean: + INCREASE × 400 kB/s × 0.25 s per report, whatever the
+    // room offers now (15 kB per 250 ms: 60 kB/s, so it opens at 75).
+    let step = INCREASE * 400_000.0 * 0.25;
     let mut last = c.paced().unwrap();
     for _ in 0..100 {
         let Some(r) = c.paced() else { break };
-        assert!((r - last).abs() < 1.0 || (r - last - INCREASE * 250.0).abs() < 1.0);
+        assert!((r - last).abs() < 1.0 || (r - last - step).abs() < 1.0);
         last = r;
         feed(&mut c, &mut t, 15_000, &[est(250, 15, 0, 20, 20)]);
     }
-    assert!(last + INCREASE * 250.0 >= 60_000.0 * EXIT_HEADROOM);
+    assert!(last + step >= 60_000.0 * EXIT_HEADROOM);
     assert!(last < 60_000.0 * EXIT_HEADROOM);
     assert_eq!(c.state().phase, PathPhase::Open);
     assert_eq!(c.probe_interval(), PROBE_INTERVAL);
 }
 
-/// A standing queue that is already shrinking (the round trip fell since
-/// the last report) is the last cut working: on a delay signal alone a
-/// paced session holds its rate — loss still cuts.
+/// While paced, one high round trip is not a queue (the smallest of the
+/// newest PACED_QUEUE_SAMPLES is); a queue over the threshold cuts; a
+/// queue that is draining — its recent minimum fell by over DRAIN_MIN —
+/// holds the rate, neither cut nor grown; loss cuts, draining or not.
 #[test]
 fn a_draining_queue_holds_the_rate() {
     let mut t = Instant::now();
     let mut c = paced_at(&mut t, 100, 40);
+    // A queue builds steadily from the floor (no jitter learned)…
+    for rtt in [20, 60] {
+        feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, rtt, 20)]);
+    }
+    assert_eq!(c.counts.cuts, 1, "one high sample is not a queue");
     let r0 = c.paced().unwrap();
-    feed(&mut c, &mut t, 1000, &[est(250, 50, 0, 200, 20)]);
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 100, 20)]);
     let r1 = c.paced().unwrap();
-    assert!(r1 < r0, "a growing queue cuts");
-    feed(&mut c, &mut t, 1000, &[est(250, 50, 0, 150, 20)]);
-    assert_eq!(c.paced(), Some(r1), "a draining one holds");
-    feed(&mut c, &mut t, 1000, &[est(250, 50, 10, 120, 20)]);
-    assert!(c.paced().unwrap() < r1, "loss cuts, draining or not");
-    assert_eq!(c.counts.cuts, 3);
+    assert!(r1 < r0, "two over the threshold: a standing queue cuts");
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 140, 20)]);
+    let r2 = c.paced().unwrap();
+    assert!(r2 < r1, "still standing and growing: cut again");
+    // …and drains: the newest two's minimum fell from 100 to 90 ms.
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 90, 20)]);
+    assert_eq!(c.paced(), Some(r2), "a draining queue holds");
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 10, 40, 20)]);
+    assert!(c.paced().unwrap() < r2, "loss cuts, draining or not");
+    assert_eq!(c.counts.cuts, 4);
 }
 
 /// A whole ring of probes unanswered: a paced session halves its rate
@@ -205,13 +251,14 @@ fn a_silent_ring_halves_a_paced_rate_only() {
 /// Two paced sessions behind one bottleneck, one starting with nine
 /// tenths of it: each interval over capacity both lose their share of
 /// the excess (and cut once that is a signal), each interval under it
-/// both grow by the same step — the shares converge (Chiu–Jain: additive
-/// increase, multiplicative decrease).
+/// both grow by the same step (the same demand) — the shares converge
+/// (Chiu–Jain: additive increase, multiplicative decrease).
 #[test]
 fn two_sessions_on_one_bottleneck_converge_to_equal_shares() {
     let cap = 400_000.0;
     let mut t = Instant::now();
-    let mut s = [paced_at(&mut t, 100, 40), paced_at(&mut t, 100, 40)];
+    let mut u = t; // both paced at the same instant
+    let mut s = [paced_at(&mut u, 100, 40), paced_at(&mut t, 100, 40)];
     s[0].rate = 0.9 * cap;
     s[1].rate = 0.1 * cap;
     for _ in 0..400 {
@@ -223,7 +270,7 @@ fn two_sessions_on_one_bottleneck_converge_to_equal_shares() {
                 true => (sent as f64 * (total - cap) / total).round() as u64,
                 false => 0,
             };
-            c.offered(1_000_000);
+            c.offered(200_000); // the room asks twice the link
             c.on_estimate(&est(250, sent, lost, 20, 20), t);
         }
     }
@@ -254,4 +301,6 @@ fn the_state_carries_the_measurements_once_reported() {
     assert_eq!(s.queue_delay, Some(ms(30)));
     c.new_path(t);
     assert_eq!(c.state(), PathState::default(), "a new path: unmeasured");
+    let floor = Control::new(BUDGET, t).min_rate;
+    assert_eq!(c.min_rate, floor, "the floor stays");
 }

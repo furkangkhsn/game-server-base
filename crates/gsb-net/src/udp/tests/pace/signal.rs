@@ -49,15 +49,18 @@ async fn a_paced_session_tells_its_actor_the_path() {
         "{told:?}"
     );
     let paced = told[2];
-    assert_eq!(
-        paced.rate,
-        Some(4 * BUDGET as u32),
-        "the floor: 4 budgets/s"
-    );
+    // What the path delivered, times BETA: a quarter of twenty ~110-byte
+    // datagrams a quarter-second (≈ 2.2 kB/s × 0.85) — never under the
+    // floor, one budget a second (round 4).
+    let rate = paced.rate.expect("paced: a rate");
+    assert!((BUDGET as u32..2_500).contains(&rate), "{rate} B/s");
     assert_eq!(paced.loss_permille.map(|l| l > 0), Some(true));
     assert!(paced.rtt.is_some() && paced.demand.is_some());
-    // What the room will read per 30 Hz tick (4 800 B/s over 33.3 ms).
-    assert_eq!(paced.budget(Duration::from_secs(1) / 30), Some(159));
+    // What the room will read per 30 Hz tick.
+    assert_eq!(
+        paced.budget(Duration::from_secs(1) / 30),
+        Some((f64::from(rate) / 30.0) as usize)
+    );
 }
 
 /// The same session, the response off: the actor's inbox carries

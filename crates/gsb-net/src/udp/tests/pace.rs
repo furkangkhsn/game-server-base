@@ -169,7 +169,8 @@ async fn a_paced_session_keeps_the_newest_and_never_queues_control() {
         received += 5; // 15 of each 20 "lost"
         out_tx.send(vec![report(id, received)]).await.unwrap();
     }
-    // Paced now, at the floor (4 budgets per second: 4800 B/s).
+    // Paced now, at what the path delivered times BETA (a quarter of the
+    // band: under 2 500 B/s; `signal`), never under the floor (1 200 B/s).
     let mut flood: Vec<_> = (1..=10).map(big).collect();
     flood.push(control());
     out_tx.send(flood).await.unwrap();
@@ -191,8 +192,9 @@ async fn a_paced_session_keeps_the_newest_and_never_queues_control() {
             "the newest: frame 10"
         );
     }
-    // The bucket held one datagram: the other two went at 4800 B/s.
-    let paced = Duration::from_secs_f64((frags[1].len() + frags[2].len()) as f64 / 4800.0);
+    // The bucket held one datagram: the other two went at the paced rate,
+    // under 2 500 B/s.
+    let paced = Duration::from_secs_f64((frags[1].len() + frags[2].len()) as f64 / 2500.0);
     assert!(
         at[2] - at[0] >= paced.mul_f64(0.9),
         "paced: {paced:?} expected, {:?}",
