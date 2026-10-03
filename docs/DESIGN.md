@@ -2493,17 +2493,21 @@ bugünkünün aynısı (denetleyiciye hiç dokunulmaz). `"pace"`'te bile
 karışık, karşılaştırılır). Yolu yetişen raporlayan oturum da `Open`'dır:
 oyun bandı yine anında gider (ölçüm: darboğazsız koşu iki modda aynı).
 
-*Durum makinesi (her uygulanan raporda — `Control::on_estimate`).*
+*Durum makinesi (her uygulanan raporda — `Control::on_estimate`; tur 4'ün
+hâli, B104 — aşağıda "Gecikme sinyali, artış ve taban — tur 4").* Eşik =
+5 × yolun titreşimi, 30–300 ms arasında (`signal::RttTrack::threshold`);
+"ayakta kuyruk" = en yeni turların küçüğü pencereli tabanın eşik kadar
+üstünde.
 
 | evre | sinyal yok | sinyal |
 |---|---|---|
-| `Open` (hızlanmaz, sonda 1 sn) | `Open` | `Suspect` |
-| `Suspect` (hızlanmaz, sonda 250 ms) | `Open` (bir patlamaydı) | `Paced`, hız = teslim × β |
-| `Paced` (hızlanır, sonda 250 ms) | hız += artış; hız ≥ 1,25 × talep → `Open` | hız = min(hız, teslim) × β (kuyruk zaten boşalıyorsa ve kayıp yoksa: hız tutulur) |
+| `Open` (hızlanmaz, sonda 1 sn) | `Open` | `Suspect` — ipucu: en yeni tur tabanın 30 ms üstünde ya da kayıp sinyali |
+| `Suspect` (hızlanmaz, sonda 250 ms) | 4 raporda ayakta kuyruk yoksa `Open` | `Paced`, hız = teslim × β — üst üste iki kayıp sinyali, ya da en yeni 2 turda ayakta kuyruk ve titreşim ≥ 4 hızlı örnekle bilinir (kuyruk ≥ 300 ms ise beklemeden) |
+| `Paced` (hızlanır, sonda 250 ms) | hız += ¼ × bölümün en yüksek talebi/sn; hız ≥ 1,25 × o talep → `Open` | kayıp ya da en yeni turda kuyruk: hız = min(hız, teslim) × β (en yeni tur 5 ms'den çok düştüyse — boşalıyor — ve kayıp yoksa: hız tutulur, artmaz da) |
 
 Bir halka dolusu (4) sonda cevapsız kalırsa (`Paced`'te): hız yarıya
-(örnek yok — klasik zaman aşımı tepkisi). Taban: saniyede 4 datagram
-bütçesi (1472 B'de 5,9 KB/sn).
+(örnek yok — klasik zaman aşımı tepkisi). Taban: saniyede 1 datagram
+bütçesi (1472 B/sn; tur 3'te 4 — tur 4'te düşürüldü).
 
 *Kararlar ve gerekçeleri (ve elenenler).*
 
@@ -2516,11 +2520,15 @@ bütçesi (1472 B'de 5,9 KB/sn).
    ve %10 altı gürültü (Wi-Fi'nin rastgele kaybı tepki tetiklemesin).
    Gecikme sinyali: en yeni sonda turu pencereli en küçük turun 30 ms
    üstünde (`QUEUE_DELAY_LIMIT`) — oyunun hissettiği ayakta kuyruk.
+   *(Tur 4: tek örnek titreşimli yolda yanlış alarmdı — B104 ölçümü; artık
+   en yeni turların küçüğü, yolun titreşimine göre eşikle — aşağıda
+   "Gecikme sinyali, artış ve taban — tur 4".)*
 2. **Patlama mı süreklilik mi.** Tur 1'in bulgusu (patlamada geri
    çekilmek gecikmeyi büyütür) burada: tek sinyal yalnız şüphedir
    (`Suspect`: sonda 250 ms'ye sıklaşır, hiçbir şey hızlanmaz/düşmez);
    üst üste ikinci sinyal hızlandırır, temiz aralık şüpheyi siler. Bir
-   kötü aralığın bedeli birkaç fazla sondadır (9 B).
+   kötü aralığın bedeli birkaç fazla sondadır (9 B). *(Tur 4: şüphe 4
+   rapor sürer; hızlı örnekler titreşim tahmininin girdisidir.)*
 3. **Hız nasıl tahmin edilir — teslim edilen hız, AIMD düzeltmesiyle.**
    Oyun bandı en-yenisi-kazanır ve uygulama-sınırlıdır: gönderilen, yolun
    taşıyabileceğini söylemez; *teslim edilen* söyler. Aralığın teslimi =
@@ -2528,12 +2536,16 @@ bütçesi (1472 B'de 5,9 KB/sn).
    aralığın istemcinin gördüğü uzunluğu: gönderim aralığı + turun o
    aralıktaki büyümesi (dolan bir kuyruk aynı datagramları daha uzun
    alım süresine yayar — büyüyen kuyruk kapasite sanılmaz; test
-   `a_growing_queue_is_a_signal_and_not_capacity`). Giriş ve her sinyal:
+   `a_standing_queue_is_a_signal_and_a_growing_one_not_capacity`, tur 4'teki adıyla). Giriş ve her sinyal:
    hız = teslim × β (0,85), mevcut hızın üstüne asla. Temiz aralık:
    saniyede 16 datagram bütçesi/sn **toplamsal** artış (1472 B'de ≈ 23,5
    KB/sn²) — paylaşılan darboğazda oturumların eşit paya yakınsaması
    bundandır (Chiu–Jain: toplamsal artış, çarpımsal azalış; test
-   `two_sessions_on_one_bottleneck_converge_to_equal_shares`). **Boşalan
+   `two_sessions_on_one_bottleneck_converge_to_equal_shares`). *(Tur 4:
+   artış bölümün en yüksek talebinin ¼'ü/sn — röle testinin 91 KB/sn'lik
+   talebinde tur 3'ün adımı, 64 oturumda onun 1/7'si; açılma o talebin
+   1,25 katında; boşalma tutması artışı da durdurur; alım süresini
+   uzatan, tek örneğin değil en yeni iki turun küçüğünün büyümesi.)* **Boşalan
    kuyruk tutar:** `Paced`'te yalnız gecikme sinyali varken tur bir
    öncekinden kısaysa önceki kesinti çalışıyordur — hız tutulur (kayıp
    yine keser). Ölçüldü: tutmasız 4 oturumlu paylaşımlı koşuda 200–211
@@ -2750,7 +2762,7 @@ ve bu tur) çevirir.
   haber değil, hız yarılanması haber; dolu kutuda en yenisi borçlu ve
   sonraki kararda gider; yeni IP taze `Open`, yeni port hiçbir şey;
   `"off"` hiçbir şey); `udp::tests::pace::signal` (gerçek soket, 2:
-  `Open` → `Suspect` → `Paced`, hız tabanda 4 800 B/sn, 30 Hz'de 159 B;
+  `Open` → `Suspect` → `Paced`, hız tabanda 4 800 B/sn, 30 Hz'de 159 B — tur 4'ten beri taban 1 bütçe/sn ve hız teslimin β katı, ≈ 1,7–2,5 KB/sn;
   `"off"` boş); **uçtan uca** `gsb-server/tests/path_budget.rs` (2:
   `udp_congestion = "pace"` rUDP kapısı, kullanıcı alanı policer'ının
   — 8 KB/sn, 3 KB — arkasında raporlayan istemci, her tick hareket eden
@@ -2773,7 +2785,9 @@ tepki gereksiz düşürmeye dönebilir; (2) oyunun sinyali yokken düşürme
 oyuncunun göremediği bir şeydir (B103 sinyali çekirdeğe, kite ve rUDP
 yazıcısına taşıdı). **Öneri:** titreşim
 ölçümü temiz çıkarsa ve sinyal çekirdeğe taşındıktan sonra varsayılan
-`"pace"` olsun (yeni satır).
+`"pace"` olsun (yeni satır). *(2026-10-03: titreşim ölçümü temiz çıkmadı
+— tur 4 sinyali ve tabanı düzeltti; varsayılan yeniden ölçümü bekliyor:
+aşağıda "Gecikme sinyali, artış ve taban — tur 4".)*
 
 *Sayaçlar (taşıma kapsamı, OPS §3):* `udp_game_frames_queued_paced`
 (hızlama kuyruğuna giren kare — her biri sonra gönderilir, düşer ya da
@@ -2853,6 +2867,192 @@ pencere dönmüyor, pencere sessizliği silmiyor, baytlar sayılmıyor; B96:
 `close`'ta izleyiciyi kesmemek. **Sağ kalan:** yeniden gönderilen REL
 karesinin kovadan düşülmemesi (hızlıyken yeniden gönderim nadir;
 ilk gönderimin düşülmesi test ediliyor) — bilinçli bırakıldı.
+
+**Gecikme sinyali, artış ve taban — tur 4 (B104 ölçümü, 2026-10-03).**
+Bakımcı `scripts/rudp-jitter.sh`'ı koştu: 64 istemci × 30 sn × her
+senaryo×kip 3 koşu, `orchestrate`, loopback'te netem (gecikmeler yön
+başına), darboğaz `rate 3611kbit limit 1000` (baseline'ın ölçtüğü talebin
+yarısı); makine `HOME`, çekirdek 7.2.6-arch2-1, başlangıç
+2026-10-03T02:15:29+03:00. Kod: tur 3 (`main` @ c5e8c55 hattı).
+`summary.txt`:
+
+```text
+scenario           mode runs episodes     cuts   dropped    queued   lost%   rtt_ms  conn_p99   p99_max    snaps/s  ends
+baseline           off     3      0.0      0.0       0.0       0.0    0.00      0.2      31.0        60     1905.0     0
+baseline           pace    3      0.0      0.0       0.0       0.0    0.00      0.2      61.3        62     1905.0     0
+jitter20           off     3      0.0      0.0       0.0       0.0    0.18     40.2     129.7       135     1908.3     0
+jitter20           pace    3    135.7    240.0     162.3    3286.7    0.19     40.1     122.7       127     1902.6     0
+jitter40           off     3      0.0      0.0       0.0       0.0    0.24     80.6     247.3       267     1904.0     0
+jitter40           pace    3    327.0   1815.0    7063.7   29964.7    0.28     80.6     246.3       260     1669.0     0
+jitter60           off     3      0.0      0.0       0.0       0.0    0.35    121.4     417.0       452     1895.9     0
+jitter60           pace    3    176.0   2996.3   19262.3   51369.7    0.45    122.2     414.7       429     1255.2     0
+jitter40_loss1     off     3      0.0      0.0       0.0       0.0    1.13     80.4     264.0       280     1884.3     0
+jitter40_loss1     pace    3    298.0   1946.3    8363.7   32479.0    1.16     80.1     260.3       291     1608.9     0
+bottleneck         off     3      0.0      0.0       0.0       0.0   50.97   1438.1     132.7        67      754.2    38
+bottleneck         pace    3    100.0   1639.3   12022.0   26160.3   37.11   1382.3     163.3       201      733.1    10
+bottleneck_jitter  off     3      0.0      0.0       0.0       0.0   45.79   1417.5     193.7       203      749.0     0
+bottleneck_jitter  pace    3    101.0   1670.3   12125.3   26604.7   40.55   1411.2     171.7       179      732.0     0
+```
+
+*Teşhis (doğrulandı).* (1) **Titreşimde sahte gecikme sinyali.** Tur 3'ün
+kuralı tek örnekti: en yeni tur pencereli en küçüğün 30 ms üstündeyse
+sinyal. Pencerenin en küçüğü saniyelerin en şanslı örneğidir (σ'lık
+titreşimde ortalamanın ~2σ altı); σ ≈ 28 ms'lik turda (jitter40) tek
+örnek 30 ms'yi örneklerin yarısından fazlasında aşar, iki ardışık sinyal
+de sıradandır — 64 oturumda koşu başına 327 bölüm, 1815 kesinti,
+snapshot'ların %12'si gitti (jitter60: %34). Kayıplı senaryo jitter40'ın
+aynısı: %1 rastgele kayıp `LOSS_MIN`/`LOSS_DIV`'in altında, suçlu gecikme
+sinyali. (2) **Darboğazda taban yolun kendisiydi.** Taban 4 bütçe/sn =
+5 888 B/sn; 64 oturumda 377 KB/sn yük ≈ 3,0 Mbit/sn — loopback başlıklarıyla
+(~470 B'lik snapshot + 42 B) ve hızlı kadanstaki sonda/raporlarla 3,6
+Mbit/sn'lik bağlantının ~%97'si: hızlama bağlantının altına inemezdi,
+netem kuyruğu (1000 paket, ~0,7 sn yön başına; sonda turu ~1,4 sn) hiç
+boşalmadı. (3) **Artış 64 oturuma göre değildi:** 16 bütçe/sn² = 23,5
+KB/sn² oturum başına; 250 ms'lik raporda +5,9 KB/sn × 64 = +376 KB/sn —
+bağlantının %83'ü her temiz raporda. Çevrimdışı bir modelle (netem'in
+tfifo'su — iki yön tek kuyruk, hız ve paket sınırı —, sondalar, raporlar,
+`feedback`'in aralık hesabı ve denetleyici birebir; repo'da değil) ölçüm
+yeniden üretildi (jitter40 `pace`: model 291 bölüm/1991 kesinti/9547
+düşen, ölçüm 327/1815/7064; jitter60 149/3084/20 994 — 176/2996/19 262;
+darboğaz 144/2008 — 100/1639) ve ayrıştırıldı: darboğazda tur 3 → oyun
+yaşı p50 963 ms; yalnız taban 1 bütçe → 222 ms; taban + talebe göre artış
+→ 35 ms. İkisi de gerekliydi.
+
+*Yeni gecikme sinyali (`udp::congestion::signal`, `Control::on_estimate`).*
+
+- **Kuyruk bir en küçüktür.** Ayakta kuyruk = en yeni turların küçüğü
+  pencereli tabanın eşik kadar üstünde (LEDBAT'ın "current delay"
+  süzgeci, RFC 6817 §3.4.2, BBR'nin pencereli tabanına karşı): titreşim
+  bir örneği yükseltir, ardışık örneklerin küçüğünü yükseltmez; ayakta
+  kuyruk hepsini yükseltir. Şüpheden hızlamaya: en yeni **2** tur;
+  hızlanırken: en yeni **1** tur (yol zaten tıkalı biliniyor — tepki
+  anında; iki örnekle beklemek röle testinde p95'i ~100 ms büyüttü).
+- **Eşik yolun titreşimidir:** `clamp(5 × titreşim, 30 ms, 300 ms)`.
+  Gerekçe: σ'lık titreşimde pencerenin tabanı ortalamanın ~2σ altında;
+  taban + 5σ ortalamanın ~3σ üstü — tek örnekte ~1/740, ardışık iki
+  örnekte ~2·10⁻⁶; titreşim tahmininin kendi hatasına (genç tahminde
+  %±30) pay bırakır. Titreşimsiz yolda eşik tur 3'ün 30 ms'si; B104'ün en
+  sert senaryosunda (yön başına σ 40 ms → tur σ ≈ 55 ms) eşik ~275 ms.
+  300 ms tavan: hiçbir titreşim o kadar ayakta kuyruğu gizlemez ve o kuyruk
+  titreşim bilinmeden de hızlandırır (darboğazın ilk saniyeleri).
+- **Titreşim, bir parabolün izleyemediğidir.** En yeni hızlı örneğin,
+  kendinden önceki üç örnekten geçen parabolden (Lagrange — eşit olmayan
+  kadans da eğilim değildir) uzaklığı, dış-değerlemenin taşıdığı gürültüyle
+  ölçeklenmiş: normal titreşimde beklenen değeri σ. Sabit hızla dolan,
+  boşalan ya da hızlanarak dolan (hızlanan oturumun kendi toplamsal artışı)
+  kuyruk ona hiçbir şey katmaz. **Elenen: doğru (ikinci fark)** — hızlanan
+  oturumun kendi kuyruğu eğridir, doğru onu titreşim sandı; derin tamponda
+  eşik 55–65 ms'ye çıktı, oyun bandı p95 ~265 ms. **Yalnız hızlı kadans
+  (250 ms) öğretir:** saniyede bir örnekte, başka oturumların hızlamasının
+  birkaç saniyede bir yükseltip indirdiği kuyruk titreşime benzer —
+  geç katılan bir oturum onu titreşim sanıp bağlantıyı bırakmadı (model,
+  röle paylaşımlı: Jain 0,71). **Elenen: yavaş kadansta yalnız düşürme** —
+  aşağı yönlü yanlı (örnekler hep tahminin altında sayılır): jitter
+  modelinde 7 kat fazla sahte bölüm. Her uzaklık en çok 3 × tahmin
+  sayılır (en az eşiği 30 ms olan titreşim, 6 ms; tahmin gençken — ilk
+  16 uzaklık — en az eşiği 300 ms olan, 60 ms): bir kesintinin köşesi
+  sakin yolun tahminini şişirmez, titreşimli yolun genç tahmini birkaç
+  örnekte titreşimine büyür. İlk 16 uzaklığın ortalaması, sonra 1/16
+  kazanç (RFC 3550'nin interarrival jitter kazancı).
+- **Şüphe ucuzdur, karar bilgi ister.** `Open` → `Suspect`: en yeni tur
+  tabanın 30 ms üstünde (sabit, titreşimden bağımsız) ya da kayıp
+  sinyali — yalnız sondalar hızlanır (36 B/sn), hızlı örnekler titreşim
+  tahmininin girdisidir. `Suspect` → `Paced`: üst üste iki kayıp sinyali;
+  ya da ayakta kuyruk **ve** tahmin en az 4 hızlı uzaklığa dayanıyor (ya
+  da kuyruk ≥ 300 ms). Ayakta ama bilinmeyen kuyruk şüpheyi sürdürür
+  (öğrenir); 4 raporda ayakta kuyruk yoksa `Open`. **Elenen: girişte 4
+  örnek (bir saniye) ayakta kuyruk ya da 8 uzaklıklık bilgi kapısı** —
+  titreşime en dayanıklılarıydı ama hızlananların 250 ms'de söndürdüğü
+  kuyruğu geç katılan göremedi ya da geç öğrendi: röle paylaşımlı
+  testinin ara koşularında son katılan sık sık açık kaldı (Jain 0,71–0,95).
+- **Boşalma tutar:** hızlanırken en yeni tur 5 ms'den çok düştüyse
+  (`DRAIN_MIN`) kesinti çalışıyordur — hız ne kesilir ne artar (tur 3:
+  yalnız gecikme kesintisini tutuyordu; artışı da tutmak, kuyruk
+  boşalmadan yeniden doldurmayı önler — model, ara tasarım: darboğaz
+  yaşı 378 → 60 ms).
+  5 ms'lik pay: kuyruğun kuyruğundaki ms'lik düşüşler tutmayı sonsuza
+  uzatmasın (0 payla derin tamponda hız boş bağlantıda kaldı).
+- **Alım süresi** kuyruğun büyümesiyle uzar — tek örneğin değil en yeni
+  iki turun küçüğünün büyümesiyle: titreşimli bir örnek teslim edilen
+  hızı yarıya indirip yanlış bölümde derin kesmesin.
+
+*Artış ve taban.* **Artış = bölümün en yüksek talebinin ¼'ü/sn**
+(`INCREASE`): röle testinde (91 KB/sn talep) tur 3'ün 23,5 KB/sn²'si
+(0,26 × talep) — orada sınanmış dinamik aynı kalır; B104 yükünde (oturum
+başına ~14 KB/sn) 3,5 KB/sn², 64 oturumda raporda +56 KB/sn — bağlantının
+%12'si (tur 3: %83). Toplamsal (eşit taleplerde eşit adım: Chiu–Jain
+yakınsaması korunur); en yüksek talep, içeriğini bütçeye inceltten odanın
+kendi toparlanmasını yavaşlatmaz ve gürültülü bir aralık oturumu erken
+açmaz (açılma o talebin 1,25 katında). **Elenen: ⅛** — darboğazda kuyruğu
+daha kısa tuttu ama röle paylaşımlı testinde (ara tasarım) yakınsama 40
+sn'ye sığmadı (Jain 0,95). **Taban = 1 bütçe/sn** (1472 B/sn): en yeni kare yine de
+istemciye ulaşır (en çok saniyede bir datagram), teslim ölçümü sürer; 64
+oturumun tabanı 94 KB/sn = 0,75 Mbit/sn, B104 bağlantısının %21'i.
+**Elenen: talebe göre taban** — sabit bir bütçe yeter ve açıklanması
+kolay; aynı darboğazı N oturum paylaştıkça her taban bir gün bağlantıyı
+aşar, 1 bütçe bunu 3,6 Mbit'te ~300 oturuma iter.
+
+*Testler (önce kırmızı; her kural mutasyonla).* `udp::congestion::tests`
+(10), `…::tests::signal` (6: en küçük, düz/hızlanan kuyruk titreşim
+değildir, normal titreşim σ'dır, yavaş kadans öğretmez, köşe en çok
+kırpma kadar sayar, kenetler), `…::tests::path` (3, deterministik —
+tohumlu üreteç netem'in `delay ort sd distribution normal`'ını yön başına
+çeker; pencere tabanı son 10 sn'nin en küçüğü, iki kovalınınkinden
+katı): **(a)** `jitter_alone_paces_rarely` — B104'ün üç titreşimi × 30
+tohum × 10 dk, kayıp yok: 300 oturum-dakikada 10/8/7 bölüm, 25/21/17
+kesinti (sınır: ≤ 12 bölüm, bölüm başına ≤ 3 kesinti; tur 3 B104'te 32
+oturum-dakikada 136–327 bölüm); **(b)** `a_standing_queue_paces_within_bounded_reports`
+— 60 sn yoldan sonra kalıcı kuyruk: hiç şüphelenilmemiş sakin yolda en
+çok 3 + 4 raporda, titreşimi bilinen yolda 2'de, 350 ms'lik kuyrukta en
+sert titreşimde 2'de; **(c)** `the_floor_lets_a_shared_link_drain` — 64
+oturum, bağlantı oturum başına 2 bütçe/sn, talep 10, 1 sn'lik kuyruk
+sonu düşüren tampon: kuyruk boşalır, son 20 sn'de ortalama < 100 ms,
+bağlantı > %50 dolu, Jain > 0,9. Gerçek sokette `udp::tests::pace`
+(taban/hız: teslim × β, 1 bütçe altına inmez). **Önce kırmızı:** tur 3'ün
+gecikme kuralı (eşik sabit 30 ms) (a)'yı ve (b)'yi, tur 3'ün tabanı (4)
+ve sabit artışı (c)'yi düşürür. **Mutasyonlar 27'de 25 öldü, kalan ikisi
+için test eklendi ve öldüler** (yedekle–boz–koş–geri yükle): titreşimsiz
+eşik, tavansız eşik, çarpan 2, yavaş kadans öğretir, kırpma yok, genç
+kırpma dar, ortalama yok, ardışık fark, ölçeksiz uzaklık, girişte tek
+örnek, hızlanırken iki örnek, bilgi kapısı yok, 300 ms'de beklemesiz giriş
+yok, tek kayıp hızlandırır (eklendi), şüphe hiç açılmaz, şüphe ayaktayken
+açılır, ipucu titreşim eşiğinde, boşalma tutmaz, boşalmada artar, boşalma
+payı 0 (eklendi), artış/açılma anlık talebe göre, alım süresi uzaması
+yok, taban 4, sabit artış, yeni yol örnekleri tutar, tur 3'ün kuralı.
+
+*Röle ölçümü önce/sonra* (`udp::tests::pace::measure`, `--ignored`, aynı
+makine, 2026-10-03; tur 3 kodu bir, tur 4 kodu iki koşu; `pace`; `off`
+satırları değişmedi).
+
+| senaryo | kod | mesaj/sn | oyun yaşı p50 / p95 / max ms | kontrol yaşı p50 / p95 ms | kesinti | teslim | Jain |
+|---|---|---|---|---|---|---|---|
+| derin | tur 3 | 19,2 | 97 / 147 / 182 | 44 / 104 | 11 | 816 KB | — |
+| derin | tur 4 | 19,0; 18,1 | 107–114 / 211–268 / 257–290 | 52–55 / 171–225 | 8–9 | 759; 735 KB | — |
+| sığ | tur 3 | 19,2 | 97 / 131 / 153 | 40 / 75 | 12 | 816 KB | — |
+| sığ | tur 4 | 19,0; 19,1 | 101–103 / 149–153 / 168–169 | 44–45 / 92–103 | 8 | 797; 795 KB | — |
+| paylaşımlı (oturum başına) | tur 3 | 13,5–16,0 | 99–103 / 139–150 / ≤164 | 44–46 / 79–84 | 160 | 7,05 MB | 0,996 |
+| paylaşımlı (oturum başına) | tur 4 | 9,7–16,3 | 98–126 / 170–207 / ≤231 | 38–43 / 112–141 | 119–120 | 6,76; 6,79 MB | 0,995; 0,967 |
+| darboğazsız | ikisi | 30,5 | 21–22 / 22–23 | 21–22 / 22–23 | 0 | 915 414 B | — |
+
+**Okuma: gerileme var, bilinçli.** Tur 4 adil (Jain 0,967–0,999, ara
+koşularda 4/4 oturum hızlandı) ve titreşime dayanıklı; ama derin tamponda
+p95 +60–120 ms, paylaşımlıda +30–60 ms, teslim −%4…−%10. Neden: hızlanan
+oturumun kendi testere dişinin köşeleri titreşim tahminini 6–12 ms'ye
+taşır, eşik 30 yerine 30–60 ms olur — tur 3'ün sabit 30 ms'si ise
+titreşimli yolda yanlış alarmdı. Koşudan koşuya oynama da büyük (derin
+p95 tur 4 ara koşularında 145–268). Yeni satır (BACKLOG): eşiğin
+hızlanırken kendi testere dişinden arındırılması.
+
+*Yeniden ölçüm (bakımcı) ve geçme ölçütü.* `scripts/rudp-jitter.sh`
+olduğu gibi (64 istemci, 30 sn, 3 koşu); `summary.txt`'nin sonuna
+`verdict` bölümü eklendi (`scripts/README.md`): `jitter*` — `pace`'in
+snapshot/sn'si `off`'un ≥ %98'i, hızlamanın düşürdüğü ≤ teslim edilen
+snapshot'ların %1'i, istemci başına koşuda ≤ 1 kesinti; `bottleneck*` —
+bölüm var, `lost%` ≤ `off`'un yarısı, `rtt_ms` ≤ üçte biri, `ends` ≤
+`off`'unki. Hepsi geçerse (`overall: PASS`) varsayılan `"pace"` olabilir.
+Tur 3'ün verisi 6/6 KALIR. Model tahmini (ölçüm değil): titreşimde koşu
+başına ~8 bölüm, 22–30 kesinti, 180–440 düşen kare, snapshot −%0,4…−%0,9;
+darboğazda `lost%` ~%17 (`off` ~%51), `rtt_ms` 210–285 (`off` ~1970).
 
 **Bağlantı göçü (BACKLOG B3 — 2026-10-02, opt-in; bakımcı kararları
 RUDP-SECURITY §2 #5 ve #10).** Eskiden demux oturumu istemcinin

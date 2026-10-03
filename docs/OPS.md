@@ -310,7 +310,9 @@ udp_congestion = "pace"   # vars. "off"
   **Varsayılan ne olmalı:** `scripts/rudp-jitter.sh` aynı yükü iki kipte,
   loopback'e netem ile titreşim, kayıp ve gerçek darboğaz koyarak koşar
   (sudo gerekir; `scripts/README.md`) — titreşim tek başına hızlanma
-  tetiklememeli, darboğaz tetiklemeli.
+  tetiklememeli, darboğaz tetiklemeli; `summary.txt`'nin sonundaki
+  `verdict` bölümü senaryo başına PASS/FAIL ve `overall` verir (ölçüt:
+  DESIGN §6 "Tıkanıklık tepkisi", tur 4).
 
 **Sunucu düzeyi: rUDP kayıt katmanı `udp_security`, sunucu anahtarı
 `udp_static_key` / `udp_static_key_file`, el sıkışma bütçesi
