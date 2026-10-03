@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-2044 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+2052 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -339,6 +339,14 @@ feature'lı `[ticket]` tablosu. Oyun talepleri `Joiner::claims` (bayt, JSON)
 olarak katılım kancalarına gelir. `HomeShard` artık `Arc<dyn HomeRoute>`
 (eski kapanışlar derleniyor). Lobi örneği: `cargo run -p gsb-example-lobby`.
 B22 kullanıcı kararıyla kapsam dışı. Açık: B134–B139.
+
+**r5 tamam** (CHANGELOG "r5", DESIGN §6 "Taban, sessizlik ve boşaltma —
+tur 5"): `feedback::PROBE_HORIZON` 4 sn (`PROBE_RING` 16),
+`SILENT_GRACE` 4; `Control`: `SUSTAINED_LOSS` 2 sn, `on_silence` her
+fazda sinyal, `congestion::base` (3 × 20 sn LEDBAT tabanı), boşaltma
+(`DRAIN_AFTER` 10 sn, `DRAIN_GAIN` 0,5, `udp_game_paced_drains`); tel
+GSNS. Sıradaki: kullanıcı `scripts/rudp-jitter.sh`'ı yeniden koşar;
+`overall: PASS` ise varsayılan `"pace"`. Açık: B140, B141, B143–B147.
 
 **r4 tamam** (CHANGELOG "r4", DESIGN §6 "Gecikme sinyali, artış ve taban —
 tur 4"): `signal::RttTrack` (son 4 tur, parabol-uzaklığı titreşim tahmini,
@@ -1050,6 +1058,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 2044 passed, 4 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 2052 passed, 4 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

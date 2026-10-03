@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## r5 — rUDP tıkanıklık tepkisi tur 5: sonda ufku, sessizlik sinyali, uzun taban, boşaltma (`net/r5-base-drift`)
+
+- **Ölçüm (kullanıcı, 2026-10-03, `rudp-jitter.sh`, tur 4 koduyla):**
+  dört titreşim senaryosu GEÇTİ (snapshot `off`'un %99,5'i, düşen < %0,5,
+  istemci başına ≤ 0,54 kesinti); darboğaz KALDI — `pace` kaybı `off`'un
+  %66/%63'ü (sınır %50), RTT %42/%55'i (sınır %33); ölen oturum 33 → 0.
+- **Teşhis (ajanın modeli, `congestion/tests/link.rs`: netem tfifo, gerçek
+  `Control`/`PaceQueue`/`Feedback`, ölçümü yeniden üretiyor):** 10 sn'lik
+  pencere tabanı ayakta kuyrukla yükseliyor (B142) ama baskın neden sonda
+  açlığı — 250 ms kadansta 4'lük halka 1 sn'den uzun turu hiç ölçemiyor,
+  sondaların ~%80'i kayboluyor, B91 geri çekilmesi aralığı 2–8 sn'ye
+  açıyor; kaybın çoğu ilk 10–15 sn'de.
+- **Düzeltme** (her biri yerleşik bir tasarımdan): sonda ufku 4 sn
+  (`PROBE_RING` 16; RFC 9002 §6.1.2 zaman eşiği); sessiz istemciden geri
+  çekilme ancak art arda 4 tahliyeden sonra (RFC 6298 §5.5); 2 sn'den
+  uzun kayıplı aralık hemen hızlandırır; ufuk boyu cevapsız sonda bir
+  sinyal (açık → şüphe, şüphe → talebin yarısı, hızlı → yarıya; RFC 5681
+  §3.1, RFC 9002 §7.6); taban halkası 3 × 20 sn (LEDBAT/uTP, RFC 6817
+  §3.4.2; zemin = `min(pencere, taban + eşik)`, göçte sıfırlanır);
+  boşaltma (BBR ProbeRTT: 10 sn tabana yakın tur yoksa bir rapor boyu
+  yarı hız, `udp_game_paced_drains`). Artış (`INCREASE`) değişmedi.
+- **Model (3 tohum, 30 sn):** darboğaz kayıp `off`'un 0,45–0,48'i, RTT
+  0,13–0,14'ü; titreşimli darboğaz 0,39–0,43 / 0,15; son üçte birde
+  kuyruk ~50 ms, kayıp yok. Titreşim satırları tur 4'le aynı. Taban
+  halkası ve boşaltmanın modelde ölçülebilir etkisi yok (sigorta, B144).
+- Tel: taşıma bölümünün sonuna 1 sayaç → loadgen metrik teli **GSNS**.
+  Varsayılan `"off"` kaldı; kullanıcı `rudp-jitter.sh`'ı yeniden koşar.
+
+Testler 2044 → 2052 (`otlp` ile 2062 → 2070): darboğaz modeli (tur 4
+ikisini de düşürüyor), taban, sessizlik, uzun kayıp, boşaltma, sonda
+ufku; 14 mutasyonun 14'ü yakalandı. Ebeveyn doğrulaması: tam kapılar
+yeşil; odaya boşaltılmış hızı bildirmek ve sessizlikte talebin tamamıyla
+hızlanmak birer/ikişer test düşürdü.
+
 ## r4 — rUDP tıkanıklık tepkisi tur 4: titreşime dayanıklı gecikme sinyali, talebe göre artış, düşük taban (`net/r4-delay-signal`)
 
 - **Ölçüm (kullanıcı, 2026-10-03, `scripts/rudp-jitter.sh`, 64 istemci × 30
