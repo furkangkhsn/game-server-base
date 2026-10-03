@@ -1,14 +1,16 @@
 //! The controller on synthetic estimates and clocks: what is a signal
 //! and what is noise, a burst against a sustained signal, the rate it
 //! sets (delivered, not sent), how it grows back and opens again, the
-//! draining hold, the silent ring, and two sessions sharing one
+//! draining hold, silence, the drain, and two sessions sharing one
 //! bottleneck converging to equal shares. Round 4's path models (jitter,
 //! a standing queue, a room's sessions behind one link) are in `path`,
-//! the delay signal's own rules in `signal`.
+//! the delay signal's own rules in `signal`; round 5's base ring in
+//! `base`, its model of the B104 bottleneck in `link`.
 
 use super::*;
 
 mod base;
+mod link;
 mod path;
 mod queue;
 mod signal;
