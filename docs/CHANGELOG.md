@@ -5,6 +5,37 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## r4 — rUDP tıkanıklık tepkisi tur 4: titreşime dayanıklı gecikme sinyali, talebe göre artış, düşük taban (`net/r4-delay-signal`)
+
+- **Ölçüm (kullanıcı, 2026-10-03, `scripts/rudp-jitter.sh`, 64 istemci × 30
+  sn × 3, netem):** tur 3'ün `"pace"`'i darboğazsız titreşimde sağlıklı
+  oturumları hızlandırıyordu (jitter40/60: koşu başına 327/176 bölüm,
+  snapshot −%12/−%34) ve 3,6 Mbit'lik darboğazı boşaltamıyordu (tur ~1,4
+  sn; kayıp %51 → %37, ölen oturum 38 → 10). Tam tablo DESIGN §6.
+- **Teşhis:** tek örnekli gecikme kuralı (`son ≥ pencere tabanı + 30 ms`;
+  taban en şanslı örnek); 64 oturumun tabanı (4 bütçe/sn) bağlantının
+  ~%97'si; sabit artış her raporda bağlantının %83'ü. Ajanın çevrimdışı
+  modeli ölçümü yeniden üretti (jitter40: 291 bölüm, ölçülen 327).
+- **Düzeltme** (`udp::congestion`, yeni `congestion/signal.rs`): gecikme
+  sinyali en yeni turların küçüğü; eşik `clamp(5 × titreşim, 30, 300 ms)`
+  (titreşim = hızlı kadanstaki örneğin önceki üçünden geçen parabolden
+  uzaklığı, RFC 3550 kazancı); şüphe 30 ms'lik tek örnekle, hızlama 2
+  örnekte ayakta kuyruk + 4 örnekle bilinen titreşim (≥ 300 ms'de
+  beklemeden), hızlanırken 1 örnek keser, 5 ms'den çok düşüş tutar; artış
+  bölümün en yüksek talebinin ¼'ü/sn (açılma onun 1,25 katında); taban
+  1 bütçe/sn. Tel, sayaçlar, golden'lar değişmedi.
+- `rudp-jitter.sh` özete `verdict` (PASS/FAIL) ekledi; `overall: PASS`
+  varsayılan `"pace"`'in şartı. Varsayılan `"off"` kaldı.
+- **Bilinen bedel (yalnız `pace` açıkken):** r3 röle ölçümünde adalet
+  korundu (Jain 0,967–0,999) ama derin tamponda p95 +60–120 ms,
+  paylaşımlıda +30–60 ms, teslim −%4…−%10 (B140).
+
+Testler 2034 → 2044 (`otlp` ile 2052 → 2062): deterministik titreşim
+modelleri (`udp::congestion::tests::{path,signal}`); r3'ün kuralı (a) ve
+(b)'yi, r3'ün tabanı/artışı (c)'yi düşürüyor; 27 mutasyonun 27'si yakalandı
+(ikisi test eklendikten sonra). Ebeveyn doğrulaması: tam kapılar yeşil;
+titreşim çarpanını 5'ten 1'e indirmek üç testi düşürdü.
+
 ## t21 — B21 gerçek bilet doğrulaması: `gsb-ticket`, doğrulanmış talepler, lobi örneği (`feat/b21-tickets`)
 
 - **Tasarım (kullanıcı kararı 2026-10-03):** bilet tek sabit tip değil.

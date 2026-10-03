@@ -93,7 +93,7 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B100 Writer pump'ın write-stall penceresi (`write_stall_secs`, vars. 10 sn) aynı duvar saati riskini taşır — takılmadan uyanınca soket henüz bayt kabul etmeden zamanlayıcı ateşlenebilir; F72 kuralı uygulanabilir | yazıcı tarafının bir turu | DESIGN §3 "Geç ateşlenen son tarih" |
 | B101 QUIC'in protokol `max_idle_timeout`'u (quinn, `IDLE_TIMEOUT` 30 sn) takılmaya karşı korunmuyor; quinn'in zamanlayıcısı motorun elinde değil (bilgi; pump penceresi kendi kuralıyla) | bir dağıtım buna takılırsa | DESIGN §3 "Geç ateşlenen son tarih" |
 | B102 Demux'ın duruş log satırı `idle_windows_restarted_late`'i taşımıyor (sayaç tek seferlik örnekle toplayıcıya gider; satıra eklemek `demux.rs`'e alan ister) | rUDP hattının bir turu | OPS §3 (F72) |
-| B104 `udp_congestion` varsayılanını `"pace"`'e çevirme — B103 tamam; kullanıcı `scripts/rudp-jitter.sh`'ı koşar, sonucu (summary.txt) buraya işlenir: titreşimde yanlış hızlanma yoksa ve darboğaz görülüyorsa varsayılan `pace` olur | kullanıcının ölçümü | DESIGN §6 "Tıkanıklık tepkisi", `scripts/README.md` |
+| B104 `udp_congestion` varsayılanını `"pace"`'e çevirme — ilk ölçüm (2026-10-03) titreşimde yanlış tetiklenme gösterdi; tur 4 (r4) sinyali, artışı ve tabanı düzeltti; kalan: kullanıcı `scripts/rudp-jitter.sh`'ı yeniden koşar, `summary.txt`'nin `verdict`'i `overall: PASS` ise varsayılan `pace` olur | kullanıcının ölçümü | DESIGN §6 "Gecikme sinyali, artış ve taban — tur 4", `scripts/README.md` |
 | B105 Sunucunun kendi çıkışı darboğazken (100k) oturumlar arası adalet ölçülmedi; soket genelinde DRR elendi | düşerse | DESIGN §6 "Tıkanıklık tepkisi" karar 6 |
 | B106 Hızlıyken REL yeniden gönderiminin kovadan düşülmesi testsiz (mutasyon sağ) | düşerse | `udp::writer::reliable` |
 | B110 Sunucu el sıkışma başına 4 X25519 (snow statik açık anahtarı her responder kurulumunda yeniden türetiyor) — u89'da ölçüldü (~180 µs/el sıkışma yüklü 7950X, ~%25 statik türetme), B5a'da yüklü 130–136 µs, sessizde yeniden ölç; gerekirse `clatter` ya da kendi NK | B89/B5a | RUDP-SECURITY §4 |
@@ -122,6 +122,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B137 Tek kullanımlık bilet kümesi süreç içi | çok süreç | TICKETS §6 |
 | B138 Bilet sayaçları loadgen metrik telinde yok (tel düzeni + sihirli sayı gerekir) | bir ölçüm turu isterse | OPS |
 | B139 PASERK (`k4.public`/`k4.pid`) anahtar biçimi yok | — | TICKETS §16 |
+| B140 Hızlanan oturumun eşiği kendi testere dişinden arındırılmalı — röle ölçümünde tur 4, tur 3'e göre derin tamponda p95 +60–120 ms, paylaşımlıda +30–60 ms, teslim −%4…−%10 (köşeler titreşim tahminini 6–12 ms'ye taşıyor, eşik 30 yerine 30–60 ms) | B104 PASS sonrası ya da gecikmeye duyarlı oyun | DESIGN §6 tur 4 |
+| B141 Titreşimli yolda seyrek sahte bölüm — model: 300 oturum-dakikada 7–10 bölüm, bölüm başına ~2,5 kesinti (genç ya da düşük titreşim tahmini) | B104 ölçümünde jitter `verdict` FAIL | `udp::congestion::tests::path::jitter_alone_paces_rarely` |
+| B142 Zehirli taban — oturum, kuyruk zaten doluyken katılırsa pencereli tabanı kuyruğu sayar; yalnız kayıp ve 300 ms tavanı kurtarır (BBR ProbeRTT benzeri periyodik boşaltma düşünülebilir) | darboğaz `verdict` FAIL | DESIGN §6 tur 4 |
 
 ### C. Dağıtık, kalıcılık, ufuk
 
