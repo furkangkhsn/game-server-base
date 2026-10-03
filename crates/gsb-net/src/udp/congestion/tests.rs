@@ -117,6 +117,12 @@ fn a_burst_only_quickens_the_probes() {
     assert_eq!(c.state().phase, PathPhase::Open);
     assert_eq!(c.probe_interval(), PROBE_INTERVAL);
     assert_eq!(c.counts, ControlCounts::default());
+    // A delay hint then one lossy interval: not two loss signals in a
+    // row — still only suspected.
+    feed(&mut c, &mut t, 100_000, &[est(1000, 100, 0, 60, 20)]);
+    feed(&mut c, &mut t, 25_000, &[est(250, 25, 10, 20, 20)]);
+    assert_eq!(c.state().phase, PathPhase::Suspect, "one loss signal");
+    assert_eq!(c.counts, ControlCounts::default());
 }
 
 /// One unlucky round trip — far over the floor, once — is a hint, not a
@@ -250,12 +256,16 @@ fn a_draining_queue_holds_the_rate() {
     feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 100, 20)]);
     let r2 = c.paced().unwrap();
     assert!(r2 < r1, "still over and growing: cut again");
-    // …and drains: 100 → 70 ms.
+    // A fall under DRAIN_MIN is no drain: still over, cut again.
+    feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 97, 20)]);
+    let r2 = c.paced().unwrap();
+    assert_eq!(c.counts.cuts, 4, "97 ms: over and not draining");
+    // …and drains: 97 → 70 ms.
     feed(&mut c, &mut t, 100_000, &[est(250, 50, 0, 70, 20)]);
     assert_eq!(c.paced(), Some(r2), "a draining queue holds");
     feed(&mut c, &mut t, 100_000, &[est(250, 50, 10, 60, 20)]);
     assert!(c.paced().unwrap() < r2, "loss cuts, draining or not");
-    assert_eq!(c.counts.cuts, 4);
+    assert_eq!(c.counts.cuts, 5);
 }
 
 /// A whole ring of probes unanswered: a paced session halves its rate
