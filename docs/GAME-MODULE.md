@@ -1403,6 +1403,26 @@ artık evinden oraya yürür.
 - **Eski yol güveni** (SECURITY §4b): ticket'sız sunucuda karakter
   anahtarı istemcinin iddiası.
 
+### B21 — doğrulanmış talepler katılımda (2026-10-03)
+
+K4 kimliği katılım kancalarına taşımıştı; B21 yanına biletin
+**doğrulanmış oyun taleplerini** ekler (`ValidatedTicket::extra`, bayt
+olarak; docs/TICKETS.md §8). Kancalar ek ve varsayılanlıdır, hiçbir oyun
+değişmedi:
+
+- çekirdek: `GameLogic::on_join_verified(world, conn, &Joiner)` (varsayılan
+  `on_join_as`); sharded odanın yönlendiricisi `HomeShard = Arc<dyn
+  HomeRoute>` — eski `(bağlantı, kimlik)` kapanışları aynen derlenir,
+  talepleri okuyan yönlendirici `route_verified(|conn, joiner| …)`;
+- kit: `Game::spawn_player_verified` ve
+  `TeamGame::spawn_team_player_verified` (varsayılanları `_as`'lar); her
+  kit odası `on_join_verified`'ı bunlara iletir.
+
+Bir oyun "bu oyuncu şu ekipmanla gelir" bilgisini istemcinin sözünden
+değil platformun imzasından okur. Örnek: `examples/lobby` (2B demo, sınıfa
+göre doğuş). Durumsuz kontrol doğrulayıcıda, durumlu kontrol (kadro,
+dolu takım) burada — TICKETS §8 "Hangi kontrol nerede?".
+
 ### W2 sonucu — dördüncü oyun `game = "war"` ("Cephe", 2026-09-25)
 
 **Tamam** (`demo/w2-war`, `3e74f67..`; BACKLOG §1 satır 6b). Oyunun

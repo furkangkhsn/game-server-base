@@ -47,6 +47,23 @@ architecture for MOBA / MMORPG projects.
   WebSocket (RFC 6455; each binary message is a game frame). A mixed door list
   serving the same rooms is configured via the `[[listeners]]` table.
 
+## How a real deployment authenticates
+
+The game server never runs its own login. The platform (a lobby,
+matchmaking) logs the player in and answers a **join grant**: the
+server's doors, its rUDP static public key for the client to pin, a
+short-lived **signed ticket**, and the room. The client presents the
+ticket in `AUTH`; the server checks it through one seam,
+`gsb_core::auth::TicketAuth`, off the tick. The engine is
+format-agnostic — plug any validator — and ships one opt-in answer,
+`gsb-ticket`: PASETO v4.public (Ed25519) tickets that a lobby in any
+language can mint, generic over the game's own claims (a character, a
+loadout, entitlements) with a game check, key rotation and an optional
+single-use guard. Every accepted or refused ticket is counted by reason,
+and the verified claims reach the game's join hook. `examples/lobby`
+runs the whole flow (`cargo run -p gsb-example-lobby`); the design is in
+`docs/TICKETS.md`.
+
 ## Crate map
 
 | Crate | Task |

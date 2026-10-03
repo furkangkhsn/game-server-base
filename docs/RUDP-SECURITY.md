@@ -70,7 +70,7 @@
 |---|---|---|
 | 1 | `ring` / C kabul mü? | **Hayır**, bu yolda `ring`, `aws-lc` ve C yok. RustCrypto'nun içerideki SIMD `unsafe`'i kabul (bizim kodumuz değil); bizim kod `unsafe_code = "forbid"` altında |
 | 2 | DTLS uyumu gerekli mi? | Hayır. Yalnız kendi istemcilerimiz: Rust + ileride C#/Unity portu |
-| 3 | Sunucu kimliği | **Statik X25519 anahtarı.** Platform açık anahtarı bilet ve adresle birlikte verir, istemci sabitler (pin). PKI/sertifika yok |
+| 3 | Sunucu kimliği | **Statik X25519 anahtarı.** Platform açık anahtarı bilet ve adresle birlikte verir, istemci sabitler (pin). PKI/sertifika yok. **B21'de uygulandı:** lobinin `gsb_ticket::JoinGrant`'ı `udp_server_key`'i taşır, `gsb-client`'in `grant::connect`'i anahtarı izinden sabitler, anahtarsız izinle udp kapısına gitmez (docs/TICKETS.md §10) |
 | 4 | netcode tarzı bilet anahtarı kipi | Şimdi yok |
 | 5 | Kriptosuz göç (B3) | **Opt-in.** Kripto gelince varsayılan açık |
 | 6 | Kripto gelince düz metin | **Mühürlü (sealed) üretim varsayılanı;** düz metin yalnız açık bir dev/LAN anahtarıyla |

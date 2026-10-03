@@ -687,6 +687,8 @@ doğrulanmış kimliği yalnız resume anahtarı değil, oyunun **karakter
 anahtarıdır** da: sharded odanın join yönlendiricisi
 (`registry::HomeShard`) ve join kancası (`GameLogic::on_join_as` → kit'in
 `Game::spawn_player_as`) onu alır; MMO kayıtlı karakteri onunla bulur.
+B21'den beri yanında biletin doğrulanmış oyun talepleri de gelir
+(`on_join_verified`, `spawn_player_verified`, `HomeRoute`; §4c).
 
 | Yol | Kimlik | Güven |
 |---|---|---|
@@ -699,6 +701,22 @@ değişmedi). Kilit: `gsb-core/tests/join_identity.rs` (ticket yolunda
 iddia edilen ad yönlendiriciye/kancaya ulaşmıyor),
 `gsb-server/tests/mmo_home.rs::the_ticket_player_picks_the_character_not_the_claimed_name`
 (`bob` diyen istemci ann'in biletiyle ann'in karakterini alıyor).
+
+## 4c. İmzalı biletler (B21)
+
+Ticket hook'u artık hazır bir doğrulayıcıyla gelir (opt-in `gsb-ticket`,
+docs/TICKETS.md): PASETO v4.public (Ed25519, `verify_strict`), güvenilen
+yayıncı anahtarları `kid` ile (döndürme), `aud`, kayma paylı zamanlar,
+ömür tavanı, oyunun durumsuz kontrolü, isteğe bağlı tek kullanım
+(sınırlı, kapalı başarısız bekçi aktörü). Her ret normal rettir (ERROR
+10, bağlantı açık, bütçe dışı — §3.1 ve RPC-CONTROL-PLANE §7 aynen) ve
+sebebiyle sayılır (`gsb_net_tickets_rejected_total{reason}`). Sırlar:
+yayıncı tohumu yalnız lobide; `IssuerKey`'in `Debug`'ı gizli, düşerken
+silinir; config/anahtar hataları anahtar karakteri yazmaz; `JoinGrant`'ın
+`Debug`'ı bileti yazmaz. İstemci rUDP sunucu anahtarını izinden sabitler
+(RUDP-SECURITY karar 3). K4 tablosundaki "üretimde ticket hook'u zorunlu"
+kuralının hazır cevabı budur; doğrulanmış oyun talepleri de katılım
+kancalarına ulaşır (§4b'deki kimliğin yanında, TICKETS §8).
 
 ## 5. Test planı
 

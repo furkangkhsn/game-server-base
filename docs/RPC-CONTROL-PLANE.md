@@ -446,6 +446,20 @@ bütçesine **hiç girmez**, bağlantı **hayatta kalır**. Gerekçeler:
   `ERROR` kod **11**, yine normal ret — ve **local**dir (conn actor'ü,
   registry turundan ÖNCE yakalar; gereksiz round-trip yok).
 
+**Gerçek doğrulayıcı ve sayım (B21, docs/TICKETS.md).** Kanca değişmedi;
+hazır bir doğrulayıcı opt-in `gsb-ticket` crate'iyle gelir (PASETO
+v4.public, oyunun taleplerine göre jenerik, `Validator::into_auth` tek
+satır) ve sunucu `[ticket]` tablosundan da kurar (`ticket` feature).
+Base yine biçim bilmez: oyun kendi doğrulayıcısını takabilir. Eklenen iki
+şey ek ve varsayılanlı: (1) her AUTH kararı tek sebeple sayılır —
+doğrulayıcı sebebi `TicketError::Refused(TicketReason)` ile, oyunun
+kontrolü `TicketError::Game(GameReason)` ile adlandırır; serbest metinli
+`Rejected` `other`, zaman aşımı `timed_out`, boş bilet `missing`, ölen
+worker `validator_lost` sayılır; (2) `ValidatedTicket::extra` (oyunun
+doğrulanmış talepleri) tanımlı katılımla oda/shard katılım kancalarına
+ve ev yönlendiricisine taşınır. Ret yolu aynen normal rettir (kod 10,
+ağırlık 0, bağlantı canlı).
+
 **Tick senkronluğu:** doğrulama **conn actor'ünde** yaşanır, odada
 değil — oda tick gövdesi bir doğrulamayı **hiçbir zaman** beklemez.
 E2E testi bunu kilitler: 250 ms'lik bir doğrulama uçuşundayken, odada
@@ -1378,10 +1392,14 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
   topolojisi için tasarlanmıştı) — **sonradan kapatıldı**: yukarıdaki
   §10 notu ve `TRAIT-ARCHITECTURE.md` Faz 3; shard süit kilidi
   `crates/gsb-core/tests/rpc_shard.rs`.
-- **Gerçek bilet doğrulayıcıları:** base yalnız kancayı ve e2e demo
-  doğrulayıcılarını taşır (platform davranışı platformdadır).
-- **NATS/Kafka/gRPC adapter'ları:** yalnız in-proc referans
-  (ekonomi + result sink alıcısı).
+- ~~**Gerçek bilet doğrulayıcıları**~~ **Yapıldı (B21):** opt-in
+  `gsb-ticket` (PASETO v4.public, oyunun taleplerine jenerik, oyun
+  kontrolü, tek kullanım bekçisi, `[ticket]` config'i); base yine biçim
+  bilmez — docs/TICKETS.md.
+- ~~**NATS/Kafka/gRPC adapter'ları**~~ **Kararla kapsam dışı (B22,
+  2026-10-03):** dış servis adaptörü oyunun işi; motor
+  `RequestDecision::External` ve `ServerHandle::match_results`
+  dikişlerini verir — tarif docs/TICKETS.md §13.
 - **Bağlantı başına RPC geçmişi:** yanıtlanan id anında yeniden
   kullanılabilir (sınırsız seen-set yok).
 - **Sabitleme sonrası oda taşınması:** biletin odası, bağlantının
@@ -1442,6 +1460,9 @@ registry'nin tuttuğu bağlantı tablosunun taramasıdır — oda turu yok).
 | Kontrol düzlemi: idempotent açma (tek oda), çakışma, durum yaşam döngüsü | `control_plane.rs::*` |
 | Maç sonucu kapanışta dışarı (yeniden oluşturulabilir oda ikinci sonucu verir) | `control_plane.rs::match_result_reports_on_destroy` |
 | Bilet: geçerli/hatalı/boş/geç doğrulama; oda sabitlemesi; bütçe etkileşimi | `ticket.rs::*` |
+| Her AUTH kararı tek sebeple sayılır (oyun adı ayrı; delta iki kez sayılmaz) — B21 | `gsb-core/tests/conn_counts/tickets.rs` |
+| Doğrulanmış talepler yönlendiriciye ve katılım kancasına ulaşır — B21 | `gsb-core/tests/join_identity/claims.rs`, `gsb-kit/src/game/tests/claims.rs` |
+| PASETO v4 resmi vektörleri; her doğrulama kuralı; uçtan uca lobi → izin → mühürlü rUDP — B21 | `gsb-ticket/src/{paseto,validator}/tests.rs`, `examples/lobby/tests/lobby.rs` |
 | Ret nedenlerinin metni sabit (oda + shard + loadgen aynı sabitleri okur; baytlar aynı) | `gsb-core/src/rpc.rs::tests::the_rejection_reasons_are_pinned` |
 | Loadgen RPC defteri: ilk yanıt kapatır; ikinci yanıt yalnız dup; gönderilmemiş id yalnız eşleşmeyen; sınır geç / yanıtsız / açık'ı ayırır; çekirdek nedenleri sınıflanır | `gsb-server/src/loadgen/client/rpc/ledger/tests.rs` (6 test) |
 | Ayrılışta okunmamış istekler sayılır (tam bir kez, yalnız istekler); defter kapanır (oda + shard; ayrılış, despawn eden kopuş, yeniden katılım, resume, ölü göç) | `gsb-core/tests/rpc/unread.rs::requests_unread_when_the_leave_lands_are_counted`, `rpc_shard/unread.rs::*`, `src/room/tests/unread.rs::*`, `src/shard/tests/unread.rs::*` |

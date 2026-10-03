@@ -826,6 +826,19 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   Loadgen metrik telinin `server_closes` dizisi ve kayıp hüküm dizisi
   birer slot büyür (B90'ın sayacıyla birlikte **GSNK**);
   RESULT'ta `server_close_unauth_source_cap=`. Sınır yazılmadıkça hep 0.
+- **Bilet-auth sayımı (B21, docs/TICKETS.md §9).** Bilet-auth
+  sunucusunun karar verdiği her AUTH: `gsb_net_tickets_accepted_total`,
+  `gsb_net_tickets_rejected_total{reason}` (kapalı küme, sıfırlar dahil:
+  `missing`, `malformed`, `unknown_key`, `signature`, `claims`, `expired`,
+  `not_yet_valid`, `lifetime`, `audience`, `replayed`,
+  `replay_unavailable`, `game`, `other`, `timed_out`, `validator_lost`),
+  `gsb_net_ticket_game_rejects_total{check}` (oyunun ret adları, sayılınca
+  görünür) ve `gsb_net_ticket_game_names_dropped_total` (8 adı aşan,
+  sıfırdan büyükken); OTLP'de `_total`'sız aynı adlar. Log:
+  `gsb-metric scope=tickets accepted=… rejected=… reject_<reason>=…
+  game_<ad>=…` — yalnız bir AUTH'a karar verilmişse. Yerel auth
+  sunucusunda hepsi 0 (satır yok). Loadgen metrik teli taşımaz (düzen
+  değişmedi).
 - **Net kapsamı: girdi hız sınırı (E1).** Odanın hız sınırını aşıp
   bağlantı aktöründe düşürülen geçerli oyun girdisi:
   `gsb-metric scope=net` satırında `violations=`'dan hemen sonra

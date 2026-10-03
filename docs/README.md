@@ -18,5 +18,6 @@ These design documents are written in Turkish. All code and API documentation in
 | `ROADMAP.md` | Prioritized backlog tracking closed milestones, active work, and open development items. |
 | `RPC-CONTROL-PLANE.md` | Design specification for asynchronous out-of-tick RPC handling and runtime room lifecycle control. |
 | `SECURITY.md` | Security design contract defining TLS integration, authentication rate limiting, and pre-authentication resource allocation limits. |
+| `TICKETS.md` | Signed tickets (B21): the opt-in `gsb-ticket` crate (PASETO v4.public, claims generic over the game, key rotation, replay policy), ticket-outcome counting, verified claims at join, the lobby's join grant, the `[ticket]` config, a TypeScript minting example, the B22 service-adapter recipe and the `examples/lobby` showcase. |
 | `TICK-ARCHITECTURE.md` | Design discussion and rationale for broadcast-based tick distribution and non-blocking action channel draining. |
 | `TRAIT-ARCHITECTURE.md` | Design contract for unifying common game logic under a shared supertrait across room and shard implementations. |
