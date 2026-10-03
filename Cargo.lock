@@ -856,6 +856,7 @@ dependencies = [
  "gsb-lint",
  "gsb-net",
  "gsb-protocol",
+ "gsb-ticket",
  "prost",
  "quinn",
  "rustls",
@@ -958,6 +959,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "gsb-example-lobby"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bytes",
+ "gsb-client",
+ "gsb-core",
+ "gsb-demo",
+ "gsb-kit",
+ "gsb-lint",
+ "gsb-protocol",
+ "gsb-server",
+ "gsb-ticket",
+ "prost",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "gsb-kit"
 version = "0.1.0"
 dependencies = [
@@ -1035,6 +1059,7 @@ dependencies = [
  "gsb-lint",
  "gsb-net",
  "gsb-protocol",
+ "gsb-ticket",
  "prost",
  "quinn",
  "rcgen",

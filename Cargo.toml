@@ -14,6 +14,8 @@ members = [
     "crates/gsb-demo-war",
     "crates/gsb-server",
     "crates/gsb-ticket",
+    # The B21 showcase (lobby → grant → server → client); not a library.
+    "examples/lobby",
 ]
 
 [workspace.package]

@@ -1,0 +1,40 @@
+[package]
+name = "gsb-example-lobby"
+description = "The B21 showcase: a lobby that mints signed join grants, a server that validates them (with a game check and claims read at join) over sealed rUDP, and a client that logs in, connects from the grant and plays."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+# `cargo run -p gsb-example-lobby` runs the whole flow in one process
+# (README.md); `tests/lobby.rs` keeps it from rotting.
+[[bin]]
+name = "lobby"
+path = "src/main.rs"
+
+[dependencies]
+gsb-core = { workspace = true }
+gsb-kit = { workspace = true }
+gsb-demo = { workspace = true }
+gsb-protocol = { workspace = true }
+gsb-ticket = { workspace = true }
+gsb-client = { workspace = true, features = ["grant"] }
+# `ticket`: the second test starts a server from a `[ticket]` table.
+gsb-server = { workspace = true, features = ["ticket"] }
+bevy_ecs = { workspace = true }
+bytes = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

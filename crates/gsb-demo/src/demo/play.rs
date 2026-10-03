@@ -124,7 +124,7 @@ impl Game for DemoGame {
     }
 }
 
-/// The demo's team policy: conn parity (see [`spawn::team_of`]).
+/// The demo's team policy: conn parity (`spawn::team_of`).
 impl TeamGame for DemoGame {
     fn team_of(&mut self, _world: &World, conn: ConnectionId, _entity: Entity) -> Team {
         spawn::team_of(conn)

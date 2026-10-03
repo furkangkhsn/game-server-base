@@ -55,6 +55,10 @@ mod demo;
 // generic rooms instantiated with the demo game, and the kit-owned items
 // (`WireId`, `Cell`, `Team`, …) are re-exported from `gsb_kit`.
 
+/// The demo's [`Game`](gsb_kit::game::Game) itself, for a game that
+/// composes it (the B21 lobby example wraps it to spawn by the ticket's
+/// verified claims — `examples/lobby`).
+pub use demo::play::DemoGame;
 pub use demo::{economy, game, op, register, systems};
 pub use gsb_kit::DEFAULT_DISCONNECT_GRACE;
 
