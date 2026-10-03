@@ -2485,9 +2485,11 @@ aynı kovadan düşülür, oyun bandı ona yer açar. Oyunun ne göndermesi
 gerektiği taşımanın kararı değildir; taşıma yolun ne taşıdığını söyler
 (`PathState`, aşağıda "Oyuna sinyal").
 
-*Açma/kapama (opt-in).* Sunucu anahtarı `udp_congestion = "off" | "pace"`
-(OPS §2); `UdpTransportConfig::congestion`. Varsayılan `"off"`: yazıcı
-bugünkünün aynısı (denetleyiciye hiç dokunulmaz). `"pace"`'te bile
+*Açma/kapama.* Sunucu anahtarı `udp_congestion = "off" | "pace"`
+(OPS §2); `UdpTransportConfig::congestion`. Varsayılan `"pace"` (B104
+kapandı — aşağıda "Ölçüm — tur 5 sonrası, B104 kapandı"; tur 3–5 boyunca
+`"off"`'tu). `"off"` açık vazgeçiştir: yazıcı tur 3 öncesinin aynısı
+(denetleyiciye hiç dokunulmaz). `"pace"`'te bile
 **raporlamayan istemci** (eski istemci, `game_reports: false`) tahmin
 üretmez, hep `Open` kalır: bugünküyle bayt-bayt, sırasıyla aynı
 (`udp::tests::pace::a_client_that_does_not_report_gets_the_same_bytes`
@@ -2730,7 +2732,8 @@ taşıyabileceğinin altında tutardı. Yeni görev yok (besleme gönderme
 yarısında), posta kutusu beklenmez.
 
 *(d) Varsayılan.* `udp_congestion = "off"` kaldı; B104 (titreşim ölçümü
-ve bu tur) çevirir.
+ve bu tur) çevirir. *(2026-10-03: çevrildi — varsayılan `"pace"`, aşağıda
+"Ölçüm — tur 5 sonrası, B104 kapandı".)*
 
 *Faz 2: rUDP yazıcısı yayımlar (B3'ten sonra, 2026-10-02).*
 
@@ -3203,6 +3206,61 @@ yok/kazanç 1/kalıcı/5 sn, şüphede iki sinyal. Tur 4 kodu `link`'i düşür�
 (ölçüm değil): `bottleneck` `lost%` `off`'un %45–48'i, `rtt_ms` %13–14'ü;
 `bottleneck_jitter` %39–43 ve %15; titreşim satırları tur 4'ün aynısı.
 Loadgen metrik telinin düzeni değişti (bir transport sayacı daha).
+
+**Ölçüm — tur 5 sonrası, B104 kapandı (2026-10-03).** Bakımcı
+`scripts/rudp-jitter.sh`'ı tur 5 koduyla yeniden koştu
+(`target/rudp-jitter/20261003-232036`, aynı betik, aynı makine, 64
+istemci, 30 sn, 3 koşu): `verdict` **`overall: PASS (6 of 6)`**.
+
+| senaryo | `pace` snapshot/sn (`off`'a göre) | hızlamanın düşürdüğü | istemci başına kesinti | `lost%` `pace` / `off` | `rtt_ms` `pace` / `off` | `ends` `pace` / `off` |
+|---|---|---|---|---|---|---|
+| `jitter20`, `jitter40`, `jitter60`, `jitter40_loss1` | %99,6–99,8 | %0,13–0,30 | 0,19–0,35 | — | — | — |
+| `bottleneck` | %84 (630 / 750) | — | — | %18,87 / %51,18 (oran 0,37) | 203 / 1 438 (0,14) | 0 / 29 |
+| `bottleneck_jitter` | %84 (622 / 744) | — | — | %19,51 / %50,91 (0,38) | 255 / 1 403 (0,18) | 0 / 0 |
+
+Ölçüt (snapshot ≥ %98, düşen ≤ %1, kesinti ≤ 1; `lost%` ≤ ½, `rtt_ms` ≤
+⅓, `ends` ≤ `off`) her satırda geçti. Darboğazda iki senaryo da 64 bölüm
+(her oturum hızlandı); kayıp modelin tahmininden iyi (oran 0,37–0,38,
+model 0,39–0,48), tur aynı ya da biraz kötü (0,14–0,18, model 0,13–0,15).
+Darboğazda `pace`'in snapshot/sn'si `off`'unkinin %84'ü — `off`'un
+fazlası kuyruğun 1,4 sn geç teslim ettikleridir, `pace` yolun taşımadığını
+gönderirken düşürür. Titreşimde bağlanma süresinin p99'u (`conn_p99`)
+gürültülü: `jitter40_loss1` `pace` 343 ms (en kötü koşu 450), `off` 276
+(295); öteki üçünde `pace` `off`'un ±%10'u içinde (126/137, 250/240,
+385/427). Önceki koşular kayıt için: `20261003-021419` (tur 3 kodu,
+KALDI), `20261003-160018` (tur 4 kodu, titreşim GEÇTİ, darboğaz KALDI). **Varsayılan `"pace"` oldu**
+(`UdpCongestion::default()`, sunucunun `udp_congestion`'ı, loadgen'in
+`--udp-congestion`'ı verilmezse); `"off"` açık vazgeçiş olarak kaldı;
+raporlamayan istemci yine hiç hızlanmaz. Metrik, golden ve tel düzeni
+değişmedi (yalnız varsayılan). Boşaltma (`transport_udp_game_paced_drains`)
+42 koşunun hepsinde 0 — modeldeki gibi (BACKLOG B144).
+
+*Röle ölçümü, tur 5 kodu* (`udp::tests::pace::measure`, `--ignored`, aynı
+makine, 2026-10-03, tek koşu, yük 3,1–4,4; `pace` satırları, tur 4
+aralıklarıyla — yukarıda "Röle ölçümü önce/sonra").
+
+| senaryo | kod | mesaj/sn | oyun yaşı p50 / p95 / max ms | kontrol yaşı p50 / p95 ms | kesinti | teslim | Jain |
+|---|---|---|---|---|---|---|---|
+| derin | tur 4 | 19,0; 18,1 | 107–114 / 211–268 / 257–290 | 52–55 / 171–225 | 8–9 | 759; 735 KB | — |
+| derin | tur 5 | 18,0 | 109 / 215 / 250 | 43 / 138 | 11 | 745 KB | — |
+| sığ | tur 4 | 19,0; 19,1 | 101–103 / 149–153 / 168–169 | 44–45 / 92–103 | 8 | 797; 795 KB | — |
+| sığ | tur 5 | 18,9 | 98 / 147 / 171 | 44 / 93 | 8 | 764 KB | — |
+| paylaşımlı (oturum başına) | tur 4 | 9,7–16,3 | 98–126 / 170–207 / ≤231 | 38–43 / 112–141 | 119–120 | 6,76; 6,79 MB | 0,995; 0,967 |
+| paylaşımlı (oturum başına) | tur 5 | 12,8–15,4 | 98–105 / 168–181 / ≤205 | 35–38 / 108–118 | 124 | 6,72 MB | 0,995 |
+| darboğazsız | tur 5, ikisi | 30,5 | 21 / 21–22 / 22 | 21 / 21–22 | 0 | 915 414 B | — |
+
+**Okuma:** tur 5 röle sonuçlarını tur 4'ün koşudan koşuya aralığında
+bırakır — sonda ufku, lütuf, taban ve boşaltma tek darboğazlı/paylaşımlı
+rölede ne iyileştirdi ne bozdu (`pace` derinde 1 bölüm, paylaşımlıda 4;
+boşaltma sayacı bu testin çıktısında yok). Tur 3'e göre gerileme
+(derin p95 +68 ms, paylaşımlı +20–40 ms, teslim −%5…−%9) sürüyor: B140
+açık kalır. Paylaşımlıda adalet tur 4'ün iyi koşusu gibi (0,995; dört
+oturum da hızlandı). `off` satırları: derin ve darboğazsız aynı; sığ
+`off` bu koşuda 2,2 mesaj/sn (2026-10-02 tablosunda 9,0; yarım FRAG 383'e
+karşı 293) ve paylaşımlı `off` Jain 0,499 (0,274). Sığ `off`'ta bağlantı
+derin `off` kadar bayt teslim etti (840 / 838 KB) ama dörtte biri kadar
+tam mesaj: kuyruk sonu düşürmenin 3 parçalı mesajlarla hizası koşudan
+koşuya oynar; `off` yazıcısının yolu değişmedi.
 
 **Bağlantı göçü (BACKLOG B3 — 2026-10-02, opt-in; bakımcı kararları
 RUDP-SECURITY §2 #5 ve #10).** Eskiden demux oturumu istemcinin
@@ -5186,7 +5244,7 @@ beklememesi; `Stop`'u yok sayması; demo modülünün ekonomiyi kaydetmemesi.
 | `max_snapshot_bytes` aşımında yalnızca uyarı (grup başına bir kez) + `snap_overflows` sayacı | Payload çekirdekte bölünmez; rUDP'de eşiği aşan kare **taşımada parçalanır** (§6 "MTU"), yani sayaç artık bant genişliği/parçalanma sinyali — kayıp sinyali istemcinin `frag_dropped_incomplete`'i | uyarıya göre grubu böl (AOI) / hızı düşür (§8) |
 | Oda hizi global tick hızını tam bölmeli | broadcast ticker + adım atlama (`run_every`) | global hız tek kaynak; dinamik adaptif tick gelecek |
 | ~~Accept loop abort~~ *(kapandı — B16: `close` bekleyen accept'i bitirir, döngü kendiliğinden döner; abort yalnız 1 sn'yi aşan döngüye geri sigorta)* | — | §9 |
-| rUDP: **tıkanıklık tepkisi opt-in, oyuna sinyal yok** *(B1 tur 3: `udp_congestion = "pace"` — raporlayan oturumun oyun bandı tahmini yol hızına göre hızlanır, en eski kareler düşer + sayılır; varsayılan `"off"`)* | Varsayılan kapalı: titreşimli gerçek yolda sahte gecikme sinyali ölçülmedi; `PathState` henüz odaya ulaşmıyor, oyun içeriğini yola göre inceltemez | sinyal çekirdek/kite (sonraki tur — §6 "Tıkanıklık tepkisi"), sonra varsayılanın çevrilmesi |
+| ~~rUDP: tıkanıklık tepkisi opt-in, oyuna sinyal yok~~ *(kapandı — sinyal B103'te çekirdeğe/kite ulaştı (`TickCtx::budget`, `SnapshotBudget`); varsayılan B104'te `"pace"` oldu (§6 "Ölçüm — tur 5 sonrası, B104 kapandı"); `"off"` açık vazgeçiş)* | — | — |
 | rUDP: ~~şifreleme/imza yok~~ — **B5a'da kapandı** | Mühürlü kapı (sunucu varsayılanı): Noise NK + ChaCha20-Poly1305 kayıt katmanı, sunucu statik anahtarı config'de (§6 "Kayıt katmanı", `docs/RUDP-SECURITY.md`). Düz metin yalnız açık `udp_security = "plaintext"` (dev/LAN); orada çerez anahtarı tahmin edilemezdir ama hiçbir şey imzalanmaz ya da şifrelenmez | B5b'de (2026-10-03) rekey politikası ve stateless reset yapıldı (§6 "Anahtar fazları ve stateless reset"); kalan: CID rotasyonu (tasarım RUDP-SECURITY §10), dış inceleme (D13, kapsam RUDP-SECURITY §11) |
 | rUDP: parçalama **yalnız oyun bandında, yalnız sunucu → istemci**, mesaj başına en çok 16 parça (varsayılan bütçede 23 472 B); aşan kare atılır + sayılır; kontrol bandı parçalanmaz (aşan kontrol karesi oturumu bitirir) | ölçülen en büyük full 10 267 B (arena 1000; W2'de savaş 1000'in keep-alive full'ü ~18,5 KB — CROSS-SHARD §8b.8); yeniden gönderim yok — bant kendini iyileştirir; istemci durumu sabit sınırlı (§6 "MTU", SECURITY §4.1) | daha büyük kareler için grup bölme (AOI) — §8 |
 | ~~rUDP: SO_RCVBUF ayarı yok~~ *(kapandı — B4: `udp_recv_buffer_bytes`/`udp_send_buffer_bytes`, rUDP ve QUIC kapıları, `socket2` ile; yazılmazsa dokunulmaz — §6 "UDP kapılarının soket arabellekleri")* | — | — |
