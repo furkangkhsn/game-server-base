@@ -23,7 +23,7 @@
 | El sıkışma accept döngüsünün dışında, kapı başına sınırlı (WS/TLS/QUIC; sessiz tek soket kapıyı kilitliyordu) | B31 | ✅ Uygulandı (§4.3; DESIGN §6 "El sıkışan kapılar") |
 | rUDP kayıt katmanı: Noise NK el sıkışması + ChaCha20-Poly1305 kayıtları, sunucu statik anahtarı config'de, mühürlü kip varsayılan | B5a | ✅ Uygulandı (§4.7; DESIGN §6 "Kayıt katmanı"; `docs/RUDP-SECURITY.md`) |
 | rUDP anahtar fazı politikası (2 dk / 2^20 kayıt, ACK'le onaylı) ve stateless reset (config'deki ya da statik anahtardan türetilen reset anahtarı, kısa ve oranlı reset) | B5b | ✅ Uygulandı (§4.8; DESIGN §6 "Anahtar fazları ve stateless reset"). Kalan: CID rotasyonu (tasarım RUDP-SECURITY §10), dış inceleme (D13, kapsam RUDP-SECURITY §11) |
-| rUDP tıkanıklık tepkisi | B1 | ✅ Opt-in (`udp_congestion = "pace"`, DESIGN §6) |
+| rUDP tıkanıklık tepkisi | B1, B104 | ✅ Varsayılan (`udp_congestion = "pace"`; `"off"` açık vazgeçiş — DESIGN §6) |
 | Admin HTTP auth | OPS.md NOT-DONE (localhost sözleşmesi) |
 | Ops HTTP istek başlığına süre sınırı (sessiz / damlatan eş görevini tutmaz; 5 sn, sonra tek `408`) | B47 | ✅ Uygulandı (OPS §3 "İstek başlığının süre sınırı"); eşzamanlı ops bağlantı tavanı ve yanıt yazmanın süre sınırı yok (§6) |
 

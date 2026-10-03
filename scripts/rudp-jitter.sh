@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # rudp-jitter.sh — B104: can `udp_congestion` default to "pace"?
+# (Answered yes on 2026-10-03 with round-5 code; "pace" is the default
+# now. Re-run it when the congestion controller changes.)
 #
 # Runs the same rUDP load under `--udp-congestion off` and `pace` while a
 # netem qdisc on the loopback interface shapes the path, and prints one

@@ -91,4 +91,9 @@ DESIGN §6 "Tıkanıklık tepkisi"; her senaryo iki kipte de ölçüldüyse):
   6'sında kalır (2026-10-03 ölçümü: titreşimde istemci başına 4–47 kesinti,
   darboğazda tur `off`'un %96'sı).
 
-Sonucu ve `summary.txt`'yi BACKLOG B104'e işleyin.
+**Cevap (2026-10-03):** tur 5 koduyla `overall: PASS (6 of 6)`
+(`target/rudp-jitter/20261003-232036`) — varsayılan `"pace"` oldu, B104
+kapandı (DESIGN §6 "Ölçüm — tur 5 sonrası, B104 kapandı"). Betik iki
+kipi hâlâ açıkça koşar (`--udp-congestion off|pace`); tıkanıklık
+denetleyicisi değişince aynı ölçütle yeniden koşun ve sonucu DESIGN §6'ya
+işleyin.

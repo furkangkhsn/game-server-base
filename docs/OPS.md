@@ -270,12 +270,11 @@ rUDP sertleştirme 3).** Her rUDP kapısının yazıcıları — düz anahtardan
 türeyen kapı ya da `[[listeners]]`'ın her `udp` girdisi.
 
 ```toml
-udp_congestion = "pace"   # vars. "off"
+udp_congestion = "off"   # vars. "pace"
 ```
 
-- **`"off"` (varsayılan):** her yazıcı her kareyi anında yollar — kapı
-  anahtardan önceki gibi, bayt bayt.
-- **`"pace"`:** raporlayan (varsayılan `UdpClient`) ve yolu odanın
+- **`"pace"` (varsayılan — B104 ölçümüyle, 2026-10-03; DESIGN §6
+  "Ölçüm — tur 5 sonrası, B104 kapandı"):** raporlayan (varsayılan `UdpClient`) ve yolu odanın
   gönderdiğini taşıyamayan oturum, yolun tahmini hızına göre hızlanır;
   50 ms içinde gönderilemeyen EN ESKİ oyun bandı kareleri düşer ve
   sayılır (§3 "Taşıma kapsamı: rUDP tıkanıklık tepkisi"). Kontrol bandı
@@ -287,19 +286,21 @@ udp_congestion = "pace"   # vars. "off"
   tepkisi"). B103'ten beri yazıcı yolun durumunu odaya da söyler
   (yalnız `"pace"`'te, yalnız haber olduğunda: `TickCtx::budget`); kit
   odası `with_snapshot_budget` ile inceltirse tutulan kareler
-  `gsb_room_snapshots_withheld_total`'da görünür. `"off"`'ta odaya
-  hiçbir şey söylenmez.
-- **Ne zaman açılır:** istemcilerin bir kısmı darboğazlı yoldaysa (mobil,
-  zayıf ev bağlantısı) ve `udp_game_datagrams_reported_lost` /
-  `reported_sent` oranı ya da sonda turu (`udp_game_rtt_sum_us ÷
-  udp_game_rtt_samples`) yükseliyorsa. Açıkken `udp_game_paced_episodes`
-  hızlanan oturumları, `udp_game_frames_dropped_paced` ÷
-  `udp_game_frames_queued_paced` düşürülen payı verir.
+  `gsb_room_snapshots_withheld_total`'da görünür.
+- **`"off"` (açık vazgeçiş):** her yazıcı her kareyi anında yollar — kapı
+  tur 3'ten önceki gibi, bayt bayt; odaya hiçbir şey söylenmez. Ölçüm:
+  titreşimli yolda `pace` snapshot'ın %99,6–99,8'ini teslim etti, darboğazda
+  kaybı `off`'un %37–38'ine, sonda turunu %14–18'ine indirdi.
+- **İzlemek:** `udp_game_paced_episodes` hızlanan oturumları,
+  `udp_game_frames_dropped_paced` ÷ `udp_game_frames_queued_paced`
+  düşürülen payı, `udp_game_datagrams_reported_lost` / `reported_sent`
+  oranı ve sonda turu (`udp_game_rtt_sum_us ÷ udp_game_rtt_samples`)
+  yolun kendisini verir.
 - **Katman yok:** tek sunucu anahtarı; `[rooms.<id>]` ve `[[listeners]]`
   girdisi reddeder. Bilinmeyen değer ayrıştırma hatası.
 - **Yük üretecinde (B104):** `--udp-congestion off|pace` süreç-içi ya da
   sunulan (`--serve`, orkestratörün sunucu çocuğu) sunucunun
-  `udp_congestion`'ını ayarlar; verilmezse config varsayılanı (`off`).
+  `udp_congestion`'ını ayarlar; verilmezse config varsayılanı (`pace`).
   İstemci süreçlerine gitmez. RESULT satırı karşılaştırmanın girdilerini
   taşır: `transport_udp_game_paced_episodes`, `…_paced_rate_cuts`,
   `…_frames_queued_paced`, `…_frames_dropped_paced`,
@@ -307,12 +308,13 @@ udp_congestion = "pace"   # vars. "off"
   `…_rtt_samples`, `connect_p50_ms`, `connect_p99_ms`, `snap_per_s`
   (istemcilerin toplam snapshot hızı), `udp_ends_*` (istemcinin bitirdiği
   rUDP oturumları, nedeniyle — B128) ve `udp_congestion=off|pace|default`.
-  **Varsayılan ne olmalı:** `scripts/rudp-jitter.sh` aynı yükü iki kipte,
+  **Varsayılanın dayanağı:** `scripts/rudp-jitter.sh` aynı yükü iki kipte,
   loopback'e netem ile titreşim, kayıp ve gerçek darboğaz koyarak koşar
   (sudo gerekir; `scripts/README.md`) — titreşim tek başına hızlanma
   tetiklememeli, darboğaz tetiklemeli; `summary.txt`'nin sonundaki
   `verdict` bölümü senaryo başına PASS/FAIL ve `overall` verir (ölçüt:
-  DESIGN §6 "Tıkanıklık tepkisi", tur 4).
+  DESIGN §6 "Tıkanıklık tepkisi", tur 4). Tur 5 koduyla `overall: PASS
+  (6 of 6)` — varsayılan `"pace"` oldu.
 
 **Sunucu düzeyi: rUDP kayıt katmanı `udp_security`, sunucu anahtarı
 `udp_static_key` / `udp_static_key_file`, el sıkışma bütçesi
