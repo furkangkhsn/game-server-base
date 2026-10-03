@@ -13,6 +13,8 @@
 //!   after the frames received before it (on rUDP, which has no FIN,
 //!   the client's own verdict: its reliable band died, a stateless
 //!   reset, a record-layer limit).
+//! - `grant` (feature `grant`): connect and join from a lobby's join
+//!   grant — the door, the pinned rUDP server key, the ticket, the room.
 //! - [`session`]: the base protocol's steps — AUTH (with or without a
 //!   ticket), JOIN, HEARTBEAT, LEAVE, the resume key — as plain async
 //!   functions; an `ERROR` frame comes back as a typed [`ServerError`]
@@ -37,6 +39,8 @@ pub mod conn;
 pub mod connect;
 pub mod error;
 pub mod frame;
+#[cfg(feature = "grant")]
+pub mod grant;
 pub mod quic;
 pub mod session;
 pub mod tls;

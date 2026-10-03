@@ -32,6 +32,15 @@ sha1 = { workspace = true }
 getrandom = { workspace = true }
 base64 = { workspace = true }
 
+# The lobby's join grant (`grant` module, BACKLOG B21): opt-in, so a
+# client that authenticates otherwise never compiles the ticket crate.
+gsb-ticket = { workspace = true, optional = true }
+
+[features]
+# `grant`: connect from a lobby's `gsb_ticket::JoinGrant` (doors, the
+# rUDP server key to pin, the ticket, the room).
+grant = ["dep:gsb-ticket"]
+
 [build-dependencies]
 gsb-lint = { workspace = true }
 
