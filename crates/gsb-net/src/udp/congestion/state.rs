@@ -1,4 +1,4 @@
-//! The congestion response's public surface: the opt-in switch, and the
+//! The congestion response's public surface: its switch, and the
 //! per-session path state a game (through its kit) reads to thin its
 //! content. A CHILD of [`super`].
 //!

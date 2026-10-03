@@ -31,7 +31,7 @@ pub(crate) struct ServerOverrides {
     /// The UDP door's receive buffer (`None` = config default:
     /// untouched, B4).
     pub(crate) udp_recv_buffer: Option<u32>,
-    /// The rUDP congestion response (`None` = config default: off, B104).
+    /// The rUDP congestion response (`None` = config default: pace, B104).
     pub(crate) udp_congestion: Option<gsb_server::UdpCongestionKind>,
     /// The rUDP record layer (B5a): sealed — under an ephemeral key drawn
     /// here, its public half on the server handle — or plaintext.
