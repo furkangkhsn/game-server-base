@@ -2327,7 +2327,9 @@ gönderileninden birkaç fazla yapar: o fazlalık **sonraki aralığa taşınır
 aralık o kadar kayıp gösterirdi). İlk aralık oturum başından (`S = 0`,
 alınan 0) ilk cevaplanan sondaya dek. Sonda yeniden gönderilmez; halkada
 en çok `PROBE_RING` (4) bekleyen sonda; daha yeni bir sondanın cevabı
-eskileri "cevapsız" sayar.
+eskileri "cevapsız" sayar. *(Tur 5: sonda cevabını `PROBE_HORIZON` = 4 sn
+bekler, her kadansta; halka bir ufku hızlı kadansta tutar — 16. Aşağıda
+"Taban, sessizlik ve boşaltma — tur 5".)*
 
 *Doğrulama — bir istemcinin iddiası durumu zehirleyemez* (her şey kendi
 oturumunda, saf durum, `udp::feedback::tests`): duyurmamış oturumdan ya da
@@ -2506,7 +2508,11 @@ hâli, B104 — aşağıda "Gecikme sinyali, artış ve taban — tur 4").* Eşi
 | `Paced` (hızlanır, sonda 250 ms) | hız += ¼ × bölümün en yüksek talebi/sn; hız ≥ 1,25 × o talep → `Open` | kayıp ya da en yeni turda kuyruk: hız = min(hız, teslim) × β (en yeni tur 5 ms'den çok düştüyse — boşalıyor — ve kayıp yoksa: hız tutulur, artmaz da) |
 
 Bir halka dolusu (4) sonda cevapsız kalırsa (`Paced`'te): hız yarıya
-(örnek yok — klasik zaman aşımı tepkisi). Taban: saniyede 1 datagram
+(örnek yok — klasik zaman aşımı tepkisi). *(Tur 5: halka değil 4 sn'lik
+ufuk; `Open` → `Suspect`, `Suspect` → `Paced` (talebin yarısı) de olur;
+taban pencerenin eşikten fazla üstüne çıkamaz; 2 sn+'lık aralıkta tek
+kayıp sinyali hızlandırır; 10 sn tabana yakın tur görmeyen hızlı oturum
+boşaltır — aşağıda "Taban, sessizlik ve boşaltma — tur 5".)* Taban: saniyede 1 datagram
 bütçesi (1472 B/sn; tur 3'te 4 — tur 4'te düşürüldü).
 
 *Kararlar ve gerekçeleri (ve elenenler).*
@@ -2599,7 +2605,10 @@ bütçesi (1472 B/sn; tur 3'te 4 — tur 4'te düşürüldü).
    (`FAST_PROBE_INTERVAL`; 30 Hz'de ~8 datagram/aralık — kayıp çözünürlüğü
    kaba ama tepki ~1,25 sn). **B91:** halka dolusu sonda cevapsız
    kaldıktan sonra her tahliyede aralık ikiye katlanır, en çok 8×
-   (`SILENT_BACKOFF_MAX`); ilk cevap kadansı geri getirir. Okumayı bırakan
+   (`SILENT_BACKOFF_MAX`); ilk cevap kadansı geri getirir. *(Tur 5:
+   geri çekilme ancak art arda 4 tahliyeden sonra başlar —
+   `SILENT_GRACE`: tıkalı yol sondaların çoğunu kaybeder, sessiz istemci
+   sanılmamalı.)* Okumayı bırakan
    istemci artık saniyede değil 8 sn'de bir sonda alır. İki modda da
    geçerli: sonda bedeli düzeltmesidir, hızlama değil — hiç raporlamayan
    istemci zaten hiç sondalanmaz (test
@@ -3053,6 +3062,147 @@ bölüm var, `lost%` ≤ `off`'un yarısı, `rtt_ms` ≤ üçte biri, `ends` ≤
 Tur 3'ün verisi 6/6 KALIR. Model tahmini (ölçüm değil): titreşimde koşu
 başına ~8 bölüm, 22–30 kesinti, 180–440 düşen kare, snapshot −%0,4…−%0,9;
 darboğazda `lost%` ~%17 (`off` ~%51), `rtt_ms` 210–285 (`off` ~1970).
+
+**Taban, sessizlik ve boşaltma — tur 5 (B142, 2026-10-03).** Bakımcının
+tur 4 ölçümü (`target/rudp-jitter/20261003-160018`, aynı betik, aynı
+makine, tur 4 kodu): dört titreşim senaryosu GEÇTİ; darboğaz KALDI —
+`bottleneck` `lost%` `off`'un %66'sı (ölçüt ≤ %50), `rtt_ms` %42'si (≤
+%33); `bottleneck_jitter` %63 ve %55. Koşu başına `pace`'te 1 038–1 561
+cevapsız sonda (5 000'de) ve 439–898 GEÇ rapor; `off`'ta 1 300 sondanın
+~580'i cevapsız.
+
+*Model (`udp::congestion::tests::link`).* Ölçümü üreten deterministik
+bir model, repo'da: netem'in tfifo'su (iki yön TEK kuyruk, hız loopback
+başlıklarıyla — 42 B, 1000 paket sınırı, kuyruk sonu düşürme), 64
+oturum, oda her tick'te her oturuma ~470 B (tick içine yayılmış), her
+istemciye 150 ms'de bir girdi; oturumlar gerçek `Control`, `PaceQueue` ve
+`Feedback` ile, yazıcının sürdüğü gibi — sonda yalnız yazıcı uyanınca
+(kare, rapor, bırakma ya da 50 ms'lik tick) gider, yani oturumun kendi
+snapshot'ının hemen ardından, kuyruğun en dolu anında. Tur 4 kodunda
+model ölçümü verir:
+
+| | ölçüm (tur 4) | model (tur 4), 3 tohum |
+|---|---|---|
+| `off` `lost%` / `rtt_ms` / cevapsız | %44,85 / 1 443 / ~580 | %41–45 / 1 565–1 590 / 539–583 |
+| `pace` `lost%` / `rtt_ms` | %29,53 / 605 (koşular 390–760) | %30–33 / 323–901 |
+| `pace` cevapsız / bölüm / kesinti / düşen kare | 1 038–1 561 / 54–66 / 1 369–1 508 / 25 624–28 528 | 887–1 357 / 47–64 / 1 031–1 215 / 22 811–25 308 |
+
+*Teşhis (model izinden; ebeveynin teşhisi KISMEN doğru).* (1) **Taban
+gerçekten zehirli ve kayıyordu:** 64 oturum 1000 paketlik kuyruğu ilk
+saniyede doldurur; oturumların ilk cevaplanan sondaları bile kuyruktadır
+(0,3–0,6 sn), ve kuyruk 10 sn'den uzun durunca pencere tabanı onunla
+0,63 → 1,09–1,24 sn'ye tırmandı — gecikme sinyali sustu. (2) **Ama baskın
+neden sonda açlığıydı:** (a) halka 4 sonda × 250 ms = 1 sn — hızlı
+kadansta 1 sn'den uzun tur hiç ölçülemez (rapor "geç" gelir; `off`'un
+turu 1,4 sn); (b) tıkalı yol sondaların ~%80'ini kaybeder (sonda ve
+rapor aynı kuyruktan geçer), art arda tahliye sıradandır, B91'in geri
+çekilmesi aralığı 2–8 sn'ye çıkarır: 10. saniyede oturumların bir kısmı
+**tek** rapor almıştı; (c) patlama kuralı iki kayıp sinyali ister — rapor
+seyrekken ikincisi saniyeler sürer; (d) açık kalan bir avuç oturum (tam
+talep) bağlantının üçte birini tutar, kuyruk boşalamaz. Tur 4'ün kaybı
+neredeyse tamamen ilk 10–15 sn'de; sonrası temiz. (3) **Toplam artış
+sorun değil:** model son üçte birde kayıp 0, kuyruk 37–56 ms.
+
+*Değişiklikler (her biri bilinen bir tasarımdan; her kural testli).*
+
+1. **Sonda ufku (`feedback::PROBE_HORIZON` = 4 sn, halka 16).** Sonda
+   cevabını bir sayı değil bir süre bekler — RFC 9002 §6.1.2'nin zaman
+   eşiği gibi: kayıp, sayısal pencereyle değil geç kalmayla. 1 sn'lik
+   kadansta eskisiyle aynı (beşinci sonda 4 sn'lik olanı düşürür); hızlı
+   kadansta 4 sn'ye kadar tur ölçülür. Halka bir ufku hızlı kadansta
+   tutar (16 × 32 B).
+2. **Sessiz istemcinin lütfu (`SILENT_GRACE` = 4).** B91'in geri
+   çekilmesi art arda 4 tahliyeden sonra başlar (RFC 6298 §5.5'in üstel
+   RTO geri çekilmesi korunur, yalnız gecikir): tıkalı yolun tahliye
+   dizileri okumayı bırakan istemci değildir. Bedel: okumayı bırakan
+   istemciye 4 fazla sonda (36 B).
+3. **Uzun aralıkta tek kayıp sinyali hızlandırır (`SUSTAINED_LOSS` = 2 sn
+   = 2 × `PROBE_INTERVAL`).** Patlama kuralının dayanağı (tek kötü aralık
+   ≤ 1 sn) uzun aralıkta yok: aralığın sondaları ya da raporları da
+   kayboldu. `Open`'da ve `Suspect`'te ikinci sinyal beklenmez.
+4. **Sessizlik bir sinyaldir.** Bir sonda ufuk boyu cevapsız: `Open` →
+   `Suspect` (sondalar hızlanır), `Suspect` → `Paced`, talebin yarısında
+   (teslim ölçümü yok), `Paced` → yarıya (tur 3'ten beri). TCP'nin RTO
+   tepkisi (RFC 5681 §3.1) ve QUIC'in kalıcı tıkanıklığı (RFC 9002 §7.6)
+   gibi — ama oyun bandı susamaz, en yeni kare gider; taban yine 1
+   bütçe/sn. **Yan etki (bilinçli):** `pace`'te okumayı bırakan
+   raporlayan istemci 5 sn içinde hızlanır (kareleri pacer düşürür,
+   sayılır) ve 8 sn yerine 2 sn'de bir sondalanır (hızlı kadans × 8).
+5. **Taban halkası (`congestion::base`, LEDBAT'ın base delay history'si —
+   RFC 6817 §3.4.2; uTP).** Taban = son `BASE_SLOTS` (3) dilimin
+   (`BASE_SLOT` = 20 sn) en küçüklerinin en küçüğü — 40–60 sn geriye
+   bakar; kuyruğa giden taban = `min(pencere tabanı, taban + eşik)`: eşikten
+   fazla yükselen pencere tabanı ayakta kalmış bir kuyruktur. RFC 6817 10
+   dakikalık tarih tutar (arka plan akışı rota değişince on dakika geri
+   durabilir); oyun duramaz: **uzayan rota** en çok 60 sn kuyruk sayılır
+   (eski dilimler yaşlanır), B3 göçü tabanı hemen sıfırlar
+   (`Control::new_path`, RFC 9000 §9.4). 60 sn: modelde tur 4'ün
+   kuyruğunun durduğu en uzun sürenin (~15 sn) dört katı. Titreşimde
+   pencere tabanı ile taban farkı ~0,5σ, eşik 5σ: tavan hiç değmez —
+   `jitter_alone_paces_rarely` bayt bayt aynı (10/8/7 bölüm, 25/21/17
+   kesinti). **Elenen: yalnız uzun taban** (pencereyi bırakmak) — dakikanın
+   en şanslı örneği pencereninkinden ~0,6σ aşağıda: titreşim modelinde
+   42 bölüm (sınır 12).
+6. **Boşaltma (BBR'nin ProbeRTT'si; QUIC BBR uygulamalarındaki gibi).**
+   10 sn (`DRAIN_AFTER`, BBR'nin min_rtt aralığı) boyunca tabana yakın
+   (taban + eşik altı) tur görmeyen `Paced` oturum, bir rapor boyunca
+   hızının yarısıyla (`DRAIN_GAIN`) hızlanır: paylaştığı kuyruk boşalsın,
+   tabanın yeni dilimi kuyruğu değil yolu tutsun. Odaya boşaltma değil
+   hız söylenir. Sayılır: `udp_game_paced_drains` (transport satırının ve
+   tablosunun SONUNDA; düşen kareler her zamanki gibi
+   `udp_game_frames_dropped_paced`). BBR'nin 4 paketlik penceresi yerine
+   yarı hız: oyun bandı susamaz.
+
+*Artış (değişmedi).* QUIC NewReno/Cubic'in RTT başına ~1 MSS'lik mutlak
+artışı düşünüldü; model gerekmediğini gösterdi (oturdu mu kayıp 0,
+kuyruk ~50 ms) ve tur 4'ün ¼ talep/sn'si röle testinde yakınsama için
+seçilmişti — dokunulmadı.
+
+*Model sonuçları (3 tohum, 30 sn; `lost%`, `rtt_ms` betiğin tanımıyla).*
+
+| senaryo | kod | `pace` `lost%` | `off` `lost%` | oran | `pace` `rtt_ms` | `off` `rtt_ms` | oran |
+|---|---|---|---|---|---|---|---|
+| darboğaz | tur 4 | 30–33 | 41–45 | 0,68–0,77 | 323–901 | 1 565–1 590 | 0,21–0,57 |
+| darboğaz | tur 5 | 20,8–21,8 | 45,2–46,6 | 0,45–0,48 | 214–225 | 1 595–1 622 | 0,13–0,14 |
+| darboğaz + titreşim | tur 4 | 25,8–26,9 | 50,4–51,1 | 0,50–0,53 | 282–346 | 1 668–1 686 | 0,17–0,21 |
+| darboğaz + titreşim | tur 5 | 20,4–21,3 | 49,8–52,3 | 0,39–0,43 | 254–259 | 1 698–1 700 | 0,15 |
+
+Tur 5'in son üçte birinde: kuyruk 47–56 ms, bağlantı kaybı 0, boşaltma 0.
+Daha sert (96 oturum, talebin üçte biri bağlantı, 90 sn): kayıp %18, tur
+168 ms, son 30 sn kuyruk 72–73 ms, kayıp 0 (tur 4: kayıp %47, tur
+540–670 ms, son 30 sn kuyruk 122–214 ms ve %0,5–1,6 kayıp; ilk 30 sn'de
+oturumların yarısı hiç hızlanmadı). **Katkı (tohum 1, darboğaz, birikimli):**
+tur 4 %32,9 / 901 ms → ufuk %26,5 / 473 → lütuf %26,2 / 372 → uzun
+aralık %23,8 / 295 → sessizlik %21,8 / 216. **Taban halkası ve boşaltma
+modelde ölçülebilir bir şey değiştirmedi** (sonda açlığı gidince kuyruk
+10 sn'den kısa sürede boşalıyor; boşaltma hiç tetiklenmedi): pencereden
+uzun duran kuyruğa (sonda düzeltmelerinden önceki başlangıç gibi) karşı
+sigorta olarak kaldılar — durum 3 `Duration` + bir `Instant` + bir `bool`.
+Kalan kayıp başlangıçtadır: ilk ~3 sn'de (sondalar kuyruğa girmeden)
+kimse tepki veremez; oran sınırın hemen altında — gerçek koşuda geçmezse
+sıradaki kaldıraç açık oturumun başlangıçtaki sonda kadansıdır.
+
+*Testler (önce kırmızı; mutasyonla).* `…::tests::link` (2: B104
+darboğazı iki senaryo × 3 tohum `off`'a karşı ölçütle, son üçte bir
+kuyruk < 100 ms ve kayıpsız, boşaltma yok; 96 oturum × 90 sn), `…::tests::base`
+(2: kuyruk halka unutana dek kuyruk, en küçük dilim ve sessizliğin
+yaşlandırması), `…::tests` (+4: sessizlik şüphe→giriş→yarı; uzun kayıplı
+aralık; pencereyle yükselen taban yine kuyruk, yeni yol tabanı unutur;
+boşaltma 10 sn'de bir rapor, yarı hız, odaya hız), `feedback::tests`
+(+1: hızlı kadansta 3 sn'lik tur ölçülür, ufuk ve halka sınırı; B91 testi
+lütufla). **14 mutasyonun 14'ü öldü** (ilk koşuda 3'ü sağdı, biri yalnız ilgisiz
+bir testle öldü — boşaltma testi süreyi ve kazancı sabitten okuyordu,
+hızı tabana inmişti, "şüphede iki sinyal" testi önceki kayıpla geçiyordu;
+testler düzeltildi): yaş tahliyesi
+yok, ufuk 1 sn, lütuf 0, taban = pencere, tek dilim, uzun aralık yok,
+açıkta sessizlik etkisiz, şüphede sessizlik etkisiz/tam talep, boşaltma
+yok/kazanç 1/kalıcı/5 sn, şüphede iki sinyal. Tur 4 kodu `link`'i düşürür
+(oran 0,68–0,77).
+
+*Yeniden ölçüm (bakımcı).* Betik ve ölçüt değişmedi. Model tahmini
+(ölçüm değil): `bottleneck` `lost%` `off`'un %45–48'i, `rtt_ms` %13–14'ü;
+`bottleneck_jitter` %39–43 ve %15; titreşim satırları tur 4'ün aynısı.
+Loadgen metrik telinin düzeni değişti (bir transport sayacı daha).
 
 **Bağlantı göçü (BACKLOG B3 — 2026-10-02, opt-in; bakımcı kararları
 RUDP-SECURITY §2 #5 ve #10).** Eskiden demux oturumu istemcinin
