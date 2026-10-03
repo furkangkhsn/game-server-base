@@ -292,7 +292,9 @@ mod logic;
 /// GSNR = the GSNQ layout with five more transport counters at the end
 /// of that section (B5b's key phases and stateless resets: `udp_rekeys`
 /// .. `udp_stateless_resets_send_failed`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E52;
+/// GSNS = the GSNR layout with one more transport counter at the end of
+/// that section (B142's drain: `udp_game_paced_drains`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E53;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);

@@ -1312,7 +1312,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   bir giriştir), `udp_game_paced_drains` (tur 5, satırın ve tablonun EN
   SONUNDA: 10 sn boyunca tabanına yakın tur görmeyen hızlı oturumun bir
   rapor boyu hızını yarıya indirmesi — BBR'nin ProbeRTT'si; kayıp değil,
-  o sırada düşen kareler `dropped_paced`'te). **Okuma:** düşen pay = `dropped ÷ queued`; oturum başına
+  o sırada düşen kareler `dropped_paced`'te; loadgen teli **GSNS**). **Okuma:** düşen pay = `dropped ÷ queued`; oturum başına
   ortalama kesinti = `rate_cuts ÷ episodes`. Kayıplar (dropped, unsent)
   B32 kuralıyla ayrı adlarda; darboğazın kendi kaybı yine
   `udp_game_datagrams_reported_lost`'ta.
