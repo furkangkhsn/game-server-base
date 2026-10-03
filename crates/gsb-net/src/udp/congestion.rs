@@ -1,6 +1,6 @@
 //! The game band's congestion response (rUDP hardening round 3, BACKLOG
 //! B1; its delay signal, increase and floor reworked by round 4, B104;
-//! its base by round 5, B142):
+//! its base and silence by round 5, B142):
 //! what a session's writer does when its client's reports say the path
 //! carries less than the room sends.
 //!
@@ -49,6 +49,16 @@
 //!   jittery path from a queue; a queue over [`QUEUE_DELAY_MAX`] needs
 //!   no estimate). [`SUSPECT_REPORTS`] reports without either open it
 //!   again; a queue that stands but is not yet known keeps it suspected.
+//!   *Round 5:* one loss signal over an interval of [`SUSTAINED_LOSS`]
+//!   or more is no burst — the probes in it, or their reports, were lost
+//!   too — and paces at once, open or suspected.
+//! - *Silence* (round 5). A probe unanswered for the feedback horizon
+//!   (4 s) is no sample at all: an open session is suspected (probed
+//!   faster), a suspected one paced at half the room's demand, a paced
+//!   one halved — the classic timeout response. A congested path loses
+//!   most probes or their reports (the B104 bottleneck: four in five), so
+//!   silence is its congestion signal as much as a client's that stopped
+//!   reading.
 //! - *The rate.* Entering: the rate the path DELIVERED in the interval,
 //!   times [`BETA`]. While paced, each report decides once: a loss signal
 //!   cuts (to the delivered rate times [`BETA`], never above the rate
@@ -119,6 +129,8 @@ pub(super) const DRAIN_MIN: Duration = Duration::from_millis(5);
 pub(super) const LOSS_MIN: u64 = 2;
 /// …and at least 1/this of the interval's datagrams.
 pub(super) const LOSS_DIV: u64 = 10;
+/// A loss signal over an interval this long paces at once: no burst.
+pub(super) const SUSTAINED_LOSS: Duration = Duration::from_secs(2);
 /// The decrease factor on a signal.
 pub(super) const BETA: f64 = 0.85;
 /// The additive increase per clean report: this share of the episode's
@@ -270,7 +282,11 @@ impl Control {
         self.prev_recent = recent;
         let recent_floor = self.track.floor().unwrap_or(e.latest_rtt);
         self.queue_delay = recent_floor.saturating_sub(floor);
+        // A loss signal over a long interval is no burst: its probes, or
+        // their reports, were lost too.
+        let sustained = loss && e.interval >= SUSTAINED_LOSS;
         match self.phase {
+            PathPhase::Open if sustained => self.enter(delivered.unwrap_or(self.demand) * BETA),
             PathPhase::Open => {
                 if loss || e.latest_rtt >= floor + QUEUE_DELAY_LIMIT {
                     (self.phase, self.suspect_reports) = (PathPhase::Suspect, 0);
@@ -280,11 +296,8 @@ impl Control {
                 self.suspect_reports += 1;
                 let known = self.track.deviations() >= JITTER_KNOWN
                     || recent.is_some_and(|r| r >= floor + QUEUE_DELAY_MAX);
-                if (loss && last_loss) || (standing && known) {
-                    self.phase = PathPhase::Paced;
-                    self.counts.episodes += 1;
-                    self.peak_demand = self.demand;
-                    self.cut(delivered.unwrap_or(self.demand), f64::INFINITY);
+                if (loss && (last_loss || sustained)) || (standing && known) {
+                    self.enter(delivered.unwrap_or(self.demand) * BETA);
                 } else if !standing && self.suspect_reports >= SUSPECT_REPORTS {
                     self.phase = PathPhase::Open;
                 }
@@ -303,13 +316,31 @@ impl Control {
         }
     }
 
-    /// A whole ring of probes went unanswered: no sample at all. A paced
-    /// session halves its rate; an open one is only silent (B91).
+    /// A probe went unanswered for a whole horizon (`feedback`): no
+    /// sample at all — the client stopped reading (B91), or the path
+    /// lost the probes or their reports, as a congested one does (round
+    /// 5: the B104 bottleneck answered one probe in five). An open
+    /// session is suspected (probed faster); a suspected one is paced at
+    /// half the room's demand; a paced one halves its rate — the classic
+    /// timeout response, no delivered rate to go by.
     pub(super) fn on_silence(&mut self) {
-        if self.phase == PathPhase::Paced {
-            self.rate = (self.rate / 2.0).max(self.min_rate);
-            self.counts.cuts += 1;
+        match self.phase {
+            PathPhase::Paced => {
+                self.rate = (self.rate / 2.0).max(self.min_rate);
+                self.counts.cuts += 1;
+            }
+            PathPhase::Open => (self.phase, self.suspect_reports) = (PathPhase::Suspect, 0),
+            PathPhase::Suspect => self.enter(self.demand / 2.0),
         }
+    }
+
+    /// Paced: an episode starts at `rate` (a cut).
+    fn enter(&mut self, rate: f64) {
+        self.phase = PathPhase::Paced;
+        self.counts.episodes += 1;
+        self.peak_demand = self.demand;
+        self.rate = rate.max(self.min_rate);
+        self.counts.cuts += 1;
     }
 
     fn cut(&mut self, delivered: f64, ceiling: f64) {

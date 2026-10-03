@@ -269,6 +269,58 @@ fn a_draining_queue_holds_the_rate() {
     assert_eq!(c.counts.cuts, 5);
 }
 
+/// A probe unanswered for a whole horizon (round 5): an open session is
+/// suspected, nothing cut; a suspected one is paced at half the room's
+/// demand; a paced one halves its rate, down to the floor.
+#[test]
+fn silence_suspects_then_paces_then_halves() {
+    let mut t = Instant::now();
+    let mut c = Control::new(BUDGET, t);
+    feed(&mut c, &mut t, 100_000, &[est(1000, 100, 0, 20, 20)]);
+    c.on_silence();
+    assert_eq!(c.state().phase, PathPhase::Suspect);
+    assert_eq!(c.probe_interval(), FAST_PROBE_INTERVAL);
+    assert_eq!(c.counts, ControlCounts::default(), "only suspected");
+    c.on_silence();
+    assert_eq!(c.paced(), Some(50_000.0), "half of 100 kB/s");
+    assert_eq!((c.counts.episodes, c.counts.cuts), (1, 1));
+    c.on_silence();
+    assert_eq!(c.paced(), Some(25_000.0));
+    for _ in 0..20 {
+        c.on_silence();
+    }
+    assert_eq!(c.paced(), Some(MIN_RATE * BUDGET as f64));
+    assert_eq!(c.counts.cuts, 22);
+}
+
+/// A loss signal over a long interval (SUSTAINED_LOSS, 2 s) is no burst
+/// — its probes, or their reports, were lost too: it paces an open
+/// session at once, and a suspected one without a second signal. Over a
+/// shorter one it only suspects, as before.
+#[test]
+fn a_long_lossy_interval_paces_at_once() {
+    let mut t = Instant::now();
+    let mut c = Control::new(BUDGET, t);
+    feed(&mut c, &mut t, 100_000, &[est(1999, 100, 30, 20, 20)]);
+    assert_eq!(c.state().phase, PathPhase::Suspect, "short: a burst");
+    // Suspected by a delay hint, then one lossy interval: short, still
+    // suspected; long, paced.
+    let mut s = Control::new(BUDGET, t);
+    feed(&mut s, &mut t, 100_000, &[est(1000, 100, 0, 60, 20)]);
+    feed(&mut s, &mut t, 25_000, &[est(1999, 25, 10, 20, 20)]);
+    assert_eq!(s.state().phase, PathPhase::Suspect, "one short signal");
+    feed(&mut s, &mut t, 25_000, &[est(250, 25, 0, 20, 20)]);
+    feed(&mut s, &mut t, 25_000, &[est(2000, 25, 10, 20, 20)]);
+    assert_eq!(s.state().phase, PathPhase::Paced, "one long signal");
+    let mut o = Control::new(BUDGET, t);
+    feed(&mut o, &mut t, 200_000, &[est(2000, 200, 60, 20, 20)]);
+    assert_eq!(o.state().phase, PathPhase::Paced, "open: at once");
+    // 140 of 200 1000-byte datagrams in 2 s, times BETA.
+    let rate = o.paced().unwrap();
+    assert!((rate - 70_000.0 * BETA).abs() < 1.0, "{rate}");
+    assert_eq!((o.counts.episodes, o.counts.cuts), (1, 1));
+}
+
 /// The base (round 5, module `base`): a queue that stood longer than the
 /// window lifted the window's floor to itself (`window_min_rtt` 380 ms
 /// here) — round 4 read it as no queue at all and grew the rate. The
@@ -287,25 +339,6 @@ fn a_floor_that_rose_with_the_queue_is_still_a_queue() {
     // A new path starts the base over.
     c.new_path(t);
     assert_eq!(c.base.base(), None);
-}
-
-/// A whole ring of probes unanswered: a paced session halves its rate
-/// (down to the floor); an open one is only silent.
-#[test]
-fn a_silent_ring_halves_a_paced_rate_only() {
-    let mut t = Instant::now();
-    let mut open = Control::new(BUDGET, t);
-    open.on_silence();
-    assert_eq!((open.state().phase, open.counts.cuts), (PathPhase::Open, 0));
-    let mut c = paced_at(&mut t, 100, 40);
-    let r = c.paced().unwrap();
-    c.on_silence();
-    assert_eq!(c.paced(), Some(r / 2.0));
-    for _ in 0..20 {
-        c.on_silence();
-    }
-    assert_eq!(c.paced(), Some(MIN_RATE * BUDGET as f64));
-    assert_eq!(c.counts.cuts, 22);
 }
 
 /// Two paced sessions behind one bottleneck, one starting with nine
