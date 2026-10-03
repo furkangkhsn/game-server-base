@@ -5,6 +5,59 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## t21 — B21 gerçek bilet doğrulaması: `gsb-ticket`, doğrulanmış talepler, lobi örneği (`feat/b21-tickets`)
+
+- **Tasarım (kullanıcı kararı 2026-10-03):** bilet tek sabit tip değil.
+  Motor biçimden bağımsız kalır (`TicketAuth` tek dikiş — oyun kendi
+  doğrulayıcısını takabilir); `gsb-ticket` opt-in yapı taşıdır: standart
+  talepler sabit ve crate'te denetlenir, oyunun kendi talepleri jenerik
+  (`Claims<T>`/`Validator<T>`, ek alan yoksa `T = ()`), oyunun durumsuz
+  kontrolü kriptodan ve standart denetimlerden SONRA (`with_check` →
+  `GameReason`, kendi adıyla sayılır); durumlu kontroller (kadro, takım
+  dolu) odanın katılma kancasında. Doğrulanmış talepler
+  `ValidatedTicket::extra` ile `on_join_verified` /
+  `spawn_player_verified` / `HomeRoute`'a ulaşır — oyun "bu oyuncu bu
+  teçhizatla geliyor"u doğrulanmış kaynaktan okur.
+- **Biçim:** PASETO v4.public (Ed25519; JSON talepler, `kid` imzalı
+  footer'da) — Nuxt/TS lobisi Node'un yerleşik Ed25519'uyla ~20 satırda
+  basar; JWT (`alg` karışıklığı) ve v4.local (her sunucuda simetrik anahtar
+  = her sunucu bilet basar) elendi. Kendi ~140 satırlık katmanımız
+  (`ed25519-dalek` 2.2 `verify_strict`, snow'un `curve25519-dalek`'ini
+  paylaşır), resmî 4-S/4-F vektörleriyle sabit; `ring`/C yok.
+- **Talepler:** zorunlu `sub` (oyuncu → resume ve K4 anahtarı), `room`,
+  `aud`, `iat`, `exp`, `jti`; isteğe bağlı `nbf`, `iss`, `ext` (oyunun
+  `T`'si). Sıra: biçim → `unknown_key` → `signature` → `claims` →
+  `audience` → süre (`not_yet_valid`/`expired`/`lifetime`; vars. 30 sn
+  sapma, 900 sn ömür) → oyunun kontrolü → (tek kullanımlıksa) tekrar.
+- **Tekrar politikası:** vars. süre bitene dek yeniden kullanılabilir
+  (resume aynı kimlik bilgisini sunar); tek kullanım opt-in — sınırlı,
+  kilitsiz tek aktör, kapalı başarısız (`replay_unavailable`), süreç içi.
+- **Sayım:** her AUTH kararı tek sebeple: `gsb_net_tickets_accepted_total`,
+  `gsb_net_tickets_rejected_total{reason}`, `gsb_net_ticket_game_rejects_total{check}`;
+  iki golden bilerek güncellendi; loadgen teli değişmedi.
+- **Config:** `[ticket]` (`gsb-server` `ticket` feature'ı — `otlp` deseni):
+  `issuer_keys = ["kid:<hex>"]`, `audience`, `max_skew_secs`,
+  `max_lifetime_secs`, `single_use`, …; anahtar asla yankılanmaz.
+- **İstemci:** `gsb_ticket::JoinGrant` `{doors, udp_server_key, ticket,
+  room}`; `gsb-client` `grant` feature'ı rUDP anahtarını izinden sabitler
+  (RUDP-SECURITY karar 3 artık uygulanmış).
+- **Örnek:** `examples/lobby` (`cargo run -p gsb-example-lobby`): lobi
+  `Loadout {character, class}` biletli izin verir; mühürlü rUDP + TCP
+  sunucu, `Validator<Loadout>` + oyun kontrolü; büyücü x=−30'da, savaşçı
+  x=+30'da doğar (doğrulanmış talepten); sahte, süresi geçmiş ve bilinmeyen
+  sınıflı bilet ERROR 10 ile reddedilir. `tests/lobby.rs` kilitler.
+- **B22 tarifi** (`docs/TICKETS.md` §13): oyunun adaptörü
+  `RequestDecision::External` arkasında bir aktör; `ServerHandle::match_results`
+  iletimi.
+- Çekirdekte tek kırıcı değişiklik: `HomeShard` artık `Arc<dyn HomeRoute>`
+  (eski `(conn, identity)` kapanışları battaniye impl ile derleniyor).
+
+Testler 1991 → 2034 (`otlp` ile 2009 → 2052). Doğrulama kurallarının
+mutasyonları yakalandı (`verify_strict → verify` sağ — savunma derinliği).
+Ebeveyn doğrulaması: tam kapılar yeşil; PASETO katmanı okundu (PAE, b64
+kanonikliği, `verify_strict`, imzalı footer'dan `kid`); tekrar bekçisinin
+budamasını erkene almak dört testi düşürdü.
+
 ## v1 — B128 rUDP oturumunun sonu `Recv::Closed`; B104 ölçüm desteği (`net/v1-closed-jitter`)
 
 - **B128 (kullanıcı kararı 2026-10-03):** rUDP oturumunun sonu artık her

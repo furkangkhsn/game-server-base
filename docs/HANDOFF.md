@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-1991 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+2034 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -327,6 +327,18 @@ kullanıcıda: `scripts/rudp-jitter.sh` (sudo + `tc`; varsayılan 64 istemci
 × 30 sn × 3 koşu × 7 senaryo, ~14 dk). Sonuç `summary.txt` B104'e
 işlenmeli: titreşim satırlarında `pace` bölüm/kesme üretmiyor, darboğaz
 satırlarında üretiyorsa varsayılan `"pace"` olabilir.
+
+**B104 ölçüldü (kullanıcı, 2026-10-03):** `pace` darboğazsız titreşimde
+yanlış tetikleniyor (snapshot −%12/−%34) → varsayılan `"off"` kaldı;
+düzeltme turu r4 (gecikme sinyali + hız tabanı), sonra ölçüm tekrarı.
+
+**t21 tamam** (CHANGELOG "t21", `docs/TICKETS.md`): kimlik doğrulama artık
+hazır bir cevapla geliyor: `gsb-ticket` (opt-in). Sunucu tarafı
+`ServerHooks::ticket = Validator<T>::…into_auth(timeout)` ya da `ticket`
+feature'lı `[ticket]` tablosu. Oyun talepleri `Joiner::claims` (bayt, JSON)
+olarak katılım kancalarına gelir. `HomeShard` artık `Arc<dyn HomeRoute>`
+(eski kapanışlar derleniyor). Lobi örneği: `cargo run -p gsb-example-lobby`.
+B22 kullanıcı kararıyla kapsam dışı. Açık: B134–B139.
 
 **rUDP sertleştirme 1 tamam** (CHANGELOG "rUDP sertleştirme 1", DESIGN §6):
 `gsb_net::listen::bind_udp` + `udp_recv/send_buffer_bytes`;
@@ -1030,6 +1042,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 1991 passed, 4 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 2034 passed, 4 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.
