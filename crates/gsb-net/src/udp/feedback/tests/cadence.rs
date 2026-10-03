@@ -11,17 +11,17 @@ fn probe(f: &mut Feedback, at: Instant) -> bool {
     f.probe_sent(at)
 }
 
-/// A client that stopped answering: once a whole ring is unanswered,
-/// every further eviction doubles the interval, up to 8×; one answer
-/// brings the writer's cadence back.
+/// A client that stopped answering: once a probe was unanswered for a
+/// whole horizon, every further eviction doubles the interval, up to 8×;
+/// one answer brings the writer's cadence back.
 #[test]
 fn a_silent_client_is_probed_ever_less_often() {
     let t0 = Instant::now();
     let mut f = announced(t0);
     let mut at = t0;
-    for _ in 1..PROBE_RING {
+    for _ in 1..PROBE_HORIZON.as_secs() {
         at += PROBE_INTERVAL;
-        assert!(!probe(&mut f, at), "the ring is not full yet");
+        assert!(!probe(&mut f, at), "nothing a horizon old yet");
     }
     let mut gaps = Vec::new();
     for _ in 0..5 {

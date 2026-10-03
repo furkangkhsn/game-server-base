@@ -51,12 +51,14 @@
 //!   both directions stay fresh on a band that carries a frame a minute.
 //! - **Cost:** 9 bytes each way per [`PROBE_INTERVAL`] — 37 B/s down and
 //!   up per session on IPv4 (57 on IPv6), plus the announcements. State:
-//!   at most [`PROBE_RING`] outstanding probes per session.
+//!   at most [`PROBE_RING`] outstanding probes per session; a probe
+//!   unanswered for [`PROBE_HORIZON`] is evicted — at the slow cadence
+//!   the ring's fifth probe, at the fast one its seventeenth.
 //! - **The cadence is the writer's** (rUDP hardening round 3): a session
 //!   the congestion response suspects or paces is probed faster
 //!   (`congestion::FAST_PROBE_INTERVAL`, [`Feedback::set_interval`]); a
-//!   client that stopped answering — a whole ring of probes evicted
-//!   unanswered — is probed at a doubling interval, up to
+//!   client that stopped answering — a probe evicted unanswered after a
+//!   whole horizon — is probed at a doubling interval, up to
 //!   2^[`SILENT_BACKOFF_MAX`] of it, until it answers again (BACKLOG B91:
 //!   a client that stopped reading costs a probe every 8 s, not every
 //!   second).
@@ -66,9 +68,14 @@ use std::time::{Duration, Instant};
 
 /// How often a reporting session is probed.
 pub(super) const PROBE_INTERVAL: Duration = Duration::from_secs(1);
-/// Probes awaiting their report, per session: a path whose round trip
-/// exceeds this many intervals answers too late to be measured.
-pub(super) const PROBE_RING: usize = 4;
+/// How long a probe awaits its report: a path whose round trip exceeds
+/// this answers too late to be measured, at any cadence (round 5: the
+/// ring of four held a second at the fast cadence, and a deep queue's
+/// round trips went unmeasured — B142).
+pub(super) const PROBE_HORIZON: Duration = Duration::from_secs(4);
+/// Probes awaiting their report, per session, at most: a horizon at the
+/// fast cadence (`congestion::FAST_PROBE_INTERVAL`, 250 ms).
+pub(super) const PROBE_RING: usize = 16;
 /// How long a client waits for its first probe before it announces again.
 pub(super) const ANNOUNCE_EVERY: Duration = Duration::from_secs(1);
 /// How many announcements a client sends before it concludes the server
@@ -211,10 +218,15 @@ impl Feedback {
     }
 
     /// The probe of [`Self::next_probe`] went out. True when it pushed an
-    /// unanswered probe off a full ring: a whole ring of probes without
-    /// an answer — the client is silent (B91), or the path lost them all.
+    /// unanswered probe off the ring — one [`PROBE_HORIZON`] old, or the
+    /// oldest of a full ring: a horizon of probes without an answer — the
+    /// client is silent (B91), or the path lost them all.
     pub(super) fn probe_sent(&mut self, now: Instant) -> bool {
-        let evicted = self.ring.len() == PROBE_RING;
+        let evicted = self.ring.len() == PROBE_RING
+            || self
+                .ring
+                .front()
+                .is_some_and(|p| now.saturating_duration_since(p.at) >= PROBE_HORIZON);
         if evicted {
             self.ring.pop_front();
             self.counts.probes_unanswered += 1;

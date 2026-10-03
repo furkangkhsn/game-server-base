@@ -206,30 +206,68 @@ fn unknown_ids_are_invalid_and_answered_ones_late() {
     );
 }
 
-/// The ring bounds the probes awaiting a report, and a session's end
-/// counts the rest apart: every probe sent is answered, unanswered, or
-/// still open when the session ended (not a loss).
+/// The horizon bounds how long a probe awaits its report, and a
+/// session's end counts the rest apart: every probe sent is answered,
+/// unanswered, or still open when the session ended (not a loss).
 #[test]
 fn every_probe_is_answered_unanswered_or_open_at_the_end() {
     let t0 = Instant::now();
     let mut f = announced(t0);
-    for k in 1..=PROBE_RING as u32 {
+    let horizon = PROBE_HORIZON.as_secs() as u32;
+    assert_eq!(horizon, 4, "the probes below are a horizon at 1 s");
+    for k in 1..=horizon {
         f.probe_sent(t0 + PROBE_INTERVAL * k);
     }
     assert_eq!(
         f.counts.probes_unanswered, 1,
-        "the oldest fell off the ring"
+        "the oldest aged off the ring"
     );
     f.on_report(3, 0, t0 + PROBE_INTERVAL * 3);
     f.end();
     let c = f.counts;
-    assert_eq!(c.probes_sent, PROBE_RING as u64 + 1);
+    assert_eq!(c.probes_sent, u64::from(horizon) + 1);
     assert_eq!(c.probes_unanswered, 2, "evicted 1, superseded 2");
     assert_eq!(c.probes_open_at_end, 2, "4 and 5, cut off by the end");
     assert_eq!(
         c.probes_sent,
         c.reports + c.probes_unanswered + c.probes_open_at_end
     );
+}
+
+/// At the fast cadence a probe still awaits its report for the whole
+/// horizon — a deep queue's round trip of seconds is measured (round 5:
+/// the ring of four held a second, and the B104 bottleneck's 1.4 s round
+/// trips came back late, unmeasured) — and the ring caps the probes at a
+/// horizon's worth, whatever the cadence.
+#[test]
+fn a_probe_awaits_its_report_for_the_horizon_at_any_cadence() {
+    let t0 = Instant::now();
+    let mut f = announced(t0);
+    f.on_report(1, 0, t0 + ms(10));
+    let fast = ms(250);
+    let mut at = t0;
+    for _ in 0..12 {
+        at += fast;
+        assert!(!f.probe_sent(at), "younger than the horizon: kept");
+    }
+    // Probe 2 left at 250 ms; its report comes 3 s on.
+    let e = f.on_report(2, 0, t0 + fast + ms(3000));
+    assert_eq!(e, Report::Applied(ms(3000)));
+    assert_eq!(f.counts.probes_unanswered, 0);
+    // Unanswered for a whole horizon: evicted, one a probe.
+    let mut evicted = 0;
+    for _ in 0..PROBE_RING * 2 {
+        at += fast;
+        evicted += u32::from(f.probe_sent(at));
+    }
+    assert!(evicted > 0, "a horizon unanswered is silence");
+    assert!(f.ring.len() <= PROBE_RING);
+    // The ring's cap: probes at one instant (no age) evict past it.
+    let mut g = announced(t0);
+    for k in 1..PROBE_RING {
+        assert!(!g.probe_sent(t0), "{k}");
+    }
+    assert!(g.probe_sent(t0), "a full ring evicts the oldest");
 }
 
 /// An id the session never sent is invalid, never late — the next id
