@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-2052 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+2053 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -257,7 +257,7 @@ kapı-başı beklentinin (`Door::drop_close`) yanına ekler.
 "Tıkanıklık tepkisi"): `udp::congestion` (`Control`, `PaceQueue`,
 `PathState`, `UdpCongestion`), `udp::writer::pace` (`wake()` = min(rto,
 tick, hızlama)); `udp_congestion` (sunucu `UdpCongestionKind`, vars.
-`"off"`), 5 `udp_game_*paced*` sayacı, `GameEstimate::{window_min_rtt,
+`"off"`; f104'ten beri `"pace"`), 5 `udp_game_*paced*` sayacı, `GameEstimate::{window_min_rtt,
 interval_sent_bytes}`. Ölçüm düzeneği `udp::tests::pace::{relay, measure}`
 (`--ignored`). Loadgen teli GSNM. B1, B91, B93, B96, F75 kapandı. Açık:
 B103 (sinyali oyuna taşı — 4 karar), B104 (varsayılanı `"pace"`'e
@@ -339,6 +339,11 @@ feature'lı `[ticket]` tablosu. Oyun talepleri `Joiner::claims` (bayt, JSON)
 olarak katılım kancalarına gelir. `HomeShard` artık `Arc<dyn HomeRoute>`
 (eski kapanışlar derleniyor). Lobi örneği: `cargo run -p gsb-example-lobby`.
 B22 kullanıcı kararıyla kapsam dışı. Açık: B134–B139.
+
+**f104 tamam** (CHANGELOG "f104"): B104 kapandı — `udp_congestion`
+varsayılanı `"pace"` (`UdpCongestion`, `UdpTransportConfig`, sunucu
+`Config`); `"off"` açık vazgeçiş. Açık: B140, B141, B143–B146,
+B148–B150.
 
 **r5 tamam** (CHANGELOG "r5", DESIGN §6 "Taban, sessizlik ve boşaltma —
 tur 5"): `feedback::PROBE_HORIZON` 4 sn (`PROBE_RING` 16),
@@ -1058,6 +1063,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 2052 passed, 4 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 2053 passed, 4 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

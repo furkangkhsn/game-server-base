@@ -5,6 +5,27 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## f104 — B104 kapandı: `udp_congestion` varsayılanı `"pace"` (`net/f104-pace-default`)
+
+- **Ölçüm (kullanıcı, 2026-10-03, `rudp-jitter.sh`, tur 5 koduyla,
+  `20261003-232036`):** `overall: PASS (6 of 6)`. Titreşim: snapshot
+  `off`'un %99,6–99,8'i, düşen %0,13–0,30, istemci başına 0,19–0,35
+  kesinti. Darboğaz: kayıp %18,87 / %51,18 (oran 0,37), RTT 203 / 1438 ms
+  (0,14), ölen oturum 0 / 29; titreşimli darboğaz 0,38 / 0,18, 0 / 0.
+  Boşaltma 42 koşunun hiçbirinde tetiklenmedi (B144).
+- **Değişiklik:** `UdpCongestion` ve `UdpTransportConfig`'in varsayılanı
+  `Pace`; sunucunun `udp_congestion` varsayılanı `"pace"`; `"off"` açık
+  vazgeçiş. Rapor göndermeyen istemciler değişmedi. Loadgen
+  `--udp-congestion` verilmezse sunucu varsayılanı. Tel, sayaç, golden
+  değişmedi.
+- **Röle ölçümü (B147, tur 5 koduyla):** tur 4'ün aralığında — derin
+  p95 215 ms, sığ 147 ms, paylaşımlı 168–181 ms (Jain 0,995); tur 3'e
+  göre bedel sürüyor (B140 açık).
+
+Testler 2052 → 2053 (`otlp` ile 2070 → 2071). Ebeveyn doğrulaması: tam
+kapılar yeşil; `gsb-net`'in kendi varsayılanını `Off`'a çevirmek hiçbir
+testi düşürmedi → `pace_is_the_default` eklendi, şimdi düşürüyor.
+
 ## r5 — rUDP tıkanıklık tepkisi tur 5: sonda ufku, sessizlik sinyali, uzun taban, boşaltma (`net/r5-base-drift`)
 
 - **Ölçüm (kullanıcı, 2026-10-03, `rudp-jitter.sh`, tur 4 koduyla):**

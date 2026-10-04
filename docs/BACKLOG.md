@@ -127,6 +127,9 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B144 Taban halkası (`congestion::base`) ve boşaltma (`udp_game_paced_drains`) modelde ölçülebilir etki yapmadı (sonda düzeltmelerinden sonra kuyruk 10 sn'den önce boşalıyor; boşaltma 0) — sigorta; gerçek ölçümde de `drains` 0 ve taban farkı görünmüyorsa sadeleştirme adayı. **Gerçek ölçüm (f104, `20261003-232036`): 42 koşunun hepsinde `transport_udp_game_paced_drains=0`**; taban farkı RESULT'ta görünmüyor | kullanıcı kararı (sadeleştir ya da sigorta olarak tut) | DESIGN §6 tur 5 |
 | B145 `pace`'te okumayı bırakan raporlayan istemci 5 sn'de hızlanır ve 8 sn yerine 2 sn'de bir sondalanır (hızlı kadans × 8) — bilinçli; gerekirse sessizlikten girilen bölümde kadans `PROBE_INTERVAL` tabanından geri çekilir | sahada sessiz istemci maliyeti görünürse | DESIGN §6 tur 5, `feedback::SILENT_GRACE` |
 | B146 `rudp-jitter.sh` özetinde boşaltma sütunu yok (`transport_udp_game_paced_drains` RESULT'ta ve loglarda var) | boşaltma ölçümde görünürse | `scripts/rudp-jitter.sh` |
+| B148 `jitter40_loss1`'de `pace` altında bağlantı p99'u yüksek — r5 ölçümünde 343 ms (en kötü koşu 450) vs `off` 276 (295); diğer titreşim senaryoları ±%10 | sonraki `rudp-jitter.sh` koşusunda tekrarlarsa | DESIGN §6 "Ölçüm — tur 5 sonrası" |
+| B149 Röle ölçümünün `off` satırları koşudan koşuya çok oynuyor (sığ `off` 2,2 vs 9,0 msg/sn) — tek koşu karşılaştırması kırılgan; her senaryoyu birkaç kez koşup aralık basmalı | sonraki röle karşılaştırması | `udp::tests::pace::measure` |
+| B150 Varsayılan rUDP config'li entegrasyon testleri artık `pace` altında — çok yüklü CI'da hızlama tetiklenebilir (bu turda hiç olmadı) | bir rUDP e2e testi kırılgan çıkarsa | DESIGN §6 |
 
 ### C. Dağıtık, kalıcılık, ufuk
 

@@ -77,17 +77,18 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **2052** (2052/2052 yeşil, 4 ignored — doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası;
+Test sayısı: bugün itibarıyla **2053** (2053/2053 yeşil, 4 ignored — doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 → 1710 → 1722 → 1728 → 1746 → 1753 → 1777 → 1811 → 1846 → 1891 → 1900 → 1916 → 1958 → 1980 → 1991 → 2034 → 2044 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 → 1710 → 1722 → 1728 → 1746 → 1753 → 1777 → 1811 → 1846 → 1891 → 1900 → 1916 → 1958 → 1980 → 1991 → 2034 → 2044 → 2052 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **r5 — tıkanıklık tepkisi tur 5 (B142)** — sonda ufku 4 sn,
-sessizlik sinyali, uzun kayıplı aralık, LEDBAT tabanı, BBR boşaltması;
-modelde darboğaz `verdict`'i geçiyor; varsayılan `"pace"` kullanıcının
-yeniden ölçümünü bekliyor.
-Önceki tur: **r4 — tıkanıklık tepkisi tur 4 (B104)** — titreşime dayanıklı
-gecikme sinyali, talebe göre artış, 1 bütçe/sn taban; varsayılan `"pace"`
-kullanıcının yeniden ölçümünü (`rudp-jitter.sh` → `overall: PASS`) bekliyor.
+Son tur: **f104 — B104 kapandı** — kullanıcının ölçümü `overall: PASS
+(6 of 6)`; `udp_congestion` varsayılanı artık `"pace"`, `"off"` açık
+vazgeçiş.
+Önceki tur: **r5 — tıkanıklık tepkisi tur 5 (B142)** — sonda ufku 4 sn,
+sessizlik sinyali, uzun kayıplı aralık, LEDBAT tabanı, BBR boşaltması.
+Daha önce: **r4 — tıkanıklık tepkisi tur 4 (B104)** — titreşime dayanıklı
+gecikme sinyali, talebe göre artış, 1 bütçe/sn taban (darboğaz `verdict`'i
+r5'le geçti).
 Daha önce: **t21 — B21 gerçek bilet doğrulaması** — `gsb-ticket` (PASETO
 v4.public, oyunun talepleri jenerik, oyun kontrolü), doğrulanmış talepler
 katılım kancalarında, `JoinGrant` + `gsb-client` `grant`, `examples/lobby`;
@@ -126,7 +127,7 @@ SEALED kayıt + replay + anahtar fazı + reset jetonu), testli, rUDP'ye
 bağlı değil; tasarım `docs/RUDP-SECURITY.md`. rUDP güvenlik sırası: **B3 →
 B89 → B5a (çekirdeği bağla) → B5b → B7**.
 Önceki tur: **rUDP sertleştirme 3** (rUDP hattı 3) — B1'in tepkisi: opt-in
-hızlama + en eskiyi düşürme (`udp_congestion`, vars. `"off"`),
+hızlama + en eskiyi düşürme (`udp_congestion`, vars. `"off"`; f104'ten beri `"pace"`),
 `PathState`; B91, B93, B96, F75 kapandı. Sıradaki rUDP: `PathState`'in
 oyuna taşınması (B103, kullanıcı kararları bekliyor) ve B3 (göç).
 Önceki tur: **e1 — B7 düz metin** — rUDP üstünde resume uçtan uca kilitli
