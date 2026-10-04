@@ -80,6 +80,18 @@ fn paced_at(t: &mut Instant, sent: u64, lost: u64) -> Control {
     c
 }
 
+/// B104: pacing is the default, both the enum's and the transport
+/// config's (a library user who builds the config gets it too); off is
+/// the explicit opt-out.
+#[test]
+fn pace_is_the_default() {
+    assert_eq!(UdpCongestion::default(), UdpCongestion::Pace);
+    assert_eq!(
+        crate::udp::UdpTransportConfig::default().congestion,
+        UdpCongestion::Pace
+    );
+}
+
 /// Clean reports leave a session open, probed once a second; loss below
 /// the bar (one datagram, or under a tenth) and a queue below the limit
 /// are noise.
