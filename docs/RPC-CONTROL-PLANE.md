@@ -17,7 +17,7 @@ mekanizma, sonra her tasarım sorusunun cevabı.
 
 Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
-> Sonraki tasarım (s0, inceleme bekliyor): sistemlerin servis çağrısı, `External`'ın onun özel durumu olması, itilen olaylar ve hub — `docs/SERVICES.md`.
+> Sonraki tasarım (s0b, inceleme bekliyor): `#[gsb::service]` servisleri, ECS'ten bağımsız `Calls` tablosu, `External`'ın yerleşik bir `forward` kuralı olması, kayıt/tekrar determinizmi — `docs/SERVICES.md` (itilen olaylar sonraki turda).
 
 ---
 

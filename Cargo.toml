@@ -18,7 +18,8 @@ members = [
     "examples/lobby",
 ]
 # Design spikes: standalone crates that prove a design without changing
-# the engine (round s0: docs/SERVICES.md). Never workspace members.
+# the engine (rounds s0/s0b: docs/SERVICES.md; spikes/s0-calls is its own
+# small workspace with its proc-macro crate). Never workspace members.
 exclude = ["spikes/s0-calls"]
 
 [workspace.package]
