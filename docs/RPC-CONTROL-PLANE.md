@@ -17,6 +17,8 @@ mekanizma, sonra her tasarım sorusunun cevabı.
 
 Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
+> Sonraki tasarım (s0, inceleme bekliyor): sistemlerin servis çağrısı, `External`'ın onun özel durumu olması, itilen olaylar ve hub — `docs/SERVICES.md`.
+
 ---
 
 ## 1. Mekanizma: tick dışında asenkron iş, tick'te tek kavşağın sonucu
