@@ -1,5 +1,6 @@
-# Round s0 design spike (docs/SERVICES.md): NOT a workspace member (the
-# root Cargo.toml lists it under `exclude`). It models a minimal
+# Round s0b design spike (docs/SERVICES.md): NOT a member of the gsb
+# workspace (the root Cargo.toml lists it under `exclude`); it is its own
+# small workspace (this crate + the `#[service]` proc-macro). It models a
 # synchronous tick on its own types and changes no engine behaviour.
 [package]
 name = "s0-calls"
@@ -9,11 +10,21 @@ rust-version = "1.95.0"
 license = "MIT"
 publish = false
 
+[workspace]
+members = [".", "macros"]
+
 [dependencies]
-# Only the channel half of tokio: try_send / try_recv need no runtime,
-# which is exactly the synchronous tick's position.
-tokio = { version = "1", default-features = false, features = ["sync"] }
+s0-calls-macros = { path = "macros" }
+# Channels (try_send / try_recv need no runtime) for the tick side; the
+# runtime + timers only for the live service host.
+tokio = { version = "1", default-features = false, features = ["sync", "rt", "rt-multi-thread", "time"] }
+# The service side runs on tower: the macro's router is a tower::Service,
+# the host stacks the game's layers (timeout, concurrency_limit, load_shed).
+tower = { version = "0.5", default-features = false, features = ["timeout", "limit", "load-shed", "util"] }
 prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
+# The two ECS adapters (each a few lines: a Resource, an `.entity()`).
+bevy_ecs = "0.19"
+hecs = "0.10"
 
 [build-dependencies]
 gsb-lint = { path = "../../crates/gsb-lint" }

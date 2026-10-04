@@ -1,403 +1,1032 @@
-//! The room side of a call (SERVICES.md §4.2–4.4): the call table the
-//! tick context lends to the logic, and the RESPONSES-phase reconcile.
+//! The `Calls` table (SERVICES.md §5): ECS-agnostic, one per tick actor.
 //!
-//! Interior state is `Cell` take/set (the kick queue's idiom): the hooks
-//! hold `&TickCtx`, so calling is a push, never a re-entry.
+//! - client requests come IN through it (`take_incoming`,
+//!   `take_incoming_all`) and are answered through it (`reply`, or a
+//!   call's `.answers(..)`);
+//! - calls go OUT through it (`call(..)`), never blocking, never failing
+//!   on the spot;
+//! - results come BACK through it (`take_resolved`), one path for every
+//!   ending (answer, service error, refusal, timeout, abandonment).
+//!
+//! What nobody takes or answers is closed at tick end and counted.
 
-use std::any::Any;
-use std::cell::Cell;
-use std::collections::HashMap;
+use std::any::{Any, TypeId};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use crate::request::Request;
-use crate::service::{Body, Call, Completion, Reply, ServiceRef};
+use crate::contract::{
+    ActorId, Call, CallCx, CallError, CallKey, Caller, ConnId, DecodeError, Ended, Erased, Failure,
+    Identity, Outcome, Owner, Refusal, Request, WireMessage, clone_outcome, ended_of, fail_for,
+};
+use crate::route::{
+    CallSpec, Completion, ReplySink, SendFail, SendFn, ServiceId, ServiceStats, SinkTo,
+};
+use crate::wire::{RpcRequest, RpcResponse, reason};
 
-/// A call's identity: `origin` (the calling actor incarnation, unique per
-/// process start) in the high half, a sequence in the low half. Unique,
-/// so it doubles as the service's idempotency key; stable, because a
-/// re-issue (after a migration or a restart) passes the SAME key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CallKey(pub u128);
-
-impl CallKey {
-    pub fn new(origin: u64, seq: u64) -> Self {
-        Self((u128::from(origin) << 64) | u128::from(seq))
-    }
-
-    pub fn origin(self) -> u64 {
-        (self.0 >> 64) as u64
-    }
-
-    pub fn seq(self) -> u64 {
-        self.0 as u64
-    }
+/// One client request of type `R`, as the game takes it.
+///
+/// The fields are public so a game can move parts of `body` into a call
+/// and still hand `reply` to `.answers(..)` (partial moves).
+pub struct Incoming<R> {
+    pub body: R,
+    /// The verified identity of the sender (from the ticket, never from
+    /// the payload).
+    pub from: Identity,
+    pub conn: ConnId,
+    pub reply: ReplyTo<R>,
 }
 
-/// Why a call was refused at the call site (fail fast — nothing was
-/// sent, nothing is pending).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefuseReason {
-    /// The service's mailbox is full.
-    Full,
-    /// The service is gone (its receiver dropped).
-    Gone,
-    /// This room already has its share of this service in flight.
-    ServiceCap,
-    /// A call with this key is already in flight here.
-    DuplicateKey,
+/// The right to answer one request, typed by it. Not `Clone`: at most one
+/// answer. Must be used (`calls.reply`) or attached (`.answers`) in the
+/// tick it was taken; otherwise the engine closes the request at tick
+/// end (`requests_unanswered`).
+pub struct ReplyTo<R> {
+    id: u64,
+    _r: PhantomData<fn() -> R>,
 }
 
-/// Every way a call can end besides the service's own answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CallError<E> {
-    /// The service answered with its typed error.
-    Service(E),
-    /// No answer by the deadline (the answer, if it comes, is `late`).
-    TimedOut,
-    /// The service dropped the reply without answering (it died, panicked
-    /// or forgot).
-    Abandoned,
-    /// Never sent (only seen through [`Refused::fail`]).
-    Refused(RefuseReason),
-}
-
-/// What the tag constructor receives.
-pub type Outcome<R> = Result<<R as Request>::Response, CallError<<R as Request>::Error>>;
-
-/// A refused call: the reason, the request back (as `try_send` hands back
-/// its message) and the tag constructor — [`Self::fail`] turns it into the
-/// game's `D` so a refusal can be handled where every other failure is.
-pub struct Refused<R: Request, D> {
-    pub reason: RefuseReason,
-    pub req: R,
-    tag: Box<dyn FnOnce(Outcome<R>) -> D + Send>,
-}
-
-impl<R: Request, D> Refused<R, D> {
-    /// The game's own message for this refusal (runs the tag with
-    /// `Err(CallError::Refused(reason))`).
-    pub fn fail(self) -> D {
-        (self.tag)(Err(CallError::Refused(self.reason)))
-    }
-}
-
-impl<R: Request, D> std::fmt::Debug for Refused<R, D> {
+impl<R> std::fmt::Debug for ReplyTo<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Refused")
-            .field("reason", &self.reason)
-            .finish_non_exhaustive()
+        f.debug_struct("ReplyTo").field("id", &self.id).finish()
     }
 }
 
-/// One finished call, as the RESPONSES phase hands it to the logic.
-#[derive(Debug)]
-pub struct Done<D> {
-    pub key: CallKey,
-    pub msg: D,
+/// A request of any type, from `take_incoming_all` (canonical order).
+pub struct AnyIncoming {
+    op: u16,
+    item: Box<dyn Any + Send + Sync>,
 }
 
-/// The call path's loss/outcome counters — one meaning each (SERVICES.md
-/// §8). Cumulative.
+impl AnyIncoming {
+    pub fn op(&self) -> u16 {
+        self.op
+    }
+    /// `Ok` if this is an `R`; the request back otherwise (chainable).
+    pub fn downcast<R: Request>(self) -> Result<Incoming<R>, AnyIncoming> {
+        match self.item.downcast::<Incoming<R>>() {
+            Ok(b) => Ok(*b),
+            Err(item) => Err(AnyIncoming { op: self.op, item }),
+        }
+    }
+}
+
+/// One resolved call: whom it belonged to, the context the caller put
+/// on it, and how it ended.
+pub struct Resolved<C: Call, X = ()> {
+    pub key: CallKey,
+    pub owner: Owner,
+    pub ctx: X,
+    pub outcome: Outcome<C>,
+}
+
+/// One recorded response: the key, the call type it answered (to catch
+/// a diverging replay), and the outcome (`None`: it arrived late).
+pub struct Recorded {
+    pub key: CallKey,
+    pub call: &'static str,
+    pub outcome: Option<Erased>,
+}
+
+/// Boot-time registration errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootError {
+    /// Two request types claim one opcode.
+    OpCollision {
+        op: u16,
+        first: &'static str,
+        second: &'static str,
+    },
+}
+
+/// Every count has one meaning ("count every loss").
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct CallCounters {
+pub struct Counters {
+    // Issue side.
+    pub calls_issued: u64,
     pub calls_sent: u64,
     pub calls_refused_full: u64,
     pub calls_refused_gone: u64,
-    pub calls_refused_service_cap: u64,
-    pub calls_refused_duplicate_key: u64,
-    pub calls_done_ok: u64,
-    pub calls_done_service_error: u64,
-    pub calls_timed_out: u64,
-    pub calls_abandoned: u64,
-    pub calls_late: u64,
-    pub calls_dropped_migrated: u64,
-    pub calls_lost_teardown: u64,
+    pub calls_refused_share: u64,
+    pub calls_exported: u64,
+    pub calls_imported: u64,
+    // How calls ended (each issued call ends in exactly one, or is exported).
+    pub results_ok: u64,
+    pub results_service_error: u64,
+    pub results_refused: u64,
+    pub results_timed_out: u64,
+    pub results_abandoned: u64,
+    /// An answer for a key this table no longer holds (exported away).
+    pub results_late: u64,
+    // Where results went.
+    pub responses_delivered: u64,
+    pub responses_unhandled: u64,
+    pub responses_owner_gone: u64,
+    pub answers_sent: u64,
+    // Client requests.
+    pub requests_received: u64,
+    pub requests_malformed: u64,
+    pub requests_no_handler: u64,
+    pub requests_undecodable: u64,
+    pub requests_duplicate: u64,
+    pub requests_forwarded: u64,
+    pub requests_answered: u64,
+    pub requests_untaken: u64,
+    pub requests_unanswered: u64,
+    pub requests_replied_late: u64,
+    // Replay.
+    /// A recorded response met a different call than it answered: the
+    /// game (or binary) is not the recorded one. Never in a true replay.
+    pub replay_diverged: u64,
 }
 
-/// The call path's knobs.
+/// Table knobs.
 #[derive(Debug, Clone, Copy)]
-pub struct CallConfig {
-    /// Deadline of a call, in ticks of the calling actor.
-    pub timeout_ticks: u64,
-    /// Per (room, service) in-flight share: the fairness cap.
-    pub max_in_flight_per_service: u32,
+pub struct CallsConfig {
+    pub actor: ActorId,
+    /// High half of every key (rooms: derived from the recorded seed).
+    pub origin: u64,
+    /// In-flight cap per (this actor, service): the actor's share.
+    pub share: u32,
+    /// Completion channel capacity.
+    pub completions: usize,
 }
 
-impl Default for CallConfig {
+impl Default for CallsConfig {
     fn default() -> Self {
         Self {
-            timeout_ticks: 150,
-            max_in_flight_per_service: 32,
+            actor: ActorId(1),
+            origin: 1,
+            share: 64,
+            completions: 1024,
         }
     }
 }
 
-pub(crate) enum Answer {
-    Body(Box<dyn Any + Send>),
-    TimedOut,
-    Abandoned,
+type Decoder = fn(&[u8], ConnId, Identity, u64) -> Result<Box<dyn Any + Send + Sync>, DecodeError>;
+type ForwardFn =
+    Arc<dyn Fn(&mut Calls, ConnId, &Identity, u64, &[u8]) -> Result<(), DecodeError> + Send + Sync>;
+type DeliverFn = fn(&mut Buckets, CallKey, Owner, Box<dyn Any + Send + Sync>, Erased);
+type Buckets = HashMap<(TypeId, TypeId), Box<dyn Bucket>>;
+
+trait Bucket: Send + Sync {
+    fn len(&self) -> usize;
+    fn clear(&mut self);
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-#[derive(Clone, Copy)]
-enum Kind {
-    Ok,
-    ServiceError,
-    TimedOut,
-    Abandoned,
+impl<T: Send + Sync + 'static> Bucket for Vec<T> {
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+    fn clear(&mut self) {
+        Vec::clear(self)
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
-type Deliver<D> = Box<dyn FnOnce(Answer) -> Option<(D, Kind)> + Send>;
-
-struct Pending<D> {
-    service: &'static str,
-    attempt: u64,
-    due: u64,
-    deliver: Deliver<D>,
+struct Slot {
+    type_id: TypeId,
+    op: u16,
+    open: u64,
+    item: Box<dyn Any + Send + Sync>,
 }
 
-/// The calling actor's in-flight calls. Owned by the room; lent to the
-/// hooks (shared) through the tick context; reconciled (exclusively) in
-/// the RESPONSES phase.
-pub struct CallTable<D> {
-    origin: u64,
-    cfg: CallConfig,
-    next_seq: Cell<u64>,
-    next_attempt: Cell<u64>,
-    now: Cell<u64>,
-    in_flight: Cell<u32>,
-    pending: Cell<HashMap<CallKey, Pending<D>>>,
-    per_service: Cell<HashMap<&'static str, u32>>,
-    counters: Cell<CallCounters>,
+struct OpenReq {
+    conn: ConnId,
+    wire_id: u64,
+    from: Identity,
+}
+
+struct Answer {
+    conn: ConnId,
+    wire_id: u64,
+    encode: fn(&Erased, u64) -> RpcResponse,
+}
+
+/// A call as the table keeps it (before and after it is sent). Also what
+/// an export carries.
+struct Entry {
+    key: Option<CallKey>,
+    type_id: TypeId,
+    type_name: &'static str,
+    owner: Owner,
+    service: ServiceId,
+    stats: Arc<ServiceStats>,
+    send: SendFn,
+    player: Option<Identity>,
+    /// `None`: the game does not want the result (a pure `.answers`).
+    ctx: Option<Box<dyn Any + Send + Sync>>,
+    deliver: DeliverFn,
+    answer: Option<Answer>,
+    fail: fn(Failure) -> Erased,
+    ended: fn(&Erased) -> Ended,
+    clone: fn(&Erased) -> Erased,
+    sent: bool,
+}
+
+/// Calls carried out of an actor by `export` (migration). In-process only
+/// in this spike: the context is a `Box<dyn Any>` (see SERVICES.md open
+/// questions for the cross-process form).
+pub struct Exported {
+    calls: Vec<Entry>,
+}
+
+impl Exported {
+    pub fn len(&self) -> usize {
+        self.calls.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.calls.is_empty()
+    }
+    /// The keys that travel (the destination re-issues under them).
+    pub fn keys(&self) -> Vec<Option<CallKey>> {
+        self.calls.iter().map(|e| e.key).collect()
+    }
+}
+
+/// The per-actor call table. See the module docs.
+///
+/// A bevy `Resource` (in the engine: behind a `bevy` feature of the core
+/// crate — the adapter crate could not implement bevy's trait for a gsb
+/// type, the orphan rule).
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct Calls {
+    cfg: CallsConfig,
+    seq: u64,
+    replay: bool,
+    // Client requests.
+    ops: HashMap<u16, (TypeId, &'static str)>,
+    accepts: HashMap<u16, Decoder>,
+    forwards: HashMap<u16, ForwardFn>,
+    incoming: Vec<Slot>,
+    open: BTreeMap<u64, OpenReq>,
+    live_ids: BTreeSet<(ConnId, u64)>,
+    next_open: u64,
+    // Calls.
+    drafts: Vec<Entry>,
+    pending: BTreeMap<CallKey, Entry>,
+    in_flight_by: HashMap<(TypeId, Owner), u32>,
+    per_service: HashMap<ServiceId, u32>,
     tx: mpsc::Sender<Completion>,
     rx: mpsc::Receiver<Completion>,
+    local: Vec<Completion>,
+    buckets: Buckets,
+    waiting: usize,
+    // Out.
+    outbox: Vec<(ConnId, RpcResponse)>,
+    recording: bool,
+    recorded: Vec<Recorded>,
+    pub counters: Counters,
+    /// Completion-channel polls (one empty `try_recv` per idle tick).
+    pub polls: u64,
 }
 
-impl<D: 'static> CallTable<D> {
-    /// `completion_capacity`: the room's completion channel. Sizing rule
-    /// (SERVICES.md §7): ≥ 2 × the room's total in-flight allowance, so
-    /// late answers of timed-out calls cannot crowd out current ones.
-    pub fn new(origin: u64, cfg: CallConfig, completion_capacity: usize) -> Self {
-        let (tx, rx) = mpsc::channel(completion_capacity.max(1));
+impl Calls {
+    pub fn new(cfg: CallsConfig) -> Self {
+        let (tx, rx) = mpsc::channel(cfg.completions.max(1));
         Self {
-            origin,
             cfg,
-            next_seq: Cell::new(1),
-            next_attempt: Cell::new(1),
-            now: Cell::new(0),
-            in_flight: Cell::new(0),
-            pending: Cell::new(HashMap::new()),
-            per_service: Cell::new(HashMap::new()),
-            counters: Cell::new(CallCounters::default()),
+            seq: 0,
+            replay: false,
+            ops: HashMap::new(),
+            accepts: HashMap::new(),
+            forwards: HashMap::new(),
+            incoming: Vec::new(),
+            open: BTreeMap::new(),
+            live_ids: BTreeSet::new(),
+            next_open: 0,
+            drafts: Vec::new(),
+            pending: BTreeMap::new(),
+            in_flight_by: HashMap::new(),
+            per_service: HashMap::new(),
             tx,
             rx,
+            local: Vec::new(),
+            buckets: HashMap::new(),
+            waiting: 0,
+            outbox: Vec::new(),
+            recording: false,
+            recorded: Vec::new(),
+            counters: Counters::default(),
+            polls: 0,
         }
     }
 
-    pub fn counters(&self) -> CallCounters {
-        self.counters.get()
+    pub fn config(&self) -> &CallsConfig {
+        &self.cfg
     }
 
-    pub fn in_flight(&self) -> u32 {
-        self.in_flight.get()
+    // ---- boot ------------------------------------------------------------
+
+    fn claim_op<R: Request>(&mut self) -> Result<(), BootError> {
+        let name = std::any::type_name::<R>();
+        if let Some((_, first)) = self.ops.get(&R::OP) {
+            return Err(BootError::OpCollision {
+                op: R::OP,
+                first,
+                second: name,
+            });
+        }
+        self.ops.insert(R::OP, (TypeId::of::<R>(), name));
+        Ok(())
     }
 
-    pub(crate) fn set_now(&self, now: u64) {
-        self.now.set(now);
+    /// The game takes `R` itself (`take_incoming::<R>()`).
+    pub fn accept<R: Request>(&mut self) -> Result<(), BootError> {
+        self.claim_op::<R>()?;
+        self.accepts.insert(R::OP, decode_incoming::<R>);
+        Ok(())
     }
 
-    fn count(&self, f: impl FnOnce(&mut CallCounters)) {
-        let mut c = self.counters.get();
-        f(&mut c);
-        self.counters.set(c);
-    }
-
-    fn fresh_key(&self) -> CallKey {
-        let seq = self.next_seq.get();
-        self.next_seq.set(seq + 1);
-        CallKey::new(self.origin, seq)
-    }
-
-    /// The call verb (behind `TickCtx::call` / `call_keyed`).
-    pub(crate) fn call<R, M>(
-        &self,
-        svc: &ServiceRef<M>,
-        key: Option<CallKey>,
-        req: R,
-        tag: Box<dyn FnOnce(Outcome<R>) -> D + Send>,
-    ) -> Result<CallKey, Refused<R, D>>
+    /// A shared one-line rule: every incoming `R` becomes the call `route`
+    /// builds, answered straight to the client. The game never sees it.
+    ///
+    /// ```ignore
+    /// calls.forward(move |r: ListFriends| friends.list(r))?;
+    /// ```
+    pub fn forward<R, C, F>(&mut self, route: F) -> Result<(), BootError>
     where
         R: Request,
-        M: From<Call<R>>,
+        C: Call<Response = R::Response, Error = R::Error>,
+        F: Fn(R) -> CallSpec<C> + Send + Sync + 'static,
     {
-        let refuse = |reason, req, tag| Err(Refused { reason, req, tag });
-        let key = key.unwrap_or_else(|| self.fresh_key());
+        self.claim_op::<R>()?;
+        let rule: ForwardFn = Arc::new(move |calls, conn, from, wire_id, bytes| {
+            let body = R::from_wire(bytes)?;
+            let spec = route(body);
+            let mut e = entry_of::<C, ()>(spec, None, None, Some(from.clone()), None);
+            e.answer = Some(Answer {
+                conn,
+                wire_id,
+                encode: encode_answer::<R>,
+            });
+            calls.push(e);
+            Ok(())
+        });
+        self.forwards.insert(R::OP, rule);
+        Ok(())
+    }
 
-        let mut pending = self.pending.take();
-        let mut per_service = self.per_service.take();
-        let busy = pending.contains_key(&key);
-        let share = per_service.get(svc.name()).copied().unwrap_or(0);
-        let outcome = if busy {
-            self.count(|c| c.calls_refused_duplicate_key += 1);
-            refuse(RefuseReason::DuplicateKey, req, tag)
-        } else if share >= self.cfg.max_in_flight_per_service {
-            self.count(|c| c.calls_refused_service_cap += 1);
-            refuse(RefuseReason::ServiceCap, req, tag)
-        } else {
-            // Reserve the mailbox slot FIRST: a refusal hands the request
-            // and the tag back untouched (nothing was built, nothing sent).
-            match svc.sender().try_reserve() {
-                Err(mpsc::error::TrySendError::Full(())) => {
-                    self.count(|c| c.calls_refused_full += 1);
-                    refuse(RefuseReason::Full, req, tag)
+    // ---- requests ----------------------------------------------------------
+
+    /// This tick's requests of type `R`, in arrival order (per-type FIFO).
+    pub fn take_incoming<R: Request>(&mut self) -> Vec<Incoming<R>> {
+        if self.incoming.is_empty() {
+            return Vec::new();
+        }
+        let want = TypeId::of::<R>();
+        let mut out = Vec::new();
+        let mut rest = Vec::with_capacity(self.incoming.len());
+        for slot in self.incoming.drain(..) {
+            if slot.type_id == want {
+                match slot.item.downcast::<Incoming<R>>() {
+                    Ok(b) => out.push(*b),
+                    Err(_) => unreachable!("slot type id matches"),
                 }
-                Err(mpsc::error::TrySendError::Closed(())) => {
-                    self.count(|c| c.calls_refused_gone += 1);
-                    refuse(RefuseReason::Gone, req, tag)
+            } else {
+                rest.push(slot);
+            }
+        }
+        self.incoming = rest;
+        out
+    }
+
+    /// All of this tick's requests, in the tick's canonical arrival order
+    /// (the order READ pulled them, the order the input log records).
+    pub fn take_incoming_all(&mut self) -> Vec<AnyIncoming> {
+        self.incoming
+            .drain(..)
+            .map(|s| AnyIncoming {
+                op: s.op,
+                item: s.item,
+            })
+            .collect()
+    }
+
+    /// Answer a request now (typed).
+    pub fn reply<R: Request>(&mut self, to: ReplyTo<R>, result: Result<R::Response, R::Error>) {
+        match self.open.remove(&to.id) {
+            Some(o) => {
+                let out: Outcome<R> = result.map_err(CallError::Service);
+                let erased: Erased = Box::new(out);
+                self.outbox
+                    .push((o.conn, encode_answer::<R>(&erased, o.wire_id)));
+                self.live_ids.remove(&(o.conn, o.wire_id));
+                self.counters.requests_answered += 1;
+            }
+            None => self.counters.requests_replied_late += 1,
+        }
+    }
+
+    // ---- calls ---------------------------------------------------------------
+
+    /// Issue a call. Never blocks, never fails here: refusals come back
+    /// through `take_resolved` like every other ending.
+    pub fn call<C: Call>(&mut self, spec: CallSpec<C>) -> CallBuilder<'_, C, ()> {
+        CallBuilder {
+            calls: Some(self),
+            b: Some(Build {
+                spec,
+                owner: None,
+                ctx: (),
+                has_ctx: false,
+                answer: None,
+                player: None,
+                key: None,
+            }),
+        }
+    }
+
+    /// This tick's (and earlier ticks' untaken-so-far) results of `C`
+    /// issued with context type `X`, in arrival order.
+    pub fn take_resolved<C: Call, X: Send + Sync + 'static>(&mut self) -> Vec<Resolved<C, X>> {
+        if self.waiting == 0 {
+            return Vec::new();
+        }
+        match self
+            .buckets
+            .get_mut(&(TypeId::of::<C>(), TypeId::of::<X>()))
+        {
+            Some(b) => {
+                let v = b
+                    .as_any_mut()
+                    .downcast_mut::<Vec<Resolved<C, X>>>()
+                    .expect("bucket type matches its key");
+                let v = std::mem::take(v);
+                self.waiting -= v.len();
+                v
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Is a call of type `C` owned by `owner` in flight (or about to be)?
+    pub fn in_flight<C: Call>(&self, owner: Owner) -> bool {
+        self.in_flight_by
+            .get(&(TypeId::of::<C>(), owner))
+            .is_some_and(|n| *n > 0)
+    }
+
+    /// Carry `owner`'s calls out (migration). Their keys and contexts
+    /// travel; a late answer here is `results_late`.
+    pub fn export(&mut self, owner: Owner) -> Exported {
+        let keys: Vec<CallKey> = self
+            .pending
+            .iter()
+            .filter(|(_, e)| e.owner == owner)
+            .map(|(k, _)| *k)
+            .collect();
+        let mut calls = Vec::with_capacity(keys.len());
+        for k in keys {
+            if let Some(e) = self.pending.remove(&k) {
+                self.untrack(&e);
+                calls.push(e);
+            }
+        }
+        let mut i = 0;
+        while i < self.drafts.len() {
+            if self.drafts[i].owner == owner {
+                let e = self.drafts.remove(i);
+                self.untrack(&e);
+                calls.push(e);
+            } else {
+                i += 1;
+            }
+        }
+        self.counters.calls_exported += calls.len() as u64;
+        Exported { calls }
+    }
+
+    /// Take calls exported elsewhere, now owned by `owner`; each is
+    /// re-issued at this tick's flush under its ORIGINAL key (the service
+    /// dedupes by it: one effect).
+    pub fn import(&mut self, exported: Exported, owner: Owner) {
+        for mut e in exported.calls {
+            e.owner = owner;
+            e.sent = false;
+            self.counters.calls_imported += 1;
+            self.push(e);
+        }
+    }
+
+    fn untrack(&mut self, e: &Entry) {
+        if let Some(n) = self.in_flight_by.get_mut(&(e.type_id, e.owner)) {
+            *n -= 1;
+            if *n == 0 {
+                self.in_flight_by.remove(&(e.type_id, e.owner));
+            }
+        }
+        if e.sent
+            && let Some(n) = self.per_service.get_mut(&e.service)
+        {
+            *n -= 1;
+        }
+    }
+
+    fn push(&mut self, e: Entry) {
+        *self.in_flight_by.entry((e.type_id, e.owner)).or_insert(0) += 1;
+        self.counters.calls_issued += 1;
+        self.drafts.push(e);
+    }
+
+    // ---- engine phases (the actor's drain points) ------------------------------
+
+    pub(crate) fn set_replay(&mut self, on: bool) {
+        self.replay = on;
+    }
+
+    pub(crate) fn set_recording(&mut self, on: bool) {
+        self.recording = on;
+    }
+
+    pub(crate) fn take_recorded(&mut self) -> Vec<Recorded> {
+        std::mem::take(&mut self.recorded)
+    }
+
+    /// RESPONSES: absorb finished calls (refusals decided at the last
+    /// flush first, then the completion channel in arrival order — or, in
+    /// replay, the recorded list). `alive` says whether an owner still
+    /// exists.
+    pub(crate) fn responses(&mut self, replay: Option<&[Recorded]>, alive: &dyn Fn(Owner) -> bool) {
+        if let Some(rec) = replay {
+            for r in rec {
+                let outcome = match (&r.outcome, self.pending.get(&r.key)) {
+                    (Some(o), Some(e)) if e.type_name == r.call => (e.clone)(o),
+                    (Some(_), Some(_)) => {
+                        self.counters.replay_diverged += 1;
+                        continue;
+                    }
+                    _ => {
+                        self.counters.results_late += 1;
+                        continue;
+                    }
+                };
+                self.absorb(r.key, outcome, alive);
+            }
+            return;
+        }
+        if !self.local.is_empty() {
+            for c in std::mem::take(&mut self.local) {
+                self.absorb(c.key, c.outcome, alive);
+            }
+        }
+        self.polls += 1;
+        while let Ok(c) = self.rx.try_recv() {
+            self.absorb(c.key, c.outcome, alive);
+            self.polls += 1;
+        }
+    }
+
+    fn absorb(&mut self, key: CallKey, outcome: Erased, alive: &dyn Fn(Owner) -> bool) {
+        let Some(e) = self.pending.remove(&key) else {
+            self.counters.results_late += 1;
+            if self.recording {
+                self.recorded.push(Recorded {
+                    key,
+                    call: "",
+                    outcome: None,
+                });
+            }
+            return;
+        };
+        self.untrack(&e);
+        if self.recording {
+            self.recorded.push(Recorded {
+                key,
+                call: e.type_name,
+                outcome: Some((e.clone)(&outcome)),
+            });
+        }
+        match (e.ended)(&outcome) {
+            Ended::Ok => self.counters.results_ok += 1,
+            Ended::ServiceError => self.counters.results_service_error += 1,
+            Ended::Refused(_) => self.counters.results_refused += 1,
+            Ended::TimedOut => self.counters.results_timed_out += 1,
+            Ended::Abandoned => self.counters.results_abandoned += 1,
+        }
+        if let Some(a) = &e.answer {
+            self.outbox.push((a.conn, (a.encode)(&outcome, a.wire_id)));
+            self.live_ids.remove(&(a.conn, a.wire_id));
+            self.counters.answers_sent += 1;
+        }
+        if let Some(ctx) = e.ctx {
+            if e.owner != Owner::ACTOR && !alive(e.owner) {
+                self.counters.responses_owner_gone += 1;
+            } else {
+                (e.deliver)(&mut self.buckets, key, e.owner, ctx, outcome);
+                self.waiting += 1;
+                self.counters.responses_delivered += 1;
+            }
+        }
+    }
+
+    /// READ: one client request (already authenticated: `from` is the
+    /// connection's verified identity).
+    pub(crate) fn read(&mut self, conn: ConnId, from: &Identity, req: RpcRequest) {
+        self.counters.requests_received += 1;
+        if req.id == 0 {
+            self.counters.requests_malformed += 1;
+            self.reject(conn, req.id, req.op, reason::MALFORMED);
+            return;
+        }
+        if self.live_ids.contains(&(conn, req.id)) {
+            self.counters.requests_duplicate += 1;
+            self.reject(conn, req.id, req.op, reason::DUPLICATE);
+            return;
+        }
+        let Ok(op) = u16::try_from(req.op) else {
+            self.counters.requests_no_handler += 1;
+            self.reject(conn, req.id, req.op, reason::NO_HANDLER);
+            return;
+        };
+        if let Some(rule) = self.forwards.get(&op).cloned() {
+            match rule(self, conn, from, req.id, &req.payload) {
+                Ok(()) => {
+                    self.live_ids.insert((conn, req.id));
+                    self.counters.requests_forwarded += 1;
                 }
-                Ok(permit) => {
-                    let attempt = self.next_attempt.get();
-                    self.next_attempt.set(attempt + 1);
-                    let reply = Reply::<R>::new(key, attempt, self.tx.clone());
-                    permit.send(M::from(Call { key, req, reply }));
-                    pending.insert(
-                        key,
-                        Pending {
-                            service: svc.name(),
-                            attempt,
-                            due: self.now.get() + self.cfg.timeout_ticks,
-                            deliver: deliver::<R, D>(tag),
-                        },
-                    );
-                    per_service.insert(svc.name(), share + 1);
-                    self.in_flight.set(self.in_flight.get() + 1);
-                    self.count(|c| c.calls_sent += 1);
-                    Ok(key)
+                Err(DecodeError) => {
+                    self.counters.requests_undecodable += 1;
+                    self.reject(conn, req.id, req.op, reason::UNDECODABLE);
+                }
+            }
+            return;
+        }
+        let Some(decode) = self.accepts.get(&op).copied() else {
+            self.counters.requests_no_handler += 1;
+            self.reject(conn, req.id, req.op, reason::NO_HANDLER);
+            return;
+        };
+        self.next_open += 1;
+        let open = self.next_open;
+        match decode(&req.payload, conn, from.clone(), open) {
+            Ok(item) => {
+                let type_id = self.ops[&op].0;
+                self.open.insert(
+                    open,
+                    OpenReq {
+                        conn,
+                        wire_id: req.id,
+                        from: from.clone(),
+                    },
+                );
+                self.live_ids.insert((conn, req.id));
+                self.incoming.push(Slot {
+                    type_id,
+                    op,
+                    open,
+                    item,
+                });
+            }
+            Err(DecodeError) => {
+                self.counters.requests_undecodable += 1;
+                self.reject(conn, req.id, req.op, reason::UNDECODABLE);
+            }
+        }
+    }
+
+    fn reject(&mut self, conn: ConnId, id: u64, op: u32, why: &str) {
+        self.outbox.push((conn, engine_reply(id, op, why)));
+    }
+
+    /// After SYSTEMS: send this tick's calls (in issue order). A refusal
+    /// is decided here and delivered in the next RESPONSES, like any
+    /// other ending.
+    pub(crate) fn flush(&mut self) {
+        if self.drafts.is_empty() {
+            return;
+        }
+        for e in std::mem::take(&mut self.drafts) {
+            self.issue(e);
+        }
+    }
+
+    fn issue(&mut self, mut e: Entry) {
+        let key = match e.key {
+            Some(k) => k,
+            None => {
+                self.seq += 1;
+                CallKey {
+                    origin: self.cfg.origin,
+                    seq: self.seq,
                 }
             }
         };
-        self.pending.set(pending);
-        self.per_service.set(per_service);
-        outcome
-    }
-
-    fn release(&self, per_service: &mut HashMap<&'static str, u32>, service: &'static str) {
-        if let Some(n) = per_service.get_mut(service) {
-            *n -= 1;
-            if *n == 0 {
-                per_service.remove(service);
-            }
+        e.key = Some(key);
+        if self.replay {
+            // Services are not called; recorded outcomes arrive by key.
+            self.pending.insert(key, e);
+            return;
         }
-        self.in_flight.set(self.in_flight.get() - 1);
-    }
-
-    fn finish(&self, key: CallKey, p: Pending<D>, answer: Answer, out: &mut Vec<Done<D>>) {
-        if let Some((msg, kind)) = (p.deliver)(answer) {
-            self.count(|c| match kind {
-                Kind::Ok => c.calls_done_ok += 1,
-                Kind::ServiceError => c.calls_done_service_error += 1,
-                Kind::TimedOut => c.calls_timed_out += 1,
-                Kind::Abandoned => c.calls_abandoned += 1,
+        let used = self.per_service.get(&e.service).copied().unwrap_or(0);
+        if used >= self.cfg.share {
+            self.counters.calls_refused_share += 1;
+            self.local.push(Completion {
+                key,
+                outcome: (e.fail)(Failure::Refused(Refusal::Share)),
             });
-            out.push(Done { key, msg });
-        } else {
-            // Unreachable by construction (attempt-matched); counted, not
-            // trusted.
-            self.count(|c| c.calls_late += 1);
+            self.pending.insert(key, e);
+            return;
         }
-    }
-
-    /// The RESPONSES phase: drain the completion channel (one empty
-    /// `try_recv` when quiet), reconcile against the pending set, then —
-    /// only when something is in flight — sweep the deadlines. Returns
-    /// whether a sweep ran (the idle-cost proof reads it).
-    pub(crate) fn absorb(&mut self, out: &mut Vec<Done<D>>) -> bool {
-        while let Ok(c) = self.rx.try_recv() {
-            let mut pending = self.pending.take();
-            let current = pending.get(&c.key).is_some_and(|p| p.attempt == c.attempt);
-            if current {
-                let p = pending.remove(&c.key).expect("checked above");
-                let mut per_service = self.per_service.take();
-                self.release(&mut per_service, p.service);
-                self.per_service.set(per_service);
-                let answer = match c.body {
-                    Body::Answer(b) => Answer::Body(b),
-                    Body::Abandoned => Answer::Abandoned,
+        let cx = CallCx {
+            key,
+            caller: Caller {
+                actor: self.cfg.actor,
+                player: e.player.clone(),
+            },
+        };
+        let sink = ReplySink {
+            key,
+            to: SinkTo::Actor(self.tx.clone()),
+            fail: e.fail,
+            stats: Arc::clone(&e.stats),
+        };
+        match (e.send)(cx, sink) {
+            Ok(()) => {
+                e.sent = true;
+                *self.per_service.entry(e.service).or_insert(0) += 1;
+                self.counters.calls_sent += 1;
+            }
+            Err((why, sink)) => {
+                sink.disarm();
+                let r = match why {
+                    SendFail::Full => {
+                        self.counters.calls_refused_full += 1;
+                        Refusal::Full
+                    }
+                    SendFail::Gone => {
+                        self.counters.calls_refused_gone += 1;
+                        Refusal::Gone
+                    }
                 };
-                self.finish(c.key, p, answer, out);
-            } else {
-                // Answer for a call that is no longer pending here:
-                // timed out, dropped by a migration, or an older attempt.
-                self.count(|c| c.calls_late += 1);
-            }
-            self.pending.set(pending);
-        }
-        if self.in_flight.get() == 0 {
-            return false;
-        }
-        let now = self.now.get();
-        let mut pending = self.pending.take();
-        let mut expired: Vec<CallKey> = pending
-            .iter()
-            .filter(|(_, p)| p.due <= now)
-            .map(|(k, _)| *k)
-            .collect();
-        expired.sort();
-        let mut per_service = self.per_service.take();
-        for key in expired {
-            let p = pending.remove(&key).expect("collected above");
-            self.release(&mut per_service, p.service);
-            self.finish(key, p, Answer::TimedOut, out);
-        }
-        self.per_service.set(per_service);
-        self.pending.set(pending);
-        true
-    }
-
-    /// Migrate-out / room handoff: forget these calls here (their tags are
-    /// dropped; the game carries its reserve — with the key — in its
-    /// migration state and re-issues with `call_keyed`). A later answer
-    /// lands here as `calls_late`.
-    pub fn drop_for_migration(&self, keys: &[CallKey]) {
-        let mut pending = self.pending.take();
-        let mut per_service = self.per_service.take();
-        for key in keys {
-            if let Some(p) = pending.remove(key) {
-                self.release(&mut per_service, p.service);
-                self.count(|c| c.calls_dropped_migrated += 1);
+                self.local.push(Completion {
+                    key,
+                    outcome: (e.fail)(Failure::Refused(r)),
+                });
             }
         }
-        self.per_service.set(per_service);
-        self.pending.set(pending);
+        self.pending.insert(key, e);
     }
 
-    /// Teardown: whatever is still in flight is lost to this incarnation
-    /// (counted once; no `Done` is produced — there is no logic to take it).
-    pub fn teardown(&self) {
-        let pending = self.pending.take();
-        let lost = pending.len() as u64;
-        self.count(|c| c.calls_lost_teardown += lost);
-        self.in_flight.set(0);
-        self.per_service.set(HashMap::new());
+    /// BROADCAST: close what nobody took or answered (counted, and the
+    /// client gets an engine answer), and hand out this tick's answers.
+    pub(crate) fn end_tick(&mut self) -> Vec<(ConnId, RpcResponse)> {
+        if !self.incoming.is_empty() {
+            for slot in std::mem::take(&mut self.incoming) {
+                if let Some(o) = self.open.remove(&slot.open) {
+                    self.counters.requests_untaken += 1;
+                    self.live_ids.remove(&(o.conn, o.wire_id));
+                    self.outbox.push((
+                        o.conn,
+                        engine_reply(o.wire_id, u32::from(slot.op), reason::UNTAKEN),
+                    ));
+                }
+            }
+        }
+        if !self.open.is_empty() {
+            for (_, o) in std::mem::take(&mut self.open) {
+                self.counters.requests_unanswered += 1;
+                self.live_ids.remove(&(o.conn, o.wire_id));
+                self.outbox
+                    .push((o.conn, engine_reply(o.wire_id, 0, reason::UNANSWERED)));
+            }
+        }
+        if self.waiting > 0 {
+            for b in self.buckets.values_mut() {
+                let n = b.len();
+                if n > 0 {
+                    self.counters.responses_unhandled += n as u64;
+                    b.clear();
+                }
+            }
+            self.waiting = 0;
+        }
+        std::mem::take(&mut self.outbox)
+    }
+
+    /// Calls this table still waits for.
+    pub fn pending_len(&self) -> usize {
+        self.pending.len() + self.drafts.len()
+    }
+
+    /// Capacities of the per-tick buffers (the idle-cost proof: all stay
+    /// zero when nothing happens).
+    pub fn buffer_capacities(&self) -> [usize; 6] {
+        [
+            self.incoming.capacity(),
+            self.drafts.capacity(),
+            self.local.capacity(),
+            self.outbox.capacity(),
+            self.recorded.capacity(),
+            self.buckets.capacity(),
+        ]
     }
 }
 
-/// The typed half of a pending entry, monomorphized at the call site: it
-/// knows `R`, so the downcast always matches (the attempt check keeps a
-/// foreign answer out).
-fn deliver<R: Request, D: 'static>(tag: Box<dyn FnOnce(Outcome<R>) -> D + Send>) -> Deliver<D> {
-    Box::new(move |answer| {
-        let (outcome, kind): (Outcome<R>, Kind) = match answer {
-            Answer::Body(b) => match b.downcast::<Result<R::Response, R::Error>>() {
-                Ok(r) => match *r {
-                    Ok(resp) => (Ok(resp), Kind::Ok),
-                    Err(e) => (Err(CallError::Service(e)), Kind::ServiceError),
-                },
-                Err(_) => return None,
+/// The builder `calls.call(..)` returns. The call is issued when the
+/// builder ends (end of the statement); every method is optional.
+pub struct CallBuilder<'a, C: Call, X: Send + Sync + 'static = ()> {
+    calls: Option<&'a mut Calls>,
+    b: Option<Build<C, X>>,
+}
+
+struct Build<C: Call, X> {
+    spec: CallSpec<C>,
+    owner: Option<Owner>,
+    ctx: X,
+    has_ctx: bool,
+    answer: Option<Answer>,
+    player: Option<Identity>,
+    key: Option<CallKey>,
+}
+
+impl<'a, C: Call, X: Send + Sync + 'static> CallBuilder<'a, C, X> {
+    /// Whom the result belongs to: `in_flight::<C>(owner)`, export, and
+    /// "owner gone" all use it.
+    pub fn owner(mut self, owner: Owner) -> Self {
+        if let Some(b) = &mut self.b {
+            b.owner = Some(owner);
+        }
+        self
+    }
+
+    /// Context that comes back with the result (stays here; never sent).
+    pub fn with<Y: Send + Sync + 'static>(mut self, ctx: Y) -> CallBuilder<'a, C, Y> {
+        let calls = self.calls.take();
+        let b = self.b.take().map(|b| Build {
+            spec: b.spec,
+            owner: b.owner,
+            ctx,
+            has_ctx: true,
+            answer: b.answer,
+            player: b.player,
+            key: b.key,
+        });
+        CallBuilder { calls, b }
+    }
+
+    /// Forward the outcome to this client request automatically (typed:
+    /// the request's answer and error must be the call's). Also makes the
+    /// request's verified identity the call's `cx.player()`.
+    pub fn answers<R>(mut self, to: ReplyTo<R>) -> Self
+    where
+        R: Request<Response = C::Response, Error = C::Error>,
+    {
+        if let (Some(calls), Some(b)) = (self.calls.as_deref_mut(), self.b.as_mut()) {
+            match calls.open.remove(&to.id) {
+                Some(o) => {
+                    if b.player.is_none() {
+                        b.player = Some(o.from);
+                    }
+                    b.answer = Some(Answer {
+                        conn: o.conn,
+                        wire_id: o.wire_id,
+                        encode: encode_answer::<R>,
+                    });
+                }
+                None => calls.counters.requests_replied_late += 1,
+            }
+        }
+        self
+    }
+
+    /// The verified player the call acts for (`cx.player()`), when there
+    /// is no request to `.answers`.
+    pub fn on_behalf_of(mut self, who: &Identity) -> Self {
+        if let Some(b) = &mut self.b {
+            b.player = Some(who.clone());
+        }
+        self
+    }
+}
+
+impl<C: Call, X: Send + Sync + 'static> Drop for CallBuilder<'_, C, X> {
+    fn drop(&mut self) {
+        if let (Some(calls), Some(b)) = (self.calls.take(), self.b.take()) {
+            let wants = b.owner.is_some() || b.has_ctx || b.answer.is_none();
+            let ctx = if wants { Some(b.ctx) } else { None };
+            let mut e = entry_of::<C, X>(b.spec, b.owner, ctx, b.player, b.key);
+            e.answer = b.answer;
+            calls.push(e);
+        }
+    }
+}
+
+fn entry_of<C: Call, X: Send + Sync + 'static>(
+    spec: CallSpec<C>,
+    owner: Option<Owner>,
+    ctx: Option<X>,
+    player: Option<Identity>,
+    key: Option<CallKey>,
+) -> Entry {
+    Entry {
+        key,
+        type_id: TypeId::of::<C>(),
+        type_name: std::any::type_name::<C>(),
+        owner: owner.unwrap_or(Owner::ACTOR),
+        service: spec.service,
+        stats: spec.stats,
+        send: spec.send,
+        player,
+        ctx: ctx.map(|x| Box::new(x) as Box<dyn Any + Send + Sync>),
+        deliver: deliver::<C, X>,
+        answer: None,
+        fail: fail_for::<C>,
+        ended: ended_of::<C>,
+        clone: clone_outcome::<C>,
+        sent: false,
+    }
+}
+
+fn deliver<C: Call, X: Send + Sync + 'static>(
+    buckets: &mut Buckets,
+    key: CallKey,
+    owner: Owner,
+    ctx: Box<dyn Any + Send + Sync>,
+    outcome: Erased,
+) {
+    let ctx = *ctx.downcast::<X>().expect("context stored as its type");
+    let outcome = *outcome
+        .downcast::<Outcome<C>>()
+        .expect("outcome stored as its call's type");
+    let b = buckets
+        .entry((TypeId::of::<C>(), TypeId::of::<X>()))
+        .or_insert_with(|| Box::new(Vec::<Resolved<C, X>>::new()));
+    b.as_any_mut()
+        .downcast_mut::<Vec<Resolved<C, X>>>()
+        .expect("bucket type matches its key")
+        .push(Resolved {
+            key,
+            owner,
+            ctx,
+            outcome,
+        });
+}
+
+fn decode_incoming<R: Request>(
+    bytes: &[u8],
+    conn: ConnId,
+    from: Identity,
+    open: u64,
+) -> Result<Box<dyn Any + Send + Sync>, DecodeError> {
+    let body = R::from_wire(bytes)?;
+    Ok(Box::new(Incoming::<R> {
+        body,
+        from,
+        conn,
+        reply: ReplyTo {
+            id: open,
+            _r: PhantomData,
+        },
+    }))
+}
+
+fn engine_reply(id: u64, op: u32, why: &str) -> RpcResponse {
+    RpcResponse {
+        id,
+        ok: false,
+        op,
+        reason: why.to_owned(),
+        payload: Vec::new(),
+        game_error: false,
+    }
+}
+
+fn encode_answer<R: Request>(o: &Erased, wire_id: u64) -> RpcResponse {
+    let op = u32::from(R::OP);
+    match o.downcast_ref::<Outcome<R>>() {
+        Some(Ok(resp)) => RpcResponse {
+            id: wire_id,
+            ok: true,
+            op,
+            reason: String::new(),
+            payload: resp.to_wire(),
+            game_error: false,
+        },
+        Some(Err(CallError::Service(e))) => RpcResponse {
+            id: wire_id,
+            ok: false,
+            op,
+            reason: String::new(),
+            payload: e.to_wire(),
+            game_error: true,
+        },
+        Some(Err(CallError::Refused(r))) => engine_reply(
+            wire_id,
+            op,
+            match r {
+                Refusal::Full => reason::REFUSED_FULL,
+                Refusal::Gone => reason::REFUSED_GONE,
+                Refusal::Share => reason::REFUSED_SHARE,
+                Refusal::Shed => reason::REFUSED_SHED,
             },
-            Answer::TimedOut => (Err(CallError::TimedOut), Kind::TimedOut),
-            Answer::Abandoned => (Err(CallError::Abandoned), Kind::Abandoned),
-        };
-        Some((tag(outcome), kind))
-    })
+        ),
+        Some(Err(CallError::TimedOut)) => engine_reply(wire_id, op, reason::TIMED_OUT),
+        Some(Err(CallError::Abandoned)) | None => engine_reply(wire_id, op, reason::ABANDONED),
+    }
 }

@@ -1,0 +1,19 @@
+# `#[service]` for the s0b spike (in the engine: `#[gsb::service]`).
+[package]
+name = "s0-calls-macros"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[build-dependencies]
+gsb-lint = { path = "../../../crates/gsb-lint" }
