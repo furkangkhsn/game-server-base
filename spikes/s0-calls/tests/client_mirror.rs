@@ -108,3 +108,33 @@ fn one_poll_yields_typed_responses_and_pushes_as_two_kinds() {
     }
     assert_eq!(answered, 2);
 }
+
+/// A default-valued typed error encodes to zero bytes; the `game_error`
+/// flag (not "payload non-empty") is what tells it from an engine
+/// rejection.
+#[test]
+fn a_default_valued_game_error_is_still_a_game_error() {
+    let mut core = ClientCore::default();
+    let t = core.request(Target::Room, &BuyItem::default());
+    let mut events = Vec::new();
+    core.poll(
+        wire::Frame::Private {
+            responses: vec![wire::RpcResponse {
+                id: t.id,
+                ok: false,
+                op: 1001,
+                reason: String::new(),
+                payload: Vec::new(), // EconomyError { code: 0 } encodes to nothing
+                game_error: true,
+            }],
+        },
+        &mut events,
+    );
+    let ClientEvent::Response(r) = &events[0] else {
+        panic!("a response")
+    };
+    assert_eq!(
+        r.decode(&t),
+        Err(ClientCallError::Game(EconomyError { code: 0 }))
+    );
+}

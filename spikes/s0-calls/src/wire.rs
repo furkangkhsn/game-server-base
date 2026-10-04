@@ -35,10 +35,12 @@ pub struct RpcRequest {
     pub target: u32,
 }
 
-/// `gsb.base.RpcResponse`, unchanged. Proposed reading of an existing
-/// field pair: `ok = false` with a NON-empty `payload` carries the typed
-/// game error (`Request::Error`); `ok = false` with an empty payload is an
-/// engine rejection whose text is `reason` (today's only shape).
+/// `gsb.base.RpcResponse` + the proposed `game_error` (field 6).
+/// `ok = false, game_error = true`: `payload` is the typed game error
+/// (`Request::Error`); `ok = false, game_error = false`: an engine
+/// rejection whose text is `reason` (today's only shape — an old server
+/// never sets 6). A flag, not "non-empty payload": a default-valued
+/// error message encodes to ZERO bytes (spike finding, SERVICES.md §12).
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct RpcResponse {
     #[prost(uint64, tag = "1")]
@@ -51,6 +53,8 @@ pub struct RpcResponse {
     pub reason: String,
     #[prost(bytes = "vec", tag = "5")]
     pub payload: Vec<u8>,
+    #[prost(bool, tag = "6")]
+    pub game_error: bool,
 }
 
 /// Proposed `gsb.base.Push` (opcode `PUSH`): a typed game event, opaque to

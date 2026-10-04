@@ -512,6 +512,7 @@ fn reject(conn: ConnId, via: Via, id: u64, op: u16, why: &str) -> OutReply {
             op: u32::from(op),
             reason: why.to_string(),
             payload: Vec::new(),
+            game_error: false,
         },
     }
 }

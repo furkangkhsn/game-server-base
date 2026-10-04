@@ -52,7 +52,8 @@ fn bad_requests_are_the_engines_business() {
     assert!(reasons.contains(&reason::UNDECODABLE));
     assert!(reasons.contains(&reason::MALFORMED));
     assert!(
-        got.iter().all(|r| !r.ok && r.payload.is_empty()),
+        got.iter()
+            .all(|r| !r.ok && !r.game_error && r.payload.is_empty()),
         "engine shape"
     );
 }

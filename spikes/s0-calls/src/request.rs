@@ -78,8 +78,8 @@ impl<R> fmt::Debug for ClientCall<R> {
     }
 }
 
-/// The typed answer's wire shape (`ok = false` + non-empty payload = the
-/// typed game error).
+/// The typed answer's wire shape (`ok = false, game_error = true` = the
+/// typed game error in `payload`).
 pub(crate) fn encode_reply<R: Request>(
     id: u64,
     result: Result<R::Response, R::Error>,
@@ -91,6 +91,7 @@ pub(crate) fn encode_reply<R: Request>(
             op: u32::from(R::OP),
             reason: String::new(),
             payload: resp.encode_to_vec(),
+            game_error: false,
         },
         Err(err) => RpcResponse {
             id,
@@ -98,6 +99,7 @@ pub(crate) fn encode_reply<R: Request>(
             op: u32::from(R::OP),
             reason: String::new(),
             payload: err.encode_to_vec(),
+            game_error: true,
         },
     }
 }

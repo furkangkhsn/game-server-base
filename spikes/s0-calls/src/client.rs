@@ -42,6 +42,7 @@ pub struct RawResponse {
     pub op: u16,
     pub target: Target,
     pub ok: bool,
+    pub game_error: bool,
     pub reason: String,
     pub payload: Vec<u8>,
 }
@@ -65,12 +66,12 @@ impl RawResponse {
         if self.id != t.id || self.op != R::OP {
             return Err(ClientCallError::Mismatch);
         }
-        match (self.ok, self.payload.is_empty()) {
+        match (self.ok, self.game_error) {
             (true, _) => {
                 R::Response::decode(&self.payload[..]).map_err(|_| ClientCallError::Mismatch)
             }
-            (false, true) => Err(ClientCallError::Engine(self.reason.clone())),
-            (false, false) => match R::Error::decode(&self.payload[..]) {
+            (false, false) => Err(ClientCallError::Engine(self.reason.clone())),
+            (false, true) => match R::Error::decode(&self.payload[..]) {
                 Ok(e) => Err(ClientCallError::Game(e)),
                 Err(_) => Err(ClientCallError::Mismatch),
             },
@@ -141,6 +142,7 @@ impl ClientCore {
             op: r.op as u16,
             target,
             ok: r.ok,
+            game_error: r.game_error,
             reason: r.reason,
             payload: r.payload,
         }));

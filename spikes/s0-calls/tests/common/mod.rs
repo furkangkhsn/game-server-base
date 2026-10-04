@@ -392,7 +392,7 @@ pub fn responses(rx: &mut mpsc::Receiver<Frame>) -> Vec<RpcResponse> {
 }
 
 pub fn decode_err(r: &RpcResponse) -> EconomyError {
-    assert!(!r.ok);
+    assert!(!r.ok && r.game_error);
     EconomyError::decode(&r.payload[..]).expect("typed error")
 }
 
