@@ -1,0 +1,19 @@
+# Round s0 design spike (docs/SERVICES.md): NOT a workspace member (the
+# root Cargo.toml lists it under `exclude`). It models a minimal
+# synchronous tick on its own types and changes no engine behaviour.
+[package]
+name = "s0-calls"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+publish = false
+
+[dependencies]
+# Only the channel half of tokio: try_send / try_recv need no runtime,
+# which is exactly the synchronous tick's position.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
+
+[build-dependencies]
+gsb-lint = { path = "../../crates/gsb-lint" }

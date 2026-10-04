@@ -17,6 +17,9 @@ members = [
     # The B21 showcase (lobby → grant → server → client); not a library.
     "examples/lobby",
 ]
+# Design spikes: standalone crates that prove a design without changing
+# the engine (round s0: docs/SERVICES.md). Never workspace members.
+exclude = ["spikes/s0-calls"]
 
 [workspace.package]
 version = "0.1.0"
