@@ -1,502 +1,871 @@
-# gsb: Servis Çağrıları, Yanıtlar ve Olaylar — Tasarım (tur s0)
+# gsb: Servis Çağrıları ve İstekler — Tasarım (tur s0b)
 
 > **Durum:** TASARIM — kullanıcı incelemesi bekliyor. Uygulama YOK; bu
-> turun çıktısı bu doküman ve `spikes/s0-calls` (çalışma alanı üyesi
-> olmayan, motoru değiştirmeyen bir kanıt crate'i). Kararlar kullanıcıyla
-> alındı (§2); bu doküman onları inceltir, açık kalanları §16'da
-> numaralı sorular olarak sorar.
+> turun çıktısı bu doküman ve `spikes/s0-calls` (gsb çalışma alanının
+> üyesi olmayan, motoru değiştirmeyen bir kanıt crate'i + `#[service]`
+> proc-macro alt crate'i). s0'ın istek/çağrı kısmı, kullanıcıyla yapılan
+> uzun tasarım tartışmasından sonra baştan yazıldı (§2'deki kararlar
+> yeniden açılmaz); açık kalanlar §19'da numaralı sorular olarak.
+>
+> **Kapsam:** İSTEKLER (servis çağrıları + istemci istekleri). OLAYLAR
+> (sunucunun ittiği) bu turun dışında — s0 metni §15'te duruyor,
+> **sonraki tur, yeniden tasarlanacak**.
 >
 > Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
-**Tek paragraf özet.** Oyunun herhangi bir sistemi, herhangi bir anda,
-oyunun kendi servisini (`gsb_core::service` tarzı bir aktör — gövdesi
-HTTP/NATS/DB, ne olursa) **beklemeden** çağırır:
-`ctx.call(&ekonomi, BuyItem{..}, ShopDone::Bought)`. Çağrı ya hemen
-reddedilir (dolu kutu, pay dolu, servis yok — tipli, sayılı) ya da yola
-çıkar; sonucu bir **mesaj** olarak, oyunun tipli etiketine sarılı
-(`Done<ShopDone>`), kendi tick fazında — **RESPONSES**, girdiden önce —
-toplu olarak mantığa teslim edilir. İstemci istekleri aynı yolu kullanır
-(bugünkü `External` bunun özel durumu olur, tel aynı kalır). Sistemin
-oyuncuya **ittiği** olaylar (başka odadan sohbet, arkadaş çevrimiçi,
-web-mağaza bakiyesi) ayrı bir sistemdir: kimliğe adreslenir, ya doğrudan
-istemciye (`PUSH` karesi) ya da oyuncunun odasının mantığına (**EVENTS**
-fazı) gider. Maç dışı istekler için üyesi olmayan, simülasyonsuz bir
-**hub** odası vardır; cevabı bağlantının kendi yolundan döner. Her kayıp
-kendi adıyla sayılır.
+**Tek paragraf özet.** Oyun servislerini **düz bir async trait** olarak
+yazar (`#[gsb::service] trait Inventory { async fn craft(..) -> Result<..> }`);
+makro tipli çağrıları, tower üstünde koşan servis tarafını, odalar için
+**beklemeyen** bir istemciyi (`InventoryClient`) ve servisler/admin için
+**beklenebilir** bir istemciyi (`InventoryHandle`) üretir. İstemcinin
+(oyuncunun) yolladığı istekler `.proto` `service` bloklarından gelir.
+Her tick aktörünün (oda, zamanlayıcı, admin görevi) tek bir **`Calls`
+tablosu** vardır ve ECS'ten bağımsızdır: istekler tablodan **alınır**
+(`take_incoming`), çağrılar tabloya **yazılır**
+(`calls.call(inv.craft(..)).owner(o).with(ctx).answers(req)`), sonuçlar
+tablodan **okunur** (`take_resolved`). Çağrı hiç beklemez ve hiç
+yerinde başarısız olmaz — ret de dahil her son aynı yoldan, bir sonraki
+tick'in RESPONSES fazında gelir. Kimsenin almadığı/cevaplamadığı şey
+tick sonunda motor tarafından kapatılır ve **adıyla sayılır**. Oda
+determinizm sınırıdır: tick'e giren her şey kanonik sırayla kaydedilip
+REPLAY modunda servis çağırmadan aynen tekrar oynatılabilir.
 
 ```text
-CONTROL → RESPONSES → READ → EVENTS → CONVERT (+istekler) → SYSTEMS → BROADCAST
+CONTROL → RESPONSES → READ → (EVENTS, sonraki tur) → CONVERT → SYSTEMS → BROADCAST
 ```
 
 ---
 
-## 1. Problem
+## 1. Problem (s0'dan, kısaltılmış)
 
-Bugün motorda tick dışı iş için **tek** dikiş var:
-`GameLogic::handle_request` → `RequestDecision::External(future)`
-(RPC-CONTROL-PLANE §1–3). Bu dikişin üç sınırı oyunları zorluyor:
+Bugün tick dışı iş için tek dikiş `GameLogic::handle_request` →
+`RequestDecision::External(future)` (RPC-CONTROL-PLANE §1–3). Üç sınırı:
 
-1. **Yalnız istemci isteği tetikleyebilir.** Bir sistem ("oyuncu
-   zindanı bitirdi → envantere ödül yaz", "maç bitti → MMR servisine
-   bildir", "her 30 sn konumu kalıcılık servisine yaz") servis
-   çağıramaz; oyun ya kendi `tokio::spawn`'ını + kendi kanalını yazar
-   (her oyun aynı makineyi yeniden icat eder, sayaçsız) ya da işi
-   yapamaz.
-2. **Sonuç oyuna dönmüyor, istemciye gidiyor.** `External`'ın future'ı
-   `Bytes` üretir ve bayt doğrudan istemcinin `Private.responses`'ına
-   yazılır. Dünya sonucu göremez: "satın alma başarılı → bakiyeyi düş,
-   kılıcı envantere koy" mantığı servis cevabından sonra odada
-   çalışamaz. Rezerv/onay (reserve/commit) yazılamaz.
-3. **Sistemin bize ittiği şey için hiç yol yok.** Başka odadan sohbet,
-   arkadaş çevrimiçi, davet, web mağazasından gelen bakiye değişimi —
-   motor bunları ne bir odaya ne bir istemciye taşıyabilir.
+1. **Yalnız istemci isteği tetikleyebilir.** Bir sistem ("zindan bitti →
+   ödül yaz", "her 30 sn kaydet") servis çağıramaz; her oyun kendi
+   `tokio::spawn` + kanalını yeniden icat eder, sayaçsız.
+2. **Sonuç dünyaya dönmüyor**, doğrudan istemciye bayt olarak gidiyor:
+   rezerv/onay ("altını ayır → servis onaylasın → düş") yazılamaz.
+3. **Kullanım temizliği yok:** demo ekonomisi (`gsb-demo/src/demo/economy.rs`)
+   elle yazılmış mesaj enum'u, oneshot ve bayt dönüşümüyle ~160 satır —
+   her servis için aynı tören.
 
-Buna iki yapısal soru eşlik ediyor: (a) bağlantı tam olarak **bir**
-odanın üyesi — maçtayken lobi/arkadaş listesi isteği nereye gider?
-(b) İstemci SDK'ları (C#/Unity, Godot, JS, Rust) bu üç akışı (yanıt,
-itme, hub) nasıl tek bir küçük ABI'den görür?
+s0 bunları `ctx.call(&svc, req, tag)` + `Done<Tag>` + hub ile çözüyordu;
+kullanıcıyla tartışmada üç şey ağır bulundu: etiket kapanışları ve
+`Done` enum'u (her oyun bir "bitti" enum'u + eşleme yazıyor), ECS
+sistemlerinin fiile ulaşamaması (`SystemCtx::ext` yaması) ve hub (ikinci
+bir oda türü + ikinci bir cevap yolu). s0b bunların üçünü de kaldırır.
 
 ## 2. Kararlar (kullanıcıyla alındı — yeniden açılmaz)
 
-| # | Karar | Kullanıcının gerekçesi (özet) |
+| # | Karar | Gerekçe (özet) |
 |---|---|---|
-| 1 | **İstemci SDK'ları:** tek Rust istemci çekirdeği; C#/Unity, Godot (gdext), JS (wasm + WebSocket), Rust için LiveKit tarzı sarmalayıcılar. Küçük, SABİT C ABI: `new(config) / command(bytes) / poll(buf, cap) -> len / free / abi_version`; protobuf `Command` ve `Event` oneof'ları. Yeni özellik = yeni proto mesajı; ABI asla değişmez. Kare başına `poll`, callback yok, buffer'ı çağıran sahiplenir. FFI yalnız istemcide. SDK kapsamı = taşıma + oturum + mesajlaşma; ECS/oyun mantığı/replikasyon politikası YOK. | Dört dil için dört protokol uygulaması bakımı imkânsız; ABI'yi sabit tutmak sarmalayıcıları ince ve yıllarca geçerli kılar; callback'ler dil sınırında thread/yeniden-giriş cehennemi. |
-| 2 | **Motor ekonomi/sohbet/arkadaş/envanter TANIMLAMAZ.** Tek jenerik mekanizma; somut uygulamalar oyunun. Bayt yalnız tel/FFI sınırında; oyun kodu tipli: `trait Request { const OP: u16; type Response; type Error; }` (varsayılan prost; format değiştirilebilir), sunucu ve Rust istemcisi PAYLAŞIR — ayrışamazlar. Kayıt tekrar eden op'u reddeder; bozuk yükü motor cevaplar/sayar, oyuna asla ulaşmaz. | "Motor, oyun değil" (kit ilkesi); tip uyuşmazlığı çalışma zamanında değil derlemede yakalanmalı. |
-| 3 | **ÇAĞRILAR (bizim sorduğumuz):** herhangi bir sistem, herhangi bir anda, beklemeden çağırır (`ctx.call(&service, req, tag)`). Servis bugünkü `gsb_core::service` aktör tarzı. Sonuç **mesaj** olarak, kendi tick fazında, toplu, oyunun tipli etiketiyle (`Done<Tag>`) gelir — bileşenlerde yoklanan handle'lar DEĞİL. Faz sırası: **CONTROL → RESPONSES → READ → CONVERT → SYSTEMS → BROADCAST** (yeni girdiyi okumadan önce sonuçları sindir). İstemci istekleri aynı yolu kullanır; `External` özel durum olur (tel uyumu korunur). | Aksiyonlarla aynı zihinsel model: "dış dünyadan gelen her şey bir fazda toplu içeri girer"; handle yoklamak her tick O(handle) maliyet ve dağınık kod. |
-| 4 | **Uçuştaki iş koruması:** oyun çağırdığı anda bekleyen/rezerv durumunu senkron yazar (reserve/commit); motor uçuştaki tekrar-id reddini (var), bağlantı başına bekleyen cap'ini (var) ve servise idempotency anahtarı olarak kullanılabilecek **çağrı başına bir id** sağlar. | Çift harcama oyunun dünya durumuyla önlenir; motor yalnız yapı taşlarını verir. |
-| 5 | **OLAYLAR (sistemin bize ittiği)** yanıtlardan AYRI bir sistemdir. Oyuncu KİMLİĞİNE adreslenir, nerede olursa olsun (herhangi bir shard'daki oda, hub, çevrimdışı). İki hedef: oyuncunun oda mantığı (dünya tepki versin — bakiye) ve/veya doğrudan istemci (odanın görmesi gerekmeyen sohbet). Ayrı faz(lar) ve ayrı istemci `Event` türü (`Event::Push`). | Yanıt korelasyonludur ve bizim başlattığımız bir şeyin sonucudur; olay korelasyonsuzdur ve dışarıdan gelir. Karıştırmak sayaçların ve sıralamanın anlamını bulandırır. |
-| 6 | **Oda dışı istekler** (maçta değilken ya da maçtayken lobi/menü/arkadaş): "hub" dünyası — simülasyonsuz, düşük hızlı bir oda; her yerde aynı model. Çoklu üyelik GEREKMEMELİ: registry üzerinden yönlendir; cevap odanın private karesini değil bağlantının KENDİ çıkış yolunu kullanır. Daha iyi bir seçenek varsa işaretle. | Tek üyelik kuralı motorun en çok güvendiği değişmezlerden; hub onu kırmadan gelmeli. |
+| 1 | **İki tanım kaynağı.** Süreç içi servisler: `#[gsb::service]` ile işaretli Rust trait'i (makro: metot başına çağrı tipi + `impl Call`, tower tabanlı yönlendirici, beklemeyen `XClient`, beklenebilir `XHandle`). İstemci-tel istekleri: `.proto` `service` blokları, `option (gsb.op) = N` (+ hata tipi) → üretilmiş `Request` impl'leri (ileride C#/TS/GDScript istemcileri). Trait ayrımı: `Call { Response; Error }` (süreç içi, op yok, tel yok) ve `Request: Call + WireMessage { const OP }`. Arayan kimliği istemci yükünden ASLA gelmez. | Oyun geliştiricinin kullanım temizliği birinci öncelik; makro tekrarı kaldırır. Süreç içi tipler protobuf olmak zorunda değil. |
+| 2 | **Çekirdekte ECS'ten bağımsız `Calls` tablosu** (bileşen değil, kapanış/devam değil, `Done` enum'u değil, bileşende yoklanan handle değil): `take_incoming`, `take_incoming_all`, `call(..).owner().with().answers()`, `take_resolved`, `in_flight`, `forward`, `export`/`import`. Owner opak `u64`; bevy/hecs yalnız minik bir `.entity()` uzantısı alır. bevy'de tablo şema boyunca bir `Resource`; hecs/ECS'siz oyunda `&mut Calls` geçilir. Alınmayan sonuç ve cevaplanmayan istek tick sonunda kapatılır ve sayılır. | Tek kavram, her ECS'te aynı; "her kaybı say". |
+| 3 | **Servisler cevaplar; çağıranlar yalnız okur ve temizler.** `Calls` tablosu + boşaltma noktası olan her aktör çağırabilir (oda bir türü; zamanlayıcı/admin görevi bir diğeri). **Hub YOK**: lobi bir odadır; her oyuncu her zaman bir odadadır ("ECS'te her şey birer oda"). | Tek programlama modeli, tek cevap yolu. |
+| 4 | Tick: **CONTROL → RESPONSES → READ → (EVENTS) → CONVERT → SYSTEMS → BROADCAST.** RESPONSES servis tamamlanmalarını READ'den önce tabloya boşaltır. | Girdi, dünyanın en güncel hâline karşı doğrulanır (s0 gerekçesi). |
+| 5 | **Determinizm** gerekli: geçmiş maçın hata ayıklama tekrarı, hile doğrulama (tekrar oynat + karşılaştır), izleme tekrarı, deterministik testler. Canlı zamanlama deterministik değildir; tekrar üretilebilirlik oda sınırında **kayıttan** gelir. `ctx.time()/dt()`, tohumlu `ctx.rng()`, deterministik çağrı anahtarları, opt-in girdi kaydı, REPLAY modu, deterministik TEST modu (`Delay::ticks(n, impl)` / `Delay::never`), tick başına durum hash kancası. Oda determinizm sınırıdır; oda dışı çağıranlar kaydedilmez. | Hata ayıklama ve hile doğrulama aynı makineyi ister. |
+| 6 | Sürümleme: op'lar asla yeniden kullanılmaz; çakışma boot'ta yakalanır; bilinmeyen op → motor "no handler". Gözlemlenebilirlik: çağrı anahtarı trace id taşır; servis katmanı metot başına span + gecikme yayar (OTLP ihracatçısı var). | |
+| 7 | Oyunun işi (motorun değil): yetkilendirme, istek başına hız sınırı, sayfalama. | "Motor, oyun değil." |
+| 8 | FFI yalnız istemcide (C ABI yalnız C# için; Godot gdext, JS wasm-bindgen Rust çekirdeğini doğrudan kullanır). İstek id'sini sarmalayıcı atar; iptal için `Command::Forget{id}`; tampon küçükse `poll` gereken boyutu döner; tipli hatalar `game_error` ile. `unsafe` yalnız `gsb-ffi` crate'inde. | |
 
-## 3. Tick: yeni fazlar ve yerleri
+## 3. Tick
 
 ```text
 global ticker ──TickInfo──▶ oda aktörü (tek await)
    0  CONTROL    join/leave/shutdown (değişmedi)
-   1  RESPONSES  YENİ — çağrı tamamlanmaları: try_recv ile boşalt, bekleyen
-                 setle uzlaştır, süre süpürmesi (yalnız uçuşta çağrı varsa),
-                 boş değilse logic.on_done(batch); burada verilen istemci
-                 cevapları HEMEN uzlaşır (korelasyon id'si bu tick'in READ'i
-                 için serbest kalır)
-   2  READ       üye başına kanal (değişmedi) + Dest::World itmelerini ayır
-                 (bugünkü B103 yol işaretinin ayrıldığı gibi) + hub ise hub
-                 kutusunu oku
-   3  EVENTS     YENİ — bu tick'in Dest::World itmeleri; boş değilse
-                 logic.on_events(batch)
-   4  CONVERT    ingest(aksiyonlar), sonra tipli istekler (sıra bugünkü gibi:
-                 önce aksiyonlar, sonra istekler)
-   5  SYSTEMS    update
-   6  BROADCAST  cevap uzlaşması + istemci-isteği süre süpürmesi + gönderim
+   1  RESPONSES  önceki FLUSH'ın retleri + tamamlanma kanalı (try_recv);
+                 her sonucu bekleyen girişle eşle; `.answers` bağlıysa
+                 istemci cevabını hemen yaz; sahibi yaşıyorsa sonucu
+                 türüne göre kovaya koy (take_resolved bekler)
+   2  READ       üye kanallarından istekler → tablo: çözülür, tipine göre
+                 kuyruğa (ya da `forward` kuralıyla doğrudan servise)
+  (3  EVENTS     sonraki tur)
+   4  CONVERT    oyunun ilk sistemleri: take_incoming / aksiyonlar
+   5  SYSTEMS    oyun; calls.call(..) yalnız tabloya yazar
+      FLUSH      bu tick'in çağrıları sırayla gönderilir (try_send);
+                 ret burada kararlaşır, bir SONRAKİ RESPONSES'ta teslim
+   6  BROADCAST  tick sonu: alınmayan istek / cevaplanmayan istek /
+                 alınmayan sonuç kapatılır + sayılır; cevaplar gönderilir
 ```
 
-**Neden RESPONSES READ'den önce (kullanıcının kararı, gerekçesi
-genişletilmiş):**
+**Neden RESPONSES READ'den önce** (s0'dan, değişmedi): bu tick'in
+girdisi en güncel dünyaya karşı doğrulanır ("500 altın geldi" sonucu ile
+500'lük satın alma aynı tick'te ise satın alma kabul edilir); RESPONSES'ta
+verilen istemci cevabı korelasyon id'sini aynı tick'in READ'i için
+serbest bırakır.
 
-- Bu tick'in girdisi, dünyanın **en güncel** hâline karşı doğrulanır.
-  Spike `b_phase_order`: aynı pencerede hem "500 altın verildi" cevabı
-  hem 500'lük satın alma isteği var; RESPONSES önce koştuğu için istek
-  kabul edilir. Sıra ters olsaydı oyuncu "yetersiz bakiye" görür, bir
-  tick sonra bakiyesi dolu olurdu.
-- RESPONSES'ta verilen istemci cevabı, bekleyen istemci-isteği girişini
-  **aynı anda** kapatır; böylece aynı tick'in READ'inde gelen yeniden
-  deneme (aynı korelasyon id'si) "uçuşta tekrar" diye reddedilmez, taze
-  istek olarak işlenir (spike `a_retried_correlation_id…`).
-- Bugünkü kod zaten böyle: `phase_completions` CONTROL'den hemen sonra,
-  READ'den önce koşuyor. RESPONSES onu genelleştirir — fark, sonucun
-  istemciye bayt olarak değil **mantığa mesaj olarak** gitmesi.
+**Boşta maliyet (spike `idle_cost`):** sessiz bir odada RESPONSES = tek
+boş `try_recv`, READ = tek boş `try_recv`. Tablonun tick başına
+tamponları (`Vec::new()`/`HashMap::new()`) hiç ayrılmaz — 1000 boş
+tick sonra altı tamponun kapasitesi 0, hiçbir sayaç oynamaz. FLUSH ve
+tick sonu kapatma boş tamponda tek `is_empty` kontrolüdür.
 
-**Neden EVENTS READ ile CONVERT arasında (kararı bu doküman veriyor):**
+## 4. İki tanım kaynağı
 
-- `Dest::World` itmesi oyuncunun **oturumunun üyelik kanalına** biner
-  (§6.2 — resume ve shard göçü boyunca oturumu yapısal olarak izleyen
-  tek kanal). Kanalı fiziksel olarak okuyan READ'dir; dolayısıyla itme
-  READ'den önce teslim edilemez. Ama mantığın **gördüğü** sıra yine
-  "dış olgular, girdiden önce": EVENTS, CONVERT'ten önce koşar —
-  web-mağaza kredisi aynı tick'teki satın alma isteğinden önce
-  uygulanır (spike: `done → events → ingest → request → update`).
-- RESPONSES'tan **sonra**: önce kendi başlattığımız işlerin sonucu
-  yerleşir, sonra dışarıdan gelen olgular onun üstüne uygulanır. İkisi
-  arasında **sıra garantisi yoktur** (farklı kanallar, §9); aynı
-  servisten gelen yanıt ile olay çelişebiliyorsa oyun bir sürüm
-  numarası taşımalı (ör. `balance_version`).
-- Ayrı bir EVENTS fazı (RESPONSES'la birleştirilmemiş): kullanıcı kararı
-  5; ayrıca anlamlar farklı — yanıt korelasyonlu ve bekleyen sete
-  karşı uzlaşır, olay uzlaşmaz; sayaçları ve kayıp nedenleri ayrı.
+### 4.1 Süreç içi servis: `#[gsb::service]`
 
-**Boşta maliyet (spike `g_idle_cost`).** Sessiz bir odada RESPONSES =
-tek boş `try_recv` + "uçuşta çağrı var mı" sayaç kontrolü; EVENTS = tek
-`is_empty`. Mantık boş batch için ÇAĞRILMAZ, süpürme koşmaz, faz
-tamponları hiç ayrılmaz (1000 boş tick sonrası kapasite 0). READ'in
-maliyeti değişmez (itme işaretleri zaten okunan kanalda).
-
-## 4. Sunucu API'si
-
-### 4.1 Ortak sözleşme: `Request` ve `Event`
+Oyunun yazdığı:
 
 ```rust
-/// Sunucu ve Rust istemcisi AYNI crate'ten görür (oyunun "sözleşme"
-/// crate'i: proto tipleri + bu impl'ler). Ayrışamazlar.
-pub trait Request: WireMessage + Send + 'static {
+#[gsb::service]
+pub trait Inventory {
+    async fn load(&self, cx: &CallCx, who: Identity) -> Result<InventoryData, InvError>;
+    async fn grant(&self, cx: &CallCx, who: Identity, item: ItemId) -> Result<PickedUp, InvError>;
+    async fn craft(&self, cx: &CallCx, recipe: RecipeId, consume: Vec<ItemId>) -> Result<Crafted, InvError>;
+    async fn save(&self, cx: &CallCx, who: Identity, items: Vec<ItemId>, equipped: ItemId) -> Result<(), InvError>;
+}
+
+pub struct PgInventory { db: PgPool }
+
+impl Inventory for PgInventory {
+    async fn craft(&self, cx: &CallCx, recipe: RecipeId, consume: Vec<ItemId>) -> Result<Crafted, InvError> {
+        let who = cx.player().ok_or(InvError::NoPlayer)?;     // doğrulanmış kimlik, yükten değil
+        // cx.key() = idempotency anahtarı: aynı anahtar → aynı sonuç, tek etki
+        self.db.craft_once(cx.key(), who, recipe, &consume).await
+    }
+    // load, grant, save …
+}
+
+// kompozisyon kökü
+server.service(Inventory::serve(PgInventory::new(db)), |s| s.timeout(Duration::from_secs(3)));
+let inv: InventoryClient = server.client();     // odalara
+let inv_h: InventoryHandle = server.client();   // servislere / admin'e
+```
+
+(`Inventory::serve(..)` sarmalaması onaylanan biçimden tek sapma —
+yetim kuralı; §19 S1.)
+
+Makronun ürettiği (spike `macros/src/lib.rs`, hepsi gerçekten
+derleniyor):
+
+| Üretilen | Ne işe yarar |
+|---|---|
+| `mod inventory { pub struct Load { pub who }, Grant, Craft, Save }` + her biri için `impl Call` | Metot başına bir çağrı tipi; `take_resolved::<inventory::Craft, _>()` bununla seçer. |
+| `inventory::Msg` (posta kutusu enum'u), `inventory::Kind` (işaretçi: `ServiceKind` + her `S: Inventory` için `ServiceDef<S>`) | Elle yazılan mesaj enum'u + `From` impl'lerinin yerini alır. |
+| `inventory::Router<S>`: `tower::Service<Dispatch<Msg>>` | Servis tarafı tower'da koşar; oyunun katmanları (timeout, concurrency_limit, load_shed, kendi katmanı) bunun üstüne dizilir. |
+| `InventoryClient` (Clone) | **Beklemez.** `inv.craft(recipe, items)` bir `CallSpec<inventory::Craft>` kurar; `calls.call(..)`'a verilir. |
+| `InventoryHandle` (Clone) | **Beklenebilir.** `inv_h.craft(recipe, items).await -> Outcome<inventory::Craft>`; `within(cx)` / `on_behalf_of(&id)` oyuncu kimliğini taşır. |
+| `Inventory::serve(impl)` (trait'in sağlanmış metodu) | Hosta kaydedilen değer. |
+
+Trait, makro tarafından `fn craft(&self, ..) -> impl Future<Output = ..> + Send`
+biçimine çevrilir (RPITIT); impl'ler düz `async fn` yazar, kutu (Box)
+yalnız yönlendiricide çağrı başına bir tane. Yanlış dönüş tipi impl'de
+derleme hatasıdır (§17, `compile_fail`).
+
+**Tower katmanları.** `|s| ..` kapanışı tower `ServiceBuilder`'ını saran
+küçük bir `Setup`'tır: `.timeout(d)`, `.concurrency_limit(n)`,
+`.load_shed()`, `.layer(l)`, `.mailbox(n)`. Katman hataları tipli sona
+çevrilir: zaman aşımı → `CallError::TimedOut`, yük atma →
+`CallError::Refused(Refusal::Shed)` (spike `live::tower_layers_end_calls_through_the_same_path`).
+Servis aktörünün döngüsünde tek `await` (`recv`); her çağrı kendi
+görevinde tek `await` (`oneshot` yığın üzerinden). Select yok, kilit yok.
+
+### 4.2 İstemci-tel istekleri: `.proto`
+
+```proto
+service Game {
+  rpc TransferGold(TransferGold) returns (TransferDone) { option (gsb.op) = 1001; option (gsb.error) = "GameError"; }
+  rpc Craft(CraftReq)            returns (Crafted)      { option (gsb.op) = 1003; option (gsb.error) = "GameError"; }
+  rpc ListFriends(ListFriends)   returns (FriendList)   { option (gsb.op) = 1005; option (gsb.error) = "GameError"; }
+}
+```
+
+Kod üretici (prost-build + küçük bir eklenti) her `rpc` için şunu yazar:
+
+```rust
+impl Call for TransferGold { type Response = TransferDone; type Error = GameError; }
+impl Request for TransferGold { const OP: u16 = 1001; }
+```
+
+```rust
+pub trait Call: Clone + Send + Sync + 'static {
+    type Response: Clone + Send + Sync + 'static;
+    type Error: Clone + Send + Sync + 'static;
+}
+pub trait Request: Call<Response: WireMessage, Error: WireMessage> + WireMessage {
     const OP: u16;
-    type Response: WireMessage + Send + 'static;
-    type Error: WireMessage + Send + 'static;
-}
-
-/// İtilen olay: bir op, bir yük, cevap yok.
-pub trait Event: WireMessage + Send + 'static {
-    const OP: u16;
-}
-
-/// Tel biçimi. Varsayılan özellik `prost`: her `prost::Message +
-/// Default` için kapsayıcı impl. Başka bir biçim isteyen oyun özelliği
-/// kapatır ve kendi tiplerine impl yazar (bkz. §16 S10).
-pub trait WireMessage: Sized {
-    fn encode(&self, out: &mut Vec<u8>);
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError>;
 }
 ```
 
-Oyun tarafı:
+- Süreç içi çağrının (`inventory::Load`) cevabı düz bir Rust tipi
+  olabilir (`InventoryData`, protobuf değil). İstemciye giden her şey
+  `WireMessage`'tır (varsayılan: her `prost::Message`'a kapsayıcı impl).
+- `Clone` sınırları: tablo, göçte yeniden yayın için çağrıyı ve girdi
+  kaydı için sonucu kopyalar (§19 S5 — dosyaya kayıt serileştirme
+  ister).
+- Aynı `.proto`'dan C#/TS/GDScript istemcileri de üretilir (§14).
+
+### 4.3 Kimlik
+
+`Incoming<R>.from` ve `CallCx::player()` doğrulanmış bilet kimliğidir
+(`ValidatedTicket.player`, registry'nin `ConnInfo.identity`'si). İstemci
+yükünde "from" alanı olsa bile motor ona bakmaz. `.answers(req)` çağrıya
+isteğin kimliğini koyar; isteksiz çağrı `.on_behalf_of(&identity)` ile
+koyar; servisten servise `handle.within(cx)` taşır.
+
+## 5. `Calls` API'si
+
+### 5.1 Özet
+
+| Yöntem | Ne yapar |
+|---|---|
+| `calls.take_incoming::<R>() -> Vec<Incoming<R>>` | Bu tick'in `R` istekleri, varış sırasıyla (tip başına FIFO). |
+| `calls.take_incoming_all() -> Vec<AnyIncoming>` | Bu tick'in tüm istekleri, kanonik varış sırasıyla; `r.downcast::<R>()`. |
+| `calls.reply(r.reply, Ok(..) / Err(..))` | İsteği şimdi cevapla (tipli). |
+| `calls.call(spec)` → `.owner(o)` `.with(x)` `.answers(r.reply)` `.on_behalf_of(&id)` | Çağrı. Deyimin sonunda tabloya yazılır; FLUSH'ta gönderilir. |
+| `calls.take_resolved::<C, X>() -> Vec<Resolved<C, X>>` | `C` türünden, `X` bağlamıyla verilmiş çağrıların sonuçları (`key`, `owner`, `ctx: X`, `outcome`). |
+| `calls.in_flight::<C>(owner) -> bool` | Bu sahibin `C` çağrısı yolda (ya da bu tick yazıldı) mı? |
+| `calls.forward(move \|r: R\| svc.method(r))` | Boot'ta, paylaşılan tek satırlık kural (§5.7). |
+| `calls.export(owner) -> Exported` / `calls.import(exp, owner)` | Göç (§8). |
+| `calls.accept::<R>()` | Boot'ta: oyun `R`'yi kendisi alır (op kaydı; çakışma `BootError`). |
 
 ```rust
-// game-contract crate (sunucu + istemci ortak)
-impl Request for BuyItem { const OP: u16 = 1001; type Response = BuyResult; type Error = EconomyError; }
-impl Event for FriendOnline { const OP: u16 = 2002; }
+pub struct Incoming<R> { pub body: R, pub from: Identity, pub conn: ConnId, pub reply: ReplyTo<R> }
+pub struct Resolved<C: Call, X = ()> { pub key: CallKey, pub owner: Owner, pub ctx: X, pub outcome: Outcome<C> }
+pub type Outcome<C> = Result<C::Response, CallError<C::Error>>;
+pub enum CallError<E> { Service(E), Refused(Refusal), TimedOut, Abandoned }
+pub enum Refusal { Full, Gone, Share, Shed }
 ```
 
-Yanlış yanıt tipi derleme hatasıdır — spike'ın `compile_fail` doc
-testleri dört biçimini kilitler: servisin `Reply<BuyItem>`'a başka mesaj
-göndermesi, odanın `ClientCall<BuyItem>`'a başka mesajla cevap vermesi,
-etiketin mantığın `Done` tipinden başka bir şey üretmesi, servise
-hizmet etmediği bir isteğin gönderilmesi (§12).
+`Incoming`'in alanları açıktır: oyun `body`'nin parçalarını çağrıya
+taşırken `reply`'ı `.answers(..)`'a verebilir (Rust kısmi taşıma). Bu
+yüzden `.answers` isteğin tamamını değil `r.reply`'ı alır (onaylanan
+`.answers(req)` biçiminden küçük bir sapma). `ReplyTo<R>` `Clone`
+değildir: en fazla bir cevap.
 
-Spike'ı yazarken öğrenilen tel ayrıntısı: varsayılan değerli bir proto3
-hata mesajı (`EconomyError { code: 0 }`) **sıfır bayta** kodlanır. "Yük
-boş değilse oyun hatasıdır" kuralı onu motor reddi sanar. Bu yüzden
-`RpcResponse`'a açık bir bayrak eklenir (`game_error = 6`, §14).
+### 5.2 Çağırmak ve kim sonucu alır
 
-### 4.2 Çağrı ve servis tarafı
+`calls.call(..)` bir oluşturucu döner; zincir bittiğinde (deyimin
+sonunda, oluşturucu düşerken) çağrı tabloya yazılır — `.send()` yoktur.
+Tüm metotlar isteğe bağlıdır. Sonucun gideceği yer kuraldır:
+
+- `.owner(..)` ya da `.with(..)` verildiyse **ya da** `.answers(..)`
+  verilmediyse → sonuç oyuna gelir (`take_resolved`).
+- Yalnız `.answers(req)` verildiyse → sonuç **yalnız istemciye** gider;
+  oyunun alacak bir şeyi yoktur (ve "alınmadı" diye sayılmaz).
+- İkisi birden (`.owner(o).with(x).answers(req)`) → hem istemci
+  cevaplanır hem oyun sonucu alır (üretimde kilitli malzemeleri çözmek
+  için gerekli).
+
+Owner verilmezse `Owner::ACTOR`'dür (aktörün kendisi; hep yaşar).
+
+### 5.3 Ret, neden bir sonraki tick'te (KARAR)
+
+`calls.call` asla beklemez ve asla `Err` dönmez. Dolu kutu (`Full`),
+ölmüş servis (`Gone`), aktörün servisteki payı dolu (`Share`) — hepsi
+**FLUSH'ta** (SYSTEMS'ten hemen sonra) kararlaşır ve **bir sonraki
+tick'in RESPONSES'unda** `Err(CallError::Refused(..))` olarak, diğer
+her sonla aynı `take_resolved` yolundan gelir. Gerekçe:
+
+1. **Tek yol, tek zamanlama.** Oyun kodu "ret" için ayrı dal yazmaz;
+   reddedilen çağrının rezervi, servis hatasıyla aynı kodla geri alınır.
+   "Sonuç, onu veren tick'te asla görünmez" kuralı istisnasızdır.
+2. **Deterministik ve kaydedilebilir.** Ret bir RESPONSES girdisidir;
+   girdi kaydına diğer sonlarla aynı sırada girer, REPLAY'de kayıttan
+   gelir (REPLAY'de servis yok — ret yerinde kararlaşsaydı tekrar
+   oynatma onu üretemezdi).
+3. **Tick içinde döngü yok.** Aynı tick'te teslim edilseydi "ret →
+   yeniden dene" yapan bir sistem tick içinde dönebilirdi.
+4. Bedel: ret bir tick geç görünür (≤ 33 ms @30 Hz) — dolu bir servise
+   karşı önemsiz.
+
+Alternatif "aynı tick'in temizliğinde" (BROADCAST'ta) teslim: oyun o
+tick'te artık sistem koşmadığı için sonucu ancak bir sonraki tick görür
+— pratikte aynı şey, ama kayıtta farklı bir yerde ve ikinci bir teslim
+noktası. Elendi.
+
+`.answers(req)` bağlı bir çağrı reddedilirse istemci motor cevabını alır
+(`ok=false, game_error=false`, `reason = "service busy"` vb.; spike
+`refusal::a_refused_answers_call_answers_the_client_with_the_reason`).
+
+**Pay (share):** aktör başına, servis başına uçuştaki çağrı sınırı
+(`RoomConfig.share`, varsayılan 64). Bir oda bir servisi tek başına
+dolduramaz; s0'ın boyutlandırma kuralı (`N·k ≤ C`) aynen geçerli.
+
+### 5.4 Tick sonunda kapatılanlar
+
+| Durum | Motorun yaptığı | Sayaç |
+|---|---|---|
+| İstek hiç alınmadı (`take_incoming` çağrılmadı) | istemciye `"request not handled this tick"` | `requests_untaken` |
+| İstek alındı ama cevaplanmadı / çağrıya bağlanmadı (`ReplyTo` düşürüldü ya da saklandı) | istemciye `"request taken but not answered"` | `requests_unanswered` |
+| Kapatılmış isteğe sonradan `reply` | yok sayılır | `requests_replied_late` |
+| Sonuç geldi, kimse `take_resolved` etmedi | atılır | `responses_unhandled` |
+| Sonuç geldi, sahibi artık yok | oyuna verilmez (istemci `.answers` ile yine cevaplanır) | `responses_owner_gone` |
+
+"Sahibi yaşıyor mu" testini adaptör verir: bevy `world.get_entity`,
+hecs `world.contains`, ECS'siz oyun kendi `alive(owner)`'ını. Sahip,
+**sonucun değiştireceği durumun asıldığı şeydir**: ganimet örneğinde
+(§6.3) sahip ganimet varlığıdır; ganimet süresi dolup yok olduysa
+sonuç atılır (toplayan oyuncu yaşıyor olsa bile) — oyuncunun almasını
+istiyorsanız sahip oyuncu olmalı.
+
+### 5.5 Sahip ve ECS'ler
 
 ```rust
-/// Odanın bir servise tutamacı. `M` oyunun kendi enum'u, servis ettiği
-/// her istek için bir kol: `M: From<Call<R>>` "bu servis R'ye hizmet
-/// eder" demektir.
-pub struct ServiceRef<M> { name: &'static str, tx: mpsc::Sender<M> }
+// bevy (adaptör): Calls bir Resource; istemciler Res<Svc<…Client>>
+use gsb::bevy::{EntityExt, OwnerExt};            // e.to_owner(), owner.entity()
+fn sys(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>, q: Query<..>) { .. }
 
-/// Servisin aldığı tek çağrı.
-pub struct Call<R: Request> {
-    pub key: CallKey,   // benzersiz; idempotency anahtarı (yeniden yayında aynı)
-    pub req: R,
-    pub reply: Reply<R>,
-}
+// hecs (adaptör): sistemler düz fonksiyon
+use gsb::hecs::{EntityExt, OwnerExt};            // e.to_owner(), owner.entity() -> Option<Entity>
+fn sys(w: &mut hecs::World, calls: &mut Calls, inv: &InventoryClient) { .. }
 
-/// Dönüş yolu. Tipli: R'ye yalnız Result<R::Response, R::Error> ile
-/// cevap verilebilir. Cevapsız düşürülürse ("öldü/unuttu/panik") odaya
-/// hemen `Abandoned` gider — süre dolmasını beklemeden.
-impl<R: Request> Reply<R> {
-    pub fn send(self, r: Result<R::Response, R::Error>) -> Result<(), Undeliverable>;
-}
+// ECS'siz: owner = oyunun kendi id'si
+calls.call(inv.load(who)).owner(Owner(player_id));
 ```
 
-Oyunun servisi bugünkü ekonominin aynısı, yalnız mesaj tipi değişir:
+Uzantı trait'i, `From` değil: adaptörler motorda çekirdeğin dışında
+yaşar; `impl From<Owner> for bevy::Entity` orada yetim kuralını çiğner
+(ikisi de yabancı tip). Aynı nedenle `Calls`'a bevy'nin `Resource`'u
+adaptör crate'inde verilemez → çekirdekte bir `bevy` özelliği (§19 S3).
+(`to_owner`, onaylanan metinde yoktu; `as_owner` adı clippy'nin
+`wrong_self_convention` kuralına takıldı.)
+
+bevy'de tablo kalıcı olarak dünyadadır; motor fazlarında
+`world.resource_scope` ile ödünç alır (tablo + "sahip yaşıyor mu" testi
+aynı anda gerekir). Şema tek iş parçacıklı yürütücüyle koşar
+(determinizm; sistemlerin hepsi zaten `ResMut<Calls>` ister).
+
+### 5.6 Sıralama
+
+1. **Tip başına FIFO:** `take_incoming::<R>()` isteklerini varış
+   sırasıyla verir.
+2. **Kanonik sıra:** `take_incoming_all()` tick'in tüm isteklerini READ'in
+   çektiği sırayla verir (girdi kaydının sırası da budur).
+3. **Tipler arası sıra = sistem sırası.** Ayrı `take_incoming` çağrıları
+   kullanan oyun, farklı tipleri sistemlerinin sırasıyla görür (önce
+   ganimet sistemi koşuyorsa önce bütün ganimet istekleri). Bu bilinçli
+   bir takastır: sistemler kendi tiplerini alır, ortak bir dağıtıcı
+   gerekmez. Kanonik sıra gereken oyun `take_incoming_all` kullanır
+   (spike `ordering`: aynı 5 istek iki yoldan iki farklı, ikisi de
+   tanımlı sırayla).
+4. **Sonuçlar** varış sırasıyla gelir (her `(C, X)` kovası içinde); FLUSH
+   retleri o tick'in kanal varışlarından önce. Farklı servisler arasında
+   sıra yoktur.
+5. **Çağrılar** servise FLUSH'ta yazıldıkları sırayla gider.
+
+### 5.7 `forward`: paylaşılan tek satırlık kural
 
 ```rust
-pub enum EconomyMsg { Buy(Call<BuyItem>), Grant(Call<GrantGold>), Stop }
-impl From<Call<BuyItem>> for EconomyMsg { fn from(c: Call<BuyItem>) -> Self { Self::Buy(c) } }
+// boot'ta, her odanın kurulumunda (aynı satır)
+calls.forward(move |r: ListFriends| friends.list(r))?;
+```
 
-async fn serve(mut rx: mpsc::Receiver<EconomyMsg>, http: HttpClient) {
-    while let Some(msg) = rx.recv().await {          // tek await
-        match msg {
-            EconomyMsg::Buy(call) => {
-                let http = http.clone();
-                tokio::spawn(async move {
-                    // Idempotency-Key: call.key → aynı anahtar = aynı sonuç
-                    let r = http.buy(call.key, &call.req).await;
-                    let _ = call.reply.send(r);
-                });
-            }
-            EconomyMsg::Grant(call) => { /* … */ }
-            EconomyMsg::Stop => break,
+Gelen `ListFriends` doğrudan arkadaş servisine gider, cevabı doğrudan
+istemciye; oyunun sistemleri onu **hiç görmez** (spike `forward`:
+`take_incoming_all` boş, `responses_delivered = 0`). Servis isteyenin
+kimliğini `cx.player()`'da görür. Cevap/hata tipleri isteğinkilerle
+aynı olmalı — değilse derleme hatası (§17). Bir op ya `accept` ya
+`forward` edilir; ikisi birden boot hatasıdır. Kullanım: her odada
+geçerli "meta" istekler (arkadaş listesi, bakiye, posta kutusu) — hub'a
+gerek bırakmaz. (Onaylanan `forward::<R>(&svc.method)` biçimi Rust'ta
+ifade değil; §19 S2.)
+
+## 6. Örnekler
+
+Ortak sözleşme (`.proto`'dan üretilmiş): `TransferGold → TransferDone`,
+`PickUp → PickedUp`, `CraftReq → Crafted`, `Equip → Equipped`,
+`ListFriends → FriendList`, hepsinin hatası `GameError { code }`.
+Servisler: `Bank::transfer`, `Inventory::{load, grant, craft, save}`,
+`Friends::list`. Tam kodu spike'ta: `tests/common/{bevy_game,hecs_game,plain_game}.rs`
+— üçü aynı senaryoda **bayt bayt aynı** istemci cevaplarını ve tick
+başına aynı durum hash'lerini üretir (`three_ways`).
+
+### 6.1 Arkadaşa altın gönderme (rezerv, tek ücret, `.answers`)
+
+**bevy** (fonksiyon sistemi):
+
+```rust
+pub struct Reserve(pub u64);   // çağrının bağlamı: odada kalır, servise gitmez
+
+fn transfers(
+    mut calls: ResMut<Calls>,
+    bank: Res<Svc<BankClient>>,
+    mut q: Query<(Entity, &Player, &mut Wallet, &Bag)>,
+) {
+    // 1) Önce sonuçlar: rezervi çöz, onaylanan bakiyeyi yaz.
+    for r in calls.take_resolved::<bank::Transfer, Reserve>() {
+        if let Ok((_, _, mut w, _)) = q.get_mut(r.owner.entity()) {
+            w.reserved -= r.ctx.0;
+            if let Ok(done) = &r.outcome { w.gold = done.balance; }
+        }
+    }
+    // 2) Sonra yeni istekler.
+    for r in calls.take_incoming::<TransferGold>() {
+        let Some((e, _, mut w, bag)) = q.iter_mut().find(|(_, p, ..)| p.conn == r.conn) else {
+            calls.reply(r.reply, Err(err(NOT_LOADED)));
+            continue;
+        };
+        if calls.in_flight::<bank::Transfer>(e.to_owner()) {
+            calls.reply(r.reply, Err(err(BUSY)));                  // çift tık: hemen
+        } else if w.gold - w.reserved < r.body.amount {
+            calls.reply(r.reply, Err(err(INSUFFICIENT)));
+        } else {
+            w.reserved += r.body.amount;                            // SENKRON rezerv
+            calls.call(bank.transfer(Identity::new(&r.body.to), r.body.amount))
+                .owner(e.to_owner())
+                .with(Reserve(r.body.amount))
+                .answers(r.reply);                                  // istemciye otomatik
         }
     }
 }
 ```
 
-`CallKey` = `(origin: u64) << 64 | seq`. `origin` aktör
-enkarnasyonu başına rastgele (`getrandom`, zaten bağımlılık), `seq`
-monoton. Süreçler/yeniden başlatmalar arasında benzersiz; oyun onu
-rezerv kaydında saklar ve yeniden yayında aynen geçer (§11).
-
-**Çağrı fiili** (`TickCtx` üzerinde; kancalar `&TickCtx` tutar —
-`kick`'in `Cell` deseni, yeniden giriş yok):
+Servis tarafı (`cx.player()` gönderendir, yükten değil; anahtarla tek
+etki):
 
 ```rust
-impl<'a, D: 'static> TickCtx<'a, D> {
-    pub fn call<R, M>(&self, svc: &ServiceRef<M>, req: R,
-                      tag: impl FnOnce(Outcome<R>) -> D + Send + 'static)
-        -> Result<CallKey, Refused<R, D>>
-    where R: Request, M: From<Call<R>>;
-
-    /// Elde zaten olan bir anahtarla (göç/yeniden başlatma sonrası).
-    pub fn call_keyed<R, M>(&self, svc: &ServiceRef<M>, key: CallKey, req: R,
-                            tag: impl FnOnce(Outcome<R>) -> D + Send + 'static)
-        -> Result<CallKey, Refused<R, D>>;
-
-    /// Yereldeki bekleyen girişi unut (göç çıkışı); sonradan gelen cevap
-    /// `calls_late`. Servis işi yine yapar — iptal değildir.
-    pub fn forget(&self, key: CallKey);
-
-    /// İstemci isteğine tipli cevap (şimdi ya da bir Done'dan sonra).
-    pub fn reply<R: Request>(&self, call: ClientCall<R>, r: Result<R::Response, R::Error>);
-}
-```
-
-**Etiket bir kurucudur.** `tag` sonucu oyunun mesajına çevirir; enum
-tuple kolu doğrudan fonksiyondur:
-`ctx.call(&econ, GrantGold { amount }, ShopDone::Granted)`. Bağlam
-taşıyan çağrı kapanış kullanır:
-`move |outcome| ShopDone::Bought { client, price, outcome }`. Etiket
-odada kalır (servise gitmez): süre dolduğunda ya da servis düştüğünde
-motor da onu çalıştırıp oyunun mesajını üretebilmelidir.
-
-**Hızlı başarısızlık.** `call` hiçbir zaman beklemez. Sıra: uçuşta aynı
-anahtar mı → (oda, servis) payı dolu mu → `try_reserve` ile kutuda yer
-var mı. Yer ayırma **önce** yapılır, böylece ret isteği ve etiketi
-dokunulmamış geri verir (`try_send`'in mesajı geri vermesi gibi).
-
-### 4.3 Tamamlanma: `Outcome`, `Done`, `Refused`
-
-```rust
-pub enum CallError<E> { Service(E), TimedOut, Abandoned, Refused(RefuseReason) }
-pub type Outcome<R> = Result<R::Response, CallError<R::Error>>;
-pub enum RefuseReason { Full, Gone, ServiceCap, DuplicateKey }
-
-pub struct Done<D> { pub key: CallKey, pub msg: D }
-
-pub struct Refused<R, D> { pub reason: RefuseReason, pub req: R, /* etiket */ }
-impl<R, D> Refused<R, D> {
-    /// Etiketi Err(CallError::Refused(reason)) ile çalıştırır: ret, diğer
-    /// her başarısızlıkla AYNI yerde ele alınabilir.
-    pub fn fail(self) -> D;
-}
-```
-
-**Kabul edilen her çağrı için, oda yaşadıkça, tam olarak bir `Done`**:
-cevap, `Service(e)`, `TimedOut` ya da `Abandoned`. Geç cevap ikinci bir
-`Done` üretemez (girişin `attempt` numarası eşleşmez → `calls_late`).
-Bu, RPC-CONTROL-PLANE §1'deki "geç olay ikinci yanıt üretemez"
-değişmezinin çağrıya taşınmış hâli. Ret (`Refused`) `Done` üretmez —
-çağrı kabul edilmemiştir; oyun isterse `fail()` ile kendi mesajını alır.
-
-Rezerv/onay deseni (spike `a_reserve_commit`, oyunun kodu):
-
-```rust
-fn buy(&mut self, ctx: &TickCtx<ShopDone>, client: ClientCall<BuyItem>, buy: BuyItem) {
-    if self.balance - self.reserved < buy.price {
-        return ctx.reply(client, Err(EconomyError { code: INSUFFICIENT }));
-    }
-    self.reserved += buy.price;                       // SENKRON rezerv
-    let price = buy.price;
-    if let Err(r) = ctx.call(&self.econ, buy, move |o| ShopDone::Bought { client, price, o }) {
-        let d = r.fail();                             // ret de aynı yoldan
-        self.settle(ctx, d);
-    }
-}
-fn on_done(&mut self, ctx, done: &mut Vec<Done<ShopDone>>) {
-    for d in done.drain(..) { self.settle(ctx, d.msg) }  // onay ya da geri al + istemciye cevap
-}
-```
-
-### 4.4 İstemci istekleri: tipli tablo, `ClientCall`, `External`
-
-```rust
-/// Oda kurulurken bir kez doldurulur.
-impl<In> RequestTable<In> {
-    pub fn add<R: Request>(&mut self, wrap: fn(ClientCall<R>, R) -> In) -> Result<(), DuplicateOp>;
-}
-table.add::<BuyItem>(ShopReq::Buy)?;     // ikinci kayıt: Err(DuplicateOp(1001))
-```
-
-- Bilinmeyen op → motor "no handler" cevaplar; yük çözülmezse → motor
-  `undecodable request payload` cevaplar, `requests_rejected_undecodable`
-  sayar. İkisi de oyuna ULAŞMAZ (spike `requests.rs`).
-- `ClientCall<R>` `Clone` değildir: en fazla bir kez cevaplanır
-  (`ctx.reply` onu tüketir). Cevapsız düşürülebilir — bugünkü süre
-  süpürmesi cevaplar (`requests_timed_out`). Bir çağrının etiketinde
-  taşınarak sonradan cevaplanır: **istek, istemcinin isteği etiket
-  olarak bir servis çağrısına dönüşür**, cevap gelince oda cevaplar.
-- **`External` özel durum olur.** Bugünkü
-  `RequestDecision::External(future)` motorun içinde "future'ı çalıştıran
-  yerleşik servis + etiketi 'bu ClientCall'a baytları aynen ilet'" olan
-  bir çağrıya çevrilir. Motorun kendi `Done`'ı olduğu için oyunun `D`
-  tipine dokunmaz: aktör, RESPONSES fazında ikinci, motora ait küçük bir
-  tabloyu (aynı `CallTable` tipi) boşaltır. İstemci aynı
-  `Private.responses` girdisini görür — **tel değişmez**; bugünkü
-  `requests_external`/`requests_late`/`requests_timed_out` anlamları
-  korunur.
-- Geçiş yolu: `handle_request(&RpcRequest) -> Option<RequestDecision>`
-  (bayt) kalır; tipli tabloda bulunmayan op ona düşer, o da `None`
-  derse "no handler". Oyunlar tek tek tipliye geçer.
-
-### 4.5 `GameLogic`'e eklenenler ve göç maliyeti
-
-```rust
-pub struct TickCtx<'a, D = ()> { /* bugünküler + */ calls: Calls<'a, D>, replies: Replies<'a> }
-
-pub trait GameLogic<W>: Send {
-    // … bugünküler …
-    /// Bitmiş bir çağrının oyundaki mesajı (etiketin tipi). Çağrı yapmayan: `()`.
-    type Done: Send + 'static;
-    /// Çözülmüş istemci isteği tipi. Tipli istek kullanmayan: `()`.
-    type Req: Send + 'static;
-    fn requests(&self, _t: &mut RequestTable<Self::Req>) {}
-    fn on_request(&mut self, _w: &mut W, _ctx: &TickCtx<'_, Self::Done>, _r: Self::Req) {}
-    fn on_done(&mut self, _w: &mut W, _ctx: &TickCtx<'_, Self::Done>, _d: &mut Vec<Done<Self::Done>>) {}
-    fn on_events(&mut self, _w: &mut W, _ctx: &TickCtx<'_, Self::Done>, _e: &mut Vec<PushIn>) {}
-}
-```
-
-Kancaların imzası `&TickCtx<'_, Self::Done>` olur. **Mevcut oyun
-başına maliyet: iki satır** (`type Done = (); type Req = ();`); mevcut
-`ctx: &TickCtx` imzaları **olduğu gibi derlenir** — varsayılan tip
-parametresi `D = ()` ile normalize edilir (bu turda 1.95.0'da ayrı bir
-dosyayla doğrulandı; ilişkili tip varsayılanları kararlı olmadığı için
-iki satır kaçınılmaz). `RoomActor`/`ShardActor` `Done` ve `Req` için
-birer jenerik kazanır; `BuiltRoom`'daki `dyn RoomLogic<…>` tipleri de.
-Çağrı/tamamlama makinesi bu sefer **tek bir yardımcı tip**
-(`CallTable`) olarak yazılır ve iki aktör onu paylaşır (bugünkü RPC
-makinesinin iki kopyası TRAIT-ARCHITECTURE Faz 3'ün bıraktığı borç).
-
-Kit (`gsb-kit`'in `Game` dikişleri) aynı iki ilişkili tipi ve üç kancayı
-ileri taşır.
-
-### 4.6 ECS sistemleri
-
-`gsb-ecs`'in `System::run(world, &SystemCtx)`'i bugün `TickCtx`'i
-görmez; "herhangi bir sistem çağırabilir" için sistemlerin fiile
-ulaşması gerekir. Öneri (§16 S3): `SystemCtx<'a, X = ()>`'e ödünç
-`pub ext: &'a X` alanı; oyun kendi `TickCtx`'ini geçirir
-(`runner.run_all(world, &SystemCtx { tick, dt, ext: ctx })`). `gsb-ecs`
-`gsb-core`'a bağımlı olmaz, bevy `SystemParam` makinesine girilmez.
-
-## 5. İstemci tarafı
-
-### 5.1 Rust çekirdeği
-
-Çekirdek "sans-IO" bir oturum durum makinesidir (B28): AUTH/JOIN/
-HEARTBEAT/LEAVE, istek tablosu, itme demux'u. **Kare başına `poll`**
-iki türü asla karıştırmaz:
-
-```rust
-pub enum ClientEvent { Response(RawResponse), Push(PushFrame), /* Joined, Left, Snapshot, Error, Disconnected … */ }
-
-let t: Ticket<BuyItem> = core.request(Target::Room, &BuyItem { .. });
-// … her karede:
-for ev in core.poll() {
-    match ev {
-        ClientEvent::Response(r) if r.id == t.id => match r.decode(&t) {
-            Ok(res) => …,                                 // BuyResult
-            Err(ClientCallError::Game(e)) => …,           // EconomyError
-            Err(ClientCallError::Engine(reason)) => …,    // timeout/cap/no handler
-            Err(ClientCallError::Mismatch) => unreachable!(),
-        },
-        ClientEvent::Push(p) => if let Some(f) = p.decode::<FriendOnline>() { … },
-        _ => {}
+impl Bank for PgBank {
+    async fn transfer(&self, cx: &CallCx, to: Identity, amount: u64) -> Result<TransferDone, GameError> {
+        let from = cx.player().ok_or(err(NOT_LOADED))?;
+        self.db.transfer_once(cx.key(), from, &to, amount).await   // aynı anahtar = aynı sonuç
     }
 }
 ```
 
-- Korelasyon id'leri **tek sayaçtan**, hedef (oda/hub) fark etmeksizin:
-  bir bağlantıda iki hedefin id'leri çakışmaz.
-- Çekirdek kendi yerel zaman aşımını ve **oturum sonunda tüm
-  uçuştakileri** `SESSION_ENDED` ile kapatır: hiçbir sarmalayıcı sonsuza
-  kadar bekleyen bir Promise/Task tutmaz.
-- `Ticket<R>` cevabın tipini istekten alır; başka biletin baytı
-  `Mismatch` döner (spike `client_mirror`).
+**hecs** — aynı mantık, sorgu biçimi farklı:
 
-### 5.2 Dil sarmalayıcıları (hepsi aynı `Command`/`Event` baytı üstünde)
+```rust
+fn transfers(w: &mut hecs::World, calls: &mut Calls, bank: &BankClient) {
+    for r in calls.take_resolved::<bank::Transfer, Reserve>() {
+        let Some(e) = r.owner.entity() else { continue };
+        if let Ok(wallet) = w.query_one_mut::<&mut Wallet>(e) {
+            wallet.reserved -= r.ctx.0;
+            if let Ok(done) = &r.outcome { wallet.gold = done.balance; }
+        }
+    }
+    for r in calls.take_incoming::<TransferGold>() {
+        let Some(e) = player_by_conn(w, r.conn) else { calls.reply(r.reply, Err(err(NOT_LOADED))); continue };
+        let Ok((wallet, bag)) = w.query_one_mut::<(&mut Wallet, &Bag)>(e) else { continue };
+        /* aynı üç dal; çağrı: .owner(e.to_owner()).with(Reserve(..)).answers(r.reply) */
+    }
+}
+```
 
-Kayıt her dilde tiplidir ve tekrar eden op'u reddeder:
-`Register<BuyItem, BuyResult, EconomyError>(op: 1001)`,
-`OnPush<FriendOnline>(op: 2002, handler)`.
+**ECS'siz** — `Owner(player_id)` ve `self.players.get_mut(&r.owner.0)`;
+gerisi aynı (spike `plain_game.rs`):
 
-**C# / Unity** (C ABI üstünde; `TaskCompletionSource` `Poll` içinde,
-ana thread'de tamamlanır):
+```rust
+for r in calls.take_resolved::<bank::Transfer, Reserve>() {
+    if let Some(p) = self.players.get_mut(&r.owner.0) {
+        p.wallet.reserved -= r.ctx.0;
+        if let Ok(done) = &r.outcome { p.wallet.gold = done.balance; }
+    }
+}
+```
+
+Zaman çizelgesi (spike `transfer`, bankanın test gecikmesi 3 tick):
+t3'te iki tık (id 10, 11) → ilki rezerv + çağrı, ikincisi aynı tick'te
+`BUSY`; t4'te id 10 yeniden → motor "duplicate request id" (oyun
+görmez); t3–t5 arası cüzdan `(500, rezerv 100)`; t6'nın RESPONSES'unda
+`.answers` istemciyi cevaplar (`balance 400`), sistem rezervi çözer →
+`(400, 0)`. **Bankada tek ücret.**
+
+### 6.2 Envanter 1: girişte yükleme
+
+```rust
+fn load_on_join(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>,
+                joined: Query<(Entity, &Player), With<JustJoined>>, mut commands: Commands) {
+    for (e, p) in &joined {
+        calls.call(inv.load(p.who.clone())).owner(e.to_owner());
+        commands.entity(e).remove::<JustJoined>();
+    }
+}
+
+fn apply_loads(mut calls: ResMut<Calls>, mut q: Query<(&mut Wallet, &mut Bag)>) {
+    for r in calls.take_resolved::<inventory::Load, ()>() {
+        let Ok((mut wallet, mut bag)) = q.get_mut(r.owner.entity()) else { continue };
+        if let Ok(data) = r.outcome { wallet.gold = data.gold; bag.fill(&data.items); }
+    }
+}
+```
+
+Yükleme bitmeden gelen istekler `!bag.loaded → NOT_LOADED` ile cevaplanır;
+"yükleniyor mu" sorusu `calls.in_flight::<inventory::Load>(e.to_owner())`.
+hecs'te `load_on_join` önce `(Entity, Identity)` listesini toplar, sonra
+çağırır ve `JustJoined`'ı `w.remove_one` ile kaldırır (sorgu ödüncü
+bitmeden dünya değiştirilemez); ECS'siz oyunda `p.joined` bayrağı.
+
+### 6.3 Envanter 2: ganimet toplama (bekleyen durum ganimet varlığında)
+
+```rust
+pub struct Picker(pub Owner);
+
+fn loot(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>,
+        mut bags: Query<(Entity, &Player, &mut Bag)>, mut piles: Query<(Entity, &mut Loot)>,
+        mut commands: Commands) {
+    for r in calls.take_resolved::<inventory::Grant, Picker>() {
+        match r.outcome {
+            Ok(got) => {
+                commands.entity(r.owner.entity()).despawn();                    // ganimet gitti
+                if let Ok((_, _, mut bag)) = bags.get_mut(r.ctx.0.entity()) {
+                    bag.items.push(Item { kind: got.item, locked: false });
+                }
+            }
+            Err(_) => if let Ok((_, mut l)) = piles.get_mut(r.owner.entity()) { l.claimed = false },
+        }
+    }
+    for r in calls.take_incoming::<PickUp>() {
+        let Some((pe, p, _)) = bags.iter().find(|(_, p, _)| p.conn == r.conn) else { /* NOT_LOADED */ continue };
+        let Some((le, mut l)) = piles.iter_mut().find(|(_, l)| l.id == r.body.loot) else { /* NO_SUCH_LOOT */ continue };
+        if l.claimed { calls.reply(r.reply, Err(err(CLAIMED))); continue }      // kaybeden hemen duyar
+        l.claimed = true;                                                       // bekleyen durum ganimette
+        calls.call(inv.grant(p.who.clone(), l.item))
+            .owner(le.to_owner())                                               // sahip = ganimet
+            .with(Picker(pe.to_owner()))
+            .answers(r.reply);
+    }
+}
+```
+
+Spike `inventory`: aynı tick'te alice ve bob aynı ganimeti ister →
+FIFO ile alice talep eder, bob aynı tick'te `CLAIMED` alır; ganimet
+t4–t5 boyunca `claimed = true`, t6'da yok olur ve alice'in çantasına
+girer. İkinci ganimet t6'da süresi dolup yok olur, bob'un ona ait
+sonucu t7'de gelir → `responses_owner_gone = 1`, bob yine cevaplanır.
+
+### 6.4 Envanter 3: kilitli malzemeyle üretim + `.answers`
+
+```rust
+pub struct Locked(pub Vec<ItemId>);
+
+fn craft(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>, mut q: Query<(Entity, &Player, &mut Bag)>) {
+    for r in calls.take_resolved::<inventory::Craft, Locked>() {
+        let Ok((_, _, mut bag)) = q.get_mut(r.owner.entity()) else { continue };
+        match r.outcome {
+            Ok(made) => { bag.consume_locked(&r.ctx.0); bag.items.push(Item { kind: made.item, locked: false }); }
+            Err(_) => bag.unlock(&r.ctx.0),                // servis hatası, ret, zaman aşımı: hepsi burada
+        }
+    }
+    for r in calls.take_incoming::<CraftReq>() {
+        let Some((e, _, mut bag)) = q.iter_mut().find(|(_, p, _)| p.conn == r.conn) else { continue };
+        if !bag.try_lock(&r.body.consume) {
+            calls.reply(r.reply, Err(err(MISSING)));
+        } else {
+            calls.call(inv.craft(r.body.recipe, r.body.consume.clone()))
+                .owner(e.to_owner())
+                .with(Locked(r.body.consume))              // kısmi taşıma: body.consume buraya,
+                .answers(r.reply);                         // reply buraya
+        }
+    }
+}
+```
+
+Malzemeler çağrı süresince kilitlidir (başka bir üretim/kuşanma onları
+göremez); sonuç her durumda kilidi çözer. İstemciye `Crafted` ya da
+`GameError` otomatik gider; servis kimliği `cx.player()`'dan alır.
+
+### 6.5 Envanter 4: kuşanma (servissiz) + otomatik kayıt
+
+```rust
+fn equip(mut calls: ResMut<Calls>, mut q: Query<(&Player, &mut Bag)>) {
+    for r in calls.take_incoming::<Equip>() {
+        let Some((_, mut bag)) = q.iter_mut().find(|(p, _)| p.conn == r.conn) else { continue };
+        if bag.has_unlocked(r.body.item) {
+            bag.equipped = Some(r.body.item);
+            bag.dirty = true;
+            calls.reply(r.reply, Ok(Equipped { item: r.body.item }));   // aynı tick
+        } else {
+            calls.reply(r.reply, Err(err(MISSING)));
+        }
+    }
+}
+
+fn autosave(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>, tick: Res<Tick>,
+            mut q: Query<(Entity, &Player, &mut Bag)>) {
+    for r in calls.take_resolved::<inventory::Save, ()>() {
+        if r.outcome.is_err() && let Ok((_, _, mut b)) = q.get_mut(r.owner.entity()) { b.dirty = true }
+    }
+    if tick.0.tick() % 5 != 4 { return }
+    for (e, p, mut bag) in &mut q {
+        if bag.dirty && !calls.in_flight::<inventory::Save>(e.to_owner()) {     // oyuncu başına tek kayıt
+            calls.call(inv.save(p.who.clone(), bag.kinds(), bag.equipped.unwrap_or(0))).owner(e.to_owner());
+            bag.dirty = false;
+        }
+    }
+}
+```
+
+Kayıt sonucu da alınmalıdır (başarılıysa yok sayılır) — alınmazsa
+`responses_unhandled` sayar. Bu bilinçli: "kimse bakmadı" bir kayıptır.
+
+## 7. Servisten servise ve admin: `Handle`
+
+```rust
+struct GiftShop { bank: BankHandle }
+
+impl Shop for GiftShop {
+    async fn gift(&self, cx: &CallCx, to: Identity, price: u64) -> Result<TransferDone, GameError> {
+        self.bank.within(cx)                 // aynı oyuncu adına
+            .transfer(to, price).await       // tek await; Outcome<bank::Transfer>
+            .map_err(|e| match e { CallError::Service(g) => g, _ => err(UNAVAILABLE) })
+    }
+}
+
+// admin / boot kodu
+let r = bank_handle.on_behalf_of(&Identity::new("bob")).transfer(carol, 25).await;
+```
+
+Handle çağrısı kutu dolu/servis yok için hemen `Err(Refused(..))` döner
+(beklenebilir yolda "hemen" anlamlıdır), cevap kanalı düşerse
+`Abandoned`. Handle çağrıları hiçbir odanın kaydında değildir (oda dışı
+çağıran — determinizm sınırının dışında). Spike
+`live::a_service_calls_another_through_its_handle`.
+
+**Oda dışı aktör** (zamanlayıcı, turnuva yöneticisi): kendi `Calls`
+tablosu + kendi tick'i olan bir aktör — aynı API, oda olması gerekmez.
+
+## 8. Göç: `export` / `import`
+
+```rust
+// kaynak oda, varlık seam'i geçerken (ya da oda başka shard'a taşınırken)
+let pending = calls.export(player.to_owner());          // anahtarlar + bağlamlar + .answers hedefleri
+mig.push(pending);                                       // oyunun göç yükünde taşınır
+
+// hedef oda
+calls.import(pending, new_entity.to_owner());            // FLUSH'ta AYNI anahtarla yeniden yayın
+```
+
+- Kaynak girişleri bırakır (`calls_exported`); kaynağa sonradan gelen
+  cevap `results_late` sayılır, hiçbir yere uygulanmaz.
+- Hedef aynı `CallKey` ile yeniden gönderir; **idempotent servis**
+  anahtarla tekilleştirir → tek etki. Hedef sonucu bağlamıyla alır;
+  `.answers` hedefi de taşındığı için istemci hedeften cevaplanır (s0
+  S7'nin "göçte istemci isteği bırakılır" duruşu böylece düzelir).
+- Spike `migration`: A çağırdı, banka ücretlendirdi; A export, B import;
+  B aynı anahtarla yeniden yayınladı → **tek ücret**, B `(Owner(9), 100,
+  Ok(400))` aldı ve istemciyi cevapladı, A'nın cevabı `results_late`.
+- s0'ın reçetesiyle aynı sözleşme: anahtarı saklamayan servis göç
+  altında en-az-bir-kez semantiğine razıdır. Yeniden başlatmada (C1
+  checkpoint) oyun anahtarları checkpoint'e yazar.
+- Bu spike'ta `Exported` süreç içidir (bağlam `Box<dyn Any>`); süreçler
+  arası göç bağlamın serileştirilmesini ister (§19 S8).
+
+## 9. Her kaybı say: sayaçlar
+
+Her biri tek anlamlı (B32). Spike `Counters`; motorda metriklere bağlama
+uygulama turunda.
+
+**Çağrı (gönderen tarafı):** `calls_issued`, `calls_sent`,
+`calls_refused_full`, `calls_refused_gone`, `calls_refused_share`,
+`calls_exported`, `calls_imported`.
+**Sonlar:** `results_ok`, `results_service_error`, `results_refused`
+(FLUSH retleri + servisteki `Shed`), `results_timed_out`,
+`results_abandoned`, `results_late`.
+**Teslim:** `responses_delivered`, `responses_unhandled`,
+`responses_owner_gone`, `answers_sent`.
+**İstekler:** `requests_received`, `requests_malformed`,
+`requests_no_handler`, `requests_undecodable`, `requests_duplicate`,
+`requests_forwarded`, `requests_answered`, `requests_untaken`,
+`requests_unanswered`, `requests_replied_late`.
+**Tekrar:** `replay_diverged`.
+**Servis tarafı** (`ServiceStats`, atomik): `calls_received`,
+`replies_undeliverable_full`, `replies_undeliverable_gone`.
+
+**Defter kimlikleri:**
+`calls_issued = calls_sent + calls_refused_{full,gone,share}`;
+`calls_issued = results_ok + results_service_error + results_refused +
+results_timed_out + results_abandoned + calls_exported + yolda`
+(spike senaryosunda `calls_issued == results_ok`); bir sonucun teslimi:
+`results_* (geç olmayan) = responses_delivered + responses_owner_gone +
+yalnız-.answers`.
+
+## 10. Determinizm
+
+### 10.1 Ne kaydedilir (oda sınırında, opt-in)
+
+Her tick için, kanonik sırayla: `dt`; CONTROL girdileri; RESPONSES'ta
+teslim edilen her sonuç (`CallKey`, çağrı tipi, sonucun kopyası — geç
+gelenler yalnız anahtar); READ'in çektiği istekler (`ConnId`,
+`RpcRequest`); (EVENTS, sonraki tur). Başlıkta oda id'si ve **tohum**.
+Kayıt her tick'in durum hash'ini de tutar.
+
+Determinizmi sağlayan diğer parçalar:
+
+- `ctx.time()` / `ctx.dt()`: oda saati = kaydedilen `dt`'lerin toplamı.
+  Mantıkta duvar saati yok.
+- `ctx.rng()`: oda başına, tohumlu (SplitMix64); tohum kayıtta.
+- **Deterministik çağrı anahtarı:** `CallKey { origin, seq }`, `origin =
+  mix(tohum ^ mix(oda id))`, `seq` FLUSH sırası. Tekrar aynı anahtarları
+  üretir; REPLAY kayıtlı sonuçları anahtarla eşler.
+- Tick başına **durum hash kancası:** oyun doldurur
+  (`fn state_hash(&mut self, h: &mut StateHasher)`); motor rng durumunu ve
+  oda saatini ekler. Hile doğrulama = istemcinin/denetçinin tekrarındaki
+  hash'leri canlı hash'lerle karşılaştırmak.
+
+### 10.2 REPLAY modu
+
+`Room::replay(log, ..)`: aynı oyun (aynı ikili), `ReplayHost`'tan
+alınmış istemcilerle kurulur (rotaları hiçbir yere gitmez). Tablo
+REPLAY'de **hiç göndermez**; FLUSH yalnız bekleyen girişi yazar;
+RESPONSES kanal yerine kayıttaki listeyi teslim eder (anahtarla eşleyip,
+girişin tipiyle kopyalayarak). CONTROL ve READ kayıttan. Spike
+`determinism::a_live_run_replays_to_the_same_hashes_without_calling_services`:
+
+- CANLI koşu: tokio üzerinde 0–8 ms rastgele gecikmeli servisler, tick
+  arası gerçek uyku, ölçülen `dt`, kayıt açık;
+- iki kez REPLAY: tick başına hash'ler canlı koşununkiyle **aynı**,
+  istemci cevapları aynı tick'lerde aynı, servisin çağrı sayacı
+  **değişmedi**;
+- negatif kontrol: kayıttaki ilk sonucu bir tick geciktir → hash'ler
+  ayrışır (hash zamanlamayı görüyor).
+
+**Spike bulgusu — ayrışma algılama:** negatif kontrolün ilk hâlinde oyun
+farklı çağrılar üretti; aynı `seq` artık başka tipte bir çağrıya aitti
+ve kayıttaki sonuç yanlış tipe kopyalanmaya çalışıldı (panik). Çözüm:
+kayıt her sonucun **çağrı tipini** de tutar; REPLAY'de tip uyuşmazsa
+sonuç uygulanmaz, `replay_diverged` sayılır. Gerçek bir tekrarda (aynı
+ikili, deterministik oyun) hiç olmaz; olursa "bu kayıt bu oyunla
+oynatılamaz" demektir.
+
+### 10.3 TEST modu
+
+```rust
+let mut sim = Sim::new();
+sim.service(Delay::ticks(3, Bank::serve(FakeBank::default())), 64);   // 3 tick sonra görünür
+sim.service(Delay::never(Inventory::serve(FakeInv::default())), 64);  // hiç cevaplamaz
+let mut room = Room::new(cfg, build(Clients::from(&sim)));
+for _ in 0..10 { room.tick_sim(&mut sim); }                          // sabit dt, tohumlu rng
+```
+
+Sahte servis **sadece bir trait impl'idir**; motor yalnız zamanlamayı
+kontrol eder: tick sonrası `sim.step` posta kutularını çeker, servis
+future'larını no-op waker ile yoklar, cevabı `Delay`'in dediği tick'te
+bırakır (`Delay::ticks(n, ..)`: çağrının tick'inden `n` tick sonraki
+RESPONSES). Çalışma zamanı yok, tower katmanları yok (zamanlama
+motorun). `sim.kill::<inventory::Kind>()` "servis öldü"yü canlandırır
+(yeni çağrılar `Gone`, tutulanlar `Abandoned`). Spike: aynı tohumla iki
+koşu aynı (hash + cevaplar), farklı tohum farklı. (`Delay` impl'i değil,
+`serve(..)` değerini sarar: `Delay::ticks(3, Bank::serve(fake))`.)
+
+### 10.4 Oyunun kaçınması gerekenler
+
+- `HashMap`/`HashSet` **iterasyon sırasına** bağımlılık (arama sorun
+  değil; sıralı iterasyon için `BTreeMap` ya da ECS sorgusu).
+- Mantıkta duvar saati (`Instant::now`, `SystemTime`) ve kendi RNG'si.
+- bevy'de çok iş parçacıklı şema yürütücüsünün sırasına güvenmek
+  (adaptör tek iş parçacıklı koşar).
+- Tekrarı farklı bir ikiliyle oynatmak (`replay_diverged` yakalar,
+  ama düzeltemez).
+
+Oda dışı çağıranlar (Handle ile çağıran servisler, admin) kaydedilmez;
+odaya etkileri yalnız sonuç olarak girer ve o zaten kayıttadır.
+
+## 11. Sürümleme ve gözlemlenebilirlik
+
+- **Op'lar asla yeniden kullanılmaz.** `accept`/`forward` op'u boot'ta
+  talep eder; ikinci talep `BootError::OpCollision { op, first, second }`
+  (spike `boot`). Kaldırılan bir rpc'nin op'u `.proto`'da `reserved`
+  olarak kalır (kod üretici denetler).
+- **Bilinmeyen op** → motor `"no request handler for op"`; çözülemeyen
+  yük → `"undecodable request payload"`; id 0 → `"malformed"`. Hiçbiri
+  oyuna ulaşmaz.
+- **İzleme:** `CallKey::trace_id()` anahtardan türetilir (yeniden
+  yayında aynı → göç sonrası çağrı aynı izde kalır). Servis katmanı her
+  metot için `service=Inventory method=craft trace=…` span'i + gecikme
+  histogramı yayar (bir tower katmanı; OTLP ihracatçısı mevcut). Spike
+  span yaymaz; `ServiceStats` sayaçlarını tutar.
+
+## 12. Oyunun işi
+
+Yetkilendirme (bu oyuncu bu ganimeti alabilir mi), istek başına hız
+sınırı (bir istemci saniyede kaç `Craft` yollayabilir), sayfalama
+(arkadaş listesinin 2. sayfası) — oyun sistemlerinde ya da servisin
+içinde. Motor yalnız bağlantı başına bekleyen istek sınırını ve
+servis payını uygular.
+
+## 13. Neyi kaldırdık, neyi taşıdık
+
+- `RequestDecision::External(future)` → motorun yerleşik bir `forward`
+  kuralı olur (future'ı koşan yerleşik servis + `.answers`); tel aynı,
+  sayaç anlamları korunur. Geçiş: tipli tabloda bulunmayan op bugünkü
+  `handle_request`'e düşer.
+- s0'ın `TickCtx<'a, D>`, `GameLogic::{Done, Req, on_done, on_request}`,
+  etiket kapanışları, `Refused::fail`, `RequestTable<In>`,
+  `SystemCtx::ext` önerileri — hepsi gereksiz: `Calls` tablosu oyunun
+  her yerinden (bevy'de `ResMut<Calls>`, diğerlerinde `&mut Calls`)
+  erişilir.
+- Hub ve onun tel değişiklikleri (`RpcRequest.target`, `RPC_RESP`) —
+  §18 A5.
+
+## 14. İstemci ve FFI
+
+İstemci tarafı s0'daki gibi (sans-IO Rust çekirdeği, kare başına
+`poll`, sabit C ABI), şu farklarla: hub hedefi yok; istek id'sini
+**sarmalayıcı** atar; iptal `Command::Forget { id }`; `.proto`'dan
+üretilmiş tipli istemci.
+
+```proto
+// ffi.proto (istemci çekirdeği ↔ sarmalayıcı; telde değil) — s0'dan farklar
+message Command {
+  oneof kind {
+    JoinRoom join = 1; LeaveRoom leave = 2; SendAction action = 3;
+    Request request = 4;      // { uint64 id; uint32 op; bytes payload }  (target YOK)
+    Disconnect disconnect = 5;
+    Forget forget = 6;        // { uint64 id } — sarmalayıcı vazgeçti; geç cevap çekirdekte düşer (sayılır)
+  }
+}
+enum Status { STATUS_OK = 0; STATUS_GAME_ERROR = 1; STATUS_ENGINE_REJECTED = 2;
+              STATUS_LOCAL_TIMEOUT = 3; STATUS_SESSION_ENDED = 4; }
+```
+
+C ABI beş fonksiyon (s0 ile aynı): `gsb_abi_version`, `gsb_new`,
+`gsb_command`, `gsb_poll(buf, cap) -> len` (`< 0` → `-gereken`; olay
+çekirdekte bekler), `gsb_free`. `unsafe` yalnız `gsb-ffi`'de.
+
+**C# (Unity) — üretilmiş istemciyle:**
 
 ```csharp
-public sealed class GsbClient : IDisposable {
-    readonly IntPtr h; ulong nextId; byte[] buf = new byte[64 * 1024];
-    readonly Dictionary<ulong, Action<FfiResponse>> pending = new();
-    readonly Dictionary<uint, Action<ByteString>> pushes = new();
-
-    public void Register<TReq, TRes, TErr>(uint op) where TReq : IMessage<TReq> … {
-        Registry.Add<TReq>(op, TRes.Parser, TErr.Parser);   // tekrar → throw
-    }
-
-    public Task<TRes> Request<TReq, TRes, TErr>(TReq req, Target target = Target.Room) {
-        var reg = Registry.Get<TReq>();
-        var id = ++nextId;
-        var tcs = new TaskCompletionSource<TRes>(TaskCreationOptions.RunContinuationsAsynchronously);
-        pending[id] = r => {
-            switch (r.Status) {
-                case Status.Ok:          tcs.SetResult((TRes)reg.Response.ParseFrom(r.Payload)); break;
-                case Status.GameError:   tcs.SetException(new GameError<TErr>((TErr)reg.Error.ParseFrom(r.Payload))); break;
-                default:                 tcs.SetException(new GsbException(r.Status, r.Reason)); break;
-            }
-        };
-        Send(new Command { Request = new FfiRequest { Id = id, Op = reg.Op, Payload = req.ToByteString(), Target = target } });
-        return tcs.Task;
-    }
-
-    public void Poll() {                       // MonoBehaviour.Update'ten, kare başına bir kez
-        for (;;) {
-            long n = Native.gsb_poll(h, buf, (UIntPtr)buf.Length);
-            if (n == 0) break;
-            if (n < 0) { buf = new byte[-n]; continue; }       // olay çekirdekte bekler
-            var ev = Event.Parser.ParseFrom(buf, 0, (int)n);
-            switch (ev.KindCase) {
-                case Event.KindOneofCase.Response: if (pending.Remove(ev.Response.Id, out var k)) k(ev.Response); break;
-                case Event.KindOneofCase.Push:     if (pushes.TryGetValue(ev.Push.Op, out var p)) p(ev.Push.Payload); break;
-                // Joined / Left / Snapshot / Error / Disconnected …
-            }
-        }
-    }
+// .proto'dan üretilir (protoc eklentisi): op'lar ve tipler tek yerde
+public sealed partial class GameClient {
+    readonly GsbClient gsb;
+    public GameClient(GsbClient gsb) => this.gsb = gsb;
+    public Task<TransferDone> TransferGold(TransferGold req, CancellationToken ct = default)
+        => gsb.Request<TransferGold, TransferDone, GameError>(1001, req, ct);
+    public Task<Crafted> Craft(CraftReq req, CancellationToken ct = default)
+        => gsb.Request<CraftReq, Crafted, GameError>(1003, req, ct);
 }
-// var res = await gsb.Request<BuyItem, BuyResult, EconomyError>(new BuyItem { Item = "sword" });
+
+// el yazımı çekirdek sarmalayıcı (bir kez)
+public Task<TRes> Request<TReq, TRes, TErr>(uint op, TReq req, CancellationToken ct)
+    where TReq : IMessage<TReq> where TRes : IMessage<TRes>, new() where TErr : IMessage<TErr>, new() {
+    var id = ++nextId;                                     // id'yi sarmalayıcı atar
+    var tcs = new TaskCompletionSource<TRes>(TaskCreationOptions.RunContinuationsAsynchronously);
+    pending[id] = r => {
+        switch (r.Status) {
+            case Status.Ok:        tcs.TrySetResult(new MessageParser<TRes>(() => new TRes()).ParseFrom(r.Payload)); break;
+            case Status.GameError: tcs.TrySetException(new GameException<TErr>(new MessageParser<TErr>(() => new TErr()).ParseFrom(r.Payload))); break;
+            default:               tcs.TrySetException(new GsbException(r.Status, r.Reason)); break;
+        }
+    };
+    ct.Register(() => { if (pending.Remove(id)) { Send(new Command { Forget = new Forget { Id = id } }); tcs.TrySetCanceled(); } });
+    Send(new Command { Request = new FfiRequest { Id = id, Op = op, Payload = req.ToByteString() } });
+    return tcs.Task;
+}
+
+// oyun kodu
+try {
+    var done = await game.TransferGold(new TransferGold { To = "bob", Amount = 100 });
+    ui.Gold = done.Balance;
+} catch (GameException<GameError> e) when (e.Error.Code == Codes.Busy) { /* çift tık */ }
 ```
 
-`SetResult` `Poll` içinde ana thread'de çağrılır; `RunContinuationsAsynchronously`
-devam kodunu Unity'nin `SynchronizationContext`'ine postalar —
-`Poll`'un ortasında yeniden girişi önler, devam yine ana thread'dedir.
+`Poll()` s0'daki gibi (`MonoBehaviour.Update`'ten; `n < 0` → tamponu
+`-n`'e büyüt, aynı olayı yeniden çek; `Status.GameError` = sunucunun
+`game_error` bayrağı). Godot (gdext) ve JS (wasm) aynı `Command`/`Event`
+protosunu Rust çekirdeği üzerinden konuşur; üretilmiş GDScript/TS
+istemcileri aynı `.proto`'dan.
 
-**Godot (gdext — Rust, C ABI gerekmez):** `GsbClient` düğümü
-`_process`'te `poll` eder; `response(id, op, status, payload)` ve
-`push(op, payload)` **sinyalleri**. GDScript tipli kullanım için her
-istek bir `GsbCall` nesnesi döndürür (`signal completed(result)`):
-`var r = await gsb.request(BuyItem.new()).completed`. Tipler godobuf
-üretimi; kayıt `gsb.register(1001, BuyItem, BuyResult, EconomyError)`.
+## 15. OLAYLAR (sistemin bize ittiği) — sonraki tur, yeniden tasarlanacak
 
-**JS (wasm + WebSocket):** çekirdek wasm'da, soket JS'te (tarayıcıda
-TCP/rUDP/QUIC yok); `requestAnimationFrame` başına `client.poll()`;
-`client.request(BuyItem, msg): Promise<BuyResult>` Promise'i `poll`
-içinde çözülür (`reject` → `GameError<EconomyError>` ya da
-`EngineError`); `client.onPush(FriendOnline, fn)`. Tipler
-protobuf-es/ts-proto.
+> **Bu bölüm s0 metnidir ve bu turda DEĞİŞTİRİLMEDİ** (yalnız hub'a
+> düşüş işaretlendi). s0b'nin kararlarıyla çelişen yerleri var (hub'a
+> düşüş, `on_events` kancası); olaylar bir sonraki turda `Calls`
+> tablosuyla aynı biçimde (`take_events::<E>()` benzeri) yeniden
+> tasarlanacak. Tick'teki yeri (READ ile CONVERT arası) korunuyor.
 
-**Bevy (Rust, doğrudan):** `GsbPlugin` `PreUpdate`'te `poll` eder;
-`app.add_gsb_request::<BuyItem>()` tipli kayıt (aynı `Request` trait'i —
-sözleşme crate'i paylaşılır); `GsbCommands` system param'ı
-`request(BuyItem{..}) -> Ticket<BuyItem>`; cevaplar
-`EventReader<Responded<BuyItem>>`, itmeler `EventReader<Pushed<FriendOnline>>`.
-
-**ABI notu (önemli):** C ABI'ye **yalnız C#/Unity** muhtaçtır. Godot
-(gdext) ve Bevy Rust'tır — çekirdeğe doğrudan bağlanır; JS wasm-bindgen
-kullanır. Hepsi yine de AYNI `Command`/`Event` protosunu konuşur ki
-sarmalayıcıların davranışı tek bir uygunluk senaryosuyla test edilsin.
-C ABI ham işaretçi ister: `unsafe`'siz yazılamaz — §16 S11.
-
-## 6. EVENTS: sistemin bize ittiği
-
-### 6.1 API
+### 15.1 API (s0)
 
 ```rust
 #[derive(Clone)]
@@ -516,7 +885,7 @@ fn on_events(&mut self, w, ctx, events: &mut Vec<PushIn>) {
 Kimlik = doğrulanmış bilet kimliği (`ValidatedTicket.player`, TICKETS),
 registry'nin zaten tuttuğu `ConnInfo.identity`.
 
-### 6.2 Yönlendirme: iki hedef, tek yol
+### 15.2 Yönlendirme: iki hedef, tek yol (s0)
 
 ```text
 servis ──Pusher.push──▶ [registry: kimlik → canlı oturum]
@@ -526,7 +895,7 @@ servis ──Pusher.push──▶ [registry: kimlik → canlı oturum]
              Dest::Client │                    │ Dest::World
                           ▼                    ▼
               PUSH karesi (kendi yolu)   üyelik kanalı (Inbound::Push) ──▶ READ ayırır ──▶ EVENTS
-              odanın haberi olmaz        oda yok → hub varsa hub'a, yoksa pushes_world_no_room
+              odanın haberi olmaz        oda yok → (s0: hub'a; s0b'de hub yok) pushes_world_no_room
 ```
 
 **Neden `Dest::World` oturumun üyelik kanalından gider (oda başına
@@ -547,523 +916,229 @@ işareti istemcinin pull bütçesine sayılmaz.
 **Park edilmiş oyuncu** (oturumu yok, varlığı dünyada): ilk sürümde
 `Dest::World` itmesi `pushes_world_parked` olarak sayılır, teslim
 edilmez — otorite servistedir, resume'da oyun yeniden eşitler.
-Defter-tabanlı teslim (park defterinin `resume_lookup(identity)`'si
-zaten var) §16 S5.
 
 **Çevrimdışı** teslim (kutu, davet saklama) motorun işi değil: servis
 saklar, oyuncu giriş yapınca oyun kendi isteğiyle çeker. Motor yalnız
 `pushes_offline` sayar.
 
 **Yetenek bayrağı.** Eski bir istemci `PUSH` opcode'unu bilmez; ona
-asla gönderilmez: `Auth.features` (yeni alan, §14) `PUSH` bitini
-taşımayan bağlantıya `Dest::Client` itmesi `pushes_unsupported` olarak
-sayılır.
+asla gönderilmez: `Auth.features` (yeni alan) `PUSH` bitini taşımayan
+bağlantıya `Dest::Client` itmesi `pushes_unsupported` olarak sayılır.
 
 **Neden yönlendirici registry (ilk sürüm):** kimlik→oturum tablosu
 zaten orada (auth/close olaylarıyla güncel). Risk: sohbet hacmi kontrol
-düzleminin kutusuna biner (join/leave gecikmesi). Ölç-sonra-böl: §16
-S4.
+düzleminin kutusuna biner (join/leave gecikmesi). Ölç-sonra-böl.
 
-## 7. Geri basınç ve adalet
+## 16. Tel değişiklikleri (eklemeli — DESIGN §5)
 
-- **Servis kutusu sınırlıdır**; `call` `try_reserve` ile dener, dolu →
-  `Refused(Full)` + `calls_refused_full`, kapalı → `Refused(Gone)` +
-  `calls_refused_gone`. Tick asla beklemez (spike `c_backpressure`).
-- **(oda, servis) payı:** her oda, her servis için en fazla `k` çağrıyı
-  uçuşta tutabilir (`max_in_flight_per_service`, servis başına
-  geçersiz kılınabilir); aşan → `Refused(ServiceCap)` +
-  `calls_refused_service_cap`. Bir oda bir servisi tek başına
-  dolduramaz (spike: açgözlü oda 100 dener, 3 gönderir; ikinci oda yine
-  3'ünü alır).
-- **Boyutlandırma kuralı:** kutu kapasitesi `C`, payı `k` olan `N`
-  oda: `N·k ≤ C` ise hiçbir oda diğerini kutuda aç bırakamaz. `N·k > C`
-  iken adalet "ilk gelen" düzeyindedir (odalar tokio planlayıcısının
-  sırasıyla tick'ler) — dürüst sınır budur; servis gerçekten yavaşsa
-  herkes `Full` görür ve sayılır. Oda başına alt-kuyruk (servisin
-  odalar arasında sırayla okuması) ertelendi: servis ya çoklu bekleme
-  (yasak) ya da ek uyandırma kanalı ister (§15 A11).
-- **Tamamlanma kanalı** oda başına sınırlı, kapasite ≥ 2 × oda toplam
-  payı (süresi dolmuş çağrıların geç cevapları güncellerinkini
-  itmesin). Yine de dolarsa: servis tarafında `Reply::send` →
-  `Undeliverable::Full` (`replies_undeliverable_full`), oda tarafında
-  çağrı süre süpürmesiyle `calls_timed_out` — her iki uçta adlı sayaç.
-- **Tick başına çağrı bütçesi** gerekmiyor: pay, bir döngüdeki hatalı
-  sistemin bile en fazla `k` çağrı göndermesini garanti eder; geri
-  kalanı senkron reddedilir.
-- **İstemci isteği zaman aşımı ≥ çağrı zaman aşımı + bir tick**
-  olmalı (yapılandırma doğrulaması); aksi hâlde istemci, odanın hâlâ
-  beklediği çağrı için "timed out" görür.
-
-## 8. Her kaybı say: sayaç listesi
-
-Yalnız adlar (bu turda metrik/golden/tel-magic değişikliği YOK;
-bağlama s1'de). Her biri tek anlam (B32 kararı).
-
-**Çağrı yolu (oda/shard/hub, `CallTable`):** `calls_sent`,
-`calls_refused_full`, `calls_refused_gone`, `calls_refused_service_cap`,
-`calls_refused_duplicate_key`, `calls_done_ok`¹,
-`calls_done_service_error`¹, `calls_timed_out`, `calls_abandoned`,
-`calls_late`, `calls_dropped_migrated` (`ctx.forget`),
-`calls_lost_teardown`; gösterge: `calls_in_flight`.
-
-**Servis tarafı (motorun `Reply`'ı, servise verilen sayaç seti):**
-`replies_undeliverable_full`, `replies_undeliverable_gone`.
-
-**İstemci istekleri (yeni; mevcutlar aynen kalır):**
-`requests_rejected_undecodable`, `requests_replied_late` (oyun, süre
-süpürmesinin zaten cevapladığı isteğe cevap verdi).
-
-**Hub:** `hub_requests_refused_full` (bağlantı aktörü: hub kutusu
-dolu — anında ret cevaplanır), `hub_requests_no_hub` (hub
-yapılandırılmamış), `hub_replies_dropped_full`,
-`hub_replies_dropped_closed` (bağlantının kutusu).
-
-**İtme:** `pushes_refused_full` (Pusher → yönlendirici kutusu dolu),
-`pushes_offline`, `pushes_world_parked`, `pushes_unsupported`,
-`pushes_client_dropped_full`, `pushes_client_dropped_closed`,
-`pushes_world_no_room`, `pushes_world_dropped_full`,
-`pushes_world_dropped_closed`, `pushes_world_unbound`,
-`pushes_delivered_client`¹, `pushes_delivered_world`¹.
-
-¹ Kayıp değil, sonuç; defterin kapanması için gerekli (gönderilen =
-teslim + her kayıp nedeni).
-
-**Defter kimlikleri** (her yol için kapanmalı, loadgen'de kilitlenecek):
-`calls_sent = done_ok + done_service_error + timed_out + abandoned +
-dropped_migrated + lost_teardown + in_flight`;
-`push (registry'ye kabul edilen) = delivered_client + delivered_world +
-offline + parked + unsupported + client_dropped_* + world_no_room +
-world_dropped_* + world_unbound`.
-
-**Dürüst boşluk:** panikleyen bir oda, son metrik örneğinden sonraki
-uçuştakileri `calls_lost_teardown`'a yazamaz (görev ölmüştür); operatör
-son örneğin `calls_in_flight` göstergesini görür. Temiz kapanış her
-zaman sayar.
-
-## 9. Sıralama garantileri (açıkça)
-
-1. **(oda, servis) çağrıları servise çağrı sırasıyla ulaşır** (tek
-   gönderen, FIFO kutu).
-2. **Cevaplar servisin bitirdiği sırayla gelir**, çağrı sırasıyla DEĞİL.
-   Sıra isteyen servis tek görevde sırayla işler — o zaman uçtan uca
-   FIFO'dur (tek tamamlanma kanalı). Bir tick'in batch'i varış
-   sırasındadır; süresi dolanlar o tick'in cevaplarından sonra gelir.
-3. **Farklı servisler arasında sıra yoktur.**
-4. **Yanıtlar ile olaylar arasında sıra yoktur.** Aynı tick'te
-   görülürlerse mantık önce yanıtları (RESPONSES), sonra olayları
-   (EVENTS), sonra girdiyi (CONVERT) görür.
-5. **Tek göndericiden tek kimliğe itmeler** düşmedikçe sırayla gelir
-   (yönlendirici kutusu, bağlantı kutusu, üyelik kanalı hepsi FIFO);
-   düşen itme sayılır, motor sıra numarası/boşluk algılaması vermez
-   (§17).
-6. **İstemci isteği cevapları:** bugünkü kural (aksiyonlar sonra
-   istekler; cevaplar `Private`'ta). Hub cevapları ayrı karede
-   (`RPC_RESP`): oda cevaplarıyla aralarında sıra yoktur.
-
-## 10. Geliştirici deneyimi: sahte servis + test saati
-
-```rust
-let (econ, mut fake) = FakeService::new("economy", 8);
-let mut room = Room::new(cfg, Shop::new(econ, 600), shop_table());
-for _ in 0..10 {
-    room.tick();
-    fake.step(room.now(), |msg, s| match msg {
-        // karar şimdi (anahtarla tekilleştirerek), cevap 3 tick sonra
-        EconomyMsg::Buy(call) => { let r = ledger.buy(call.key, &call.req); s.after(3, move || { let _ = call.reply.send(r); }); }
-        _ => {}
-    });
-}
-assert_eq!(ledger.charges, 1);
-```
-
-- Çalışma zamanı yok, HTTP yok: servis kutusunu testin istediği anda
-  okur, cevabı tick cinsinden zamanlar (`after(3, …)`), `kill()` ile
-  "servis öldü"yü (`Gone` + her tutulan `Reply` → `Abandoned`)
-  canlandırır.
-- Saat = odanın tick sayacı (spike); motorda tick saati (F10,
-  `ticker::now()`) — s1'de `gsb-kit::testing` elle ilerletilen bir
-  ticker ve `FakeService`'i verir.
-- Kanıtlanan senaryolar: "servis 3 tick sonra cevaplar" (çağrı t'de →
-  servis t'den sonra alır → t+3'ten sonra cevaplar → mantık t+4'ün
-  RESPONSES'unda görür), zaman aşımı + geç cevap, düşürülen cevap.
-
-## 11. Göç, yeniden başlatma, kapanış
-
-**Seçim: etiket SEYAHAT ETMEZ; cevap YENİDEN YÖNLENDİRİLMEZ; yerel giriş
-sayılarak bırakılır; oyunun rezervi anahtarıyla seyahat eder ve hedef
-aynı anahtarla yeniden yayınlar; servis anahtarla tekilleştirir.** Üç
-durum, tek reçete:
-
-| Durum | Motorun yaptığı | Oyunun yaptığı |
-|---|---|---|
-| **KitMig: varlık seam'i geçer** (çağrı uçuştayken) | Kaynak, `on_migrate_out`'ta oyunun `ctx.forget(key)`'iyle girişi bırakır (`calls_dropped_migrated`; spike'ta `CallTable::drop_for_migration`); geç cevap kaynakta `calls_late`. Motor hangi çağrının hangi varlığa ait olduğunu bilmez (etiket opak) — bırakma kararı oyunundur; unutulursa kaynak, gitmiş bir varlık için `Done` alır. | Rezerv kaydı (`price`, `key`) `ShardGame::Mig` içinde `KitMig`'le taşınır; hedef `on_migrate_in`'de `ctx.call_keyed(key, …)` yapar. |
-| **Oda başka shard'a/sürece taşınır** (rehome, F32 devralma) | Bekleyen tablo taşınmaz; eski enkarnasyonun kanalı kapanır → servis `Undeliverable::Gone`. | Taşınan oda durumu rezervleri anahtarlarıyla taşır; yeni enkarnasyon ilk tick'te yeniden yayınlar. |
-| **Denetim yeniden başlatması** (C1 checkpoint'ten) | Yeni `origin`, yeni kanal; eski cevaplar hiçbir zaman yeni enkarnasyona ulaşmaz (yapısal). | Checkpoint rezervleri anahtarlarıyla içerir; `restore` sonrası yeniden yayın. |
-
-Spike `i_migration`: kaynak çağırdı, servis ücretlendirdi; kaynak girişi
-bıraktı; hedef aynı anahtarla yeniden yayınladı; servis tekilleştirdi →
-**tek ücret**, hedef sonucu aldı, kaynağın cevabı `calls_late`.
-
-**Neden yönlendirme değil:** (a) etiket kapanıştır ve
-`ClientCall`/yerel varlık tutamacı içerir — serileştirilemez, süreç
-sınırını geçemez (DISTRIBUTED §4b); (b) A→B→C zincir göçünde ileri
-işaretçi zinciri ve sona erme kuralları gerekir; (c) yeniden başlatmada
-zaten imkânsız — bir mekanizma üç durumu çözüyorsa ikincisine gerek
-yok. **Neden "göç bitene kadar varlığı sabitle" değil:** çağrı süresi
-saniyeler olabilir; seam'de takılan varlık oyunu bozar.
-
-**Zayıf nokta (dürüstçe):** bu reçete **idempotent servis** gerektirir
-— "aynı anahtar = aynı sonuç, ikinci ücret yok". Motor bunu sağlayamaz,
-yalnız anahtarı verir. İdempotent olmayan bir servis göçte çift etki
-üretebilir. Belgelenen sözleşme: anahtarı saklamayan servis, göç/
-yeniden başlatma altında en-az-bir-kez semantiğine razıdır.
-
-**İstemci isteği göçte:** bugünkü duruş korunur (shard modülü: göç,
-oturumun istek durumunu bırakır, `requests_abandoned`; istemci kendi
-zaman aşımını görür). `ClientCall` + bekleyen istemci girişi taşınabilir
-(salt veri) ama bu, kapatılmış bir kararı yeniden açar — §16 S7.
-
-**Motorun söz verebildikleri / veremedikleri:**
-
-- VEREBİLİR: kabul edilen her çağrı için, oda yaşadıkça, tam bir `Done`;
-  hiçbir cevabın başka bir enkarnasyona/başka bir çağrıya karışmaması
-  (`origin` + `attempt`); her bitişin adlı sayacı; benzersiz, kalıcı
-  saklanabilir anahtar.
-- VEREMEZ: tam-bir-kez **etki** (servis anahtarla tekilleştirmezse);
-  çöken odanın uçuştaki çağrılarının sonucunu (C1 olmadan dünya da
-  gitmiştir); iptal (`forget` yalnız yerel; servis işi yapar).
-
-## 12. Spike: `spikes/s0-calls`
-
-Çalışma alanı üyesi değil (`exclude`), motora dokunmaz; kendi küçük
-senkron tick'ini modeller. Çalıştırma:
-`cd spikes/s0-calls && cargo test` (24 test + 5 doc testi; `build.rs`
-`gsb-lint`'i koşar).
-
-**Kanıtladıkları:**
-
-| Gereksinim | Test |
-|---|---|
-| (a) 5 tick'te 5 satın alma, servis 3 tick geç → tek ücret | `a_reserve_commit::five_buys_over_five_ticks_charge_once` (+ aynı id'li yeniden denemeler) |
-| (b) RESPONSES READ'den önce | `b_phase_order` (iki test; tam sıra `done, events, ingest, request, update`) |
-| (c) Dolu kutu hızlı başarısız + sayılı; pay adaleti | `c_backpressure` (Full, Gone, pay, rezervin aynı yoldan geri alınması) |
-| (d) İtme doğru hedefe; çevrimdışı ve diğer kayıplar sayılı | `d_push` (dört test) |
-| (e) Sahte servis + test saati | `e_fake_clock` (3 tick, zaman aşımı + geç, terk) |
-| (f) Yanlış yanıt tipi derleme hatası | `src/lib.rs` doc testleri: 1 derlenen + 4 `compile_fail` |
-| (g) Boşta maliyet | `g_idle_cost` (1000 tick: 1000 yoklama, 0 süpürme, 0 kanca, tampon kapasitesi 0) |
-| Hub cevabı kendi yolundan | `h_hub` |
-| Göçte anahtarla yeniden yayın | `i_migration` |
-| Tipli tablo, motorun reddettikleri | `requests.rs` |
-| İstemci `poll`'u iki tür + varsayılan değerli oyun hatası | `client_mirror.rs` |
-
-**Bulgular:** (1) varsayılan değerli hata sıfır bayt → `game_error`
-bayrağı (§4.1, §14); (2) RESPONSES'ta verilen cevap hemen
-uzlaşmazsa aynı tick'in yeniden denemesi yanlışlıkla "uçuşta tekrar"
-sayılıyordu — uzlaşma RESPONSES'un sonuna alındı; (3) "servis bu isteğe
-hizmet etmiyor" hatası, tek `From` impl'inde rustc tarafından "expected
-`Buy`, found `Chat`" (E0308) olarak raporlanır, E0277 değil; (4) kararlı
-rustdoc `compile_fail`'de hata kodunu denetlemez — dört blok elle de
-derlendi ve adı geçen kodla düştü; (5) `TickCtx<'a, D = ()>` +
-`type Done = ()` mevcut `&TickCtx` imzalarını kırmıyor (ayrı dosyada,
-1.95.0).
-
-**Kanıtlayamadıkları:** gerçek aktör atlamaları (registry, bağlantı
-aktörü — spike'ta `Directory::route` bir fonksiyon); asenkron servis
-çalışma zamanı; gerçek tel baytları (`wire.rs` elle yazılmış ayna);
-ayırma sayımı (sayan `GlobalAlloc` `unsafe` ister — yapısal kanıtla
-yetinildi); sharded oda ve shard göçünün kendisi (göç `drop_for_migration`
-+ ikinci oda ile modellendi); çok süreç; ABI ve dil sarmalayıcıları;
-gerçek yük altında maliyet (loadgen s1'de).
-
-## 13. Hub
-
-**Ne:** üyesi olmayan bir `RoomActor` (aynı faz sırası, aynı
-`GameLogic`), düşük hızda (ör. 10 Hz; yapılandırılabilir), simülasyonu
-olmayabilir. Durumu kimlik başınadır (parti, lobi, menü) — kalıcı olanı
-oyunun servisindedir.
-
-**Yönlendirme (çoklu üyelik yok):**
-
-1. İstemci `RpcRequest { target: HUB }` gönderir (yeni alan; 0 = oda,
-   bugünkü anlam).
-2. Bağlantı aktörü (auth'lu olmalı; değilse bugünkü auth ihlali yolu)
-   `HubRequest { conn, identity, envelope, reply_to: kendi ConnIn
-   kutusu }`'yu hub'ın istek kutusuna `try_send` eder. Kutu dolu → aktör
-   **kendisi** `RPC_RESP` reddi yazar, `hub_requests_refused_full`. Hub
-   tutamacı registry'den auth başarısında gelir (`Seat`'in yanında).
-3. Hub READ'de kutuyu bütçeli okur, tipli tabloyla çözer, bekleyen
-   istemci girişini **bağlantı anahtarıyla** tutar (bağlantı başına
-   cap + uçuşta tekrar reddi aynen).
-4. Cevap `ConnIn::Deliver(RpcResp)` ile bağlantı aktörüne, o da `RPC_RESP`
-   (yeni base opcode) karesi yazar. Bağlantı aktörü üzerinden (yazıcıya
-   doğrudan değil) çünkü oturum durumunun (kapanıyor mu, yetenek
-   bayrakları) otoritesi odur ve kendi sayaçlarını tutar.
-5. Bağlantı kapanırsa hub'a haber verilmez: girişler zaman aşımıyla
-   düşer, geç cevap `hub_replies_dropped_closed`.
-
-**`Dest::World` itmesi, odası olmayan oyuncu için** hub'a gider
-(hub yapılandırılmışsa) — "oyuncunun dünyası" maç dışında hub'dır;
-yoksa `pushes_world_no_room` (§16 S6).
-
-**Daha iyi bir seçenek var mı (istenen işaret):** değerlendirilen üç
-alternatif:
-(a) **Hub = tick'siz düz bir oyun servisi** (registry `target: HUB`'ı
-oyunun `ServiceRef`'ine yollar). Daha az gecikme (tick beklemesi yok),
-ama ikinci bir programlama modeli — kullanıcı "her yerde aynı model"i
-seçti; tick'li hub'ın bedeli bir hub tick'i (≤100 ms @10 Hz), menüler
-için kabul edilebilir. **Elenmedi, not edildi:** hub mantığı tamamen
-durumsuz kalırsa (a) daha basittir.
-(b) **Lobi odasına normal üyelik + maçtayken lobiye istek yok:** bugün
-mümkün ama maç içi arkadaş listesi/davet isteğini çözmez.
-(c) **İkincil üyelik:** reddedildi (karar 6).
-Sonuç: kullanıcının hub'ı + bağlantının kendi yolu; daha iyi bir seçenek
-bulunmadı.
-
-**İsim çakışması:** `registry/hub.rs` (`TeamHub`, takım-export rölesi,
-CROSS-SHARD §8b) zaten "hub". Öneri: yenisi `Hub` adını alır, eskisi
-`team_hub.rs`'e taşınır (crate-içi; dış API'ye dokunmaz) — §16 S15.
-
-## 14. Tel değişiklikleri (eklemeli — DESIGN §5)
-
-Hepsi alan/opcode/mesaj **ekler**; hiçbir alan numarası silinmez ya da
-anlamı değişmez; `PROTOCOL_VERSION` artmaz (tam eşitlik politikası eski
-istemcileri reddederdi — DESIGN §5.5).
+Bu turun istek tarafı için tek ek:
 
 ```proto
-// base.proto (eklemeler)
-message Auth {
-  // … 1..3 aynen …
-  // İstemcinin anladığı isteğe bağlı kareler (bit alanı). 0 = hiçbiri
-  // (eski istemci). bit 0 = PUSH. (RPC_RESP bit istemez: yalnız
-  // target = HUB yollayan — yani yeni — istemciye gider.)
-  uint32 features = 4;
-}
-
-message RpcRequest {
-  uint64 id = 1; uint32 op = 2; bytes payload = 3;
-  // 0 = ROOM (bugünkü anlam, eski istemci bunu yollar), 1 = HUB.
-  uint32 target = 4;
-}
-
 message RpcResponse {
   uint64 id = 1; bool ok = 2; uint32 op = 3; string reason = 4; bytes payload = 5;
   // ok=false iken: true → payload oyunun tipli hatası (Request::Error);
   // false → motor reddi, metin `reason`'da (bugünkü tek şekil).
   bool game_error = 6;
 }
-
-// Sunucu → istemci, opcode PUSH = 18. Oyun olayının op'u ve yükü.
-message Push {
-  uint32 op = 1;
-  bytes payload = 2;
-}
 ```
 
-- **Yeni base opcode'lar:** `RPC_RESP = 17` (yükü `RpcResponse` —
-  DESIGN §5.2'nin elenen alternatifi 3 "RpcResponse'a kendi opcode'u"
-  burada farklı gerekçeyle geri gelir: hub'da binilecek bir `Private`
-  karesi YOK; oda cevapları `Private.responses`'ta kalmaya devam eder),
-  `PUSH = 18`. İkisi de güvenilir band (≤64; kayıp = bekleyen istemci
-  / kaçan olay — DESIGN §5.1 tablosu).
-- **Eski istemci:** `target` yollamaz (0), `features` yollamaz (0) →
-  ona `PUSH`/`RPC_RESP` asla gönderilmez; `game_error`'ı okumaz ama
-  `ok=false` görür (bugün de "reason boş ret" mümkündü). Uyum testi s1'de
-  `wire_contract.rs`'e eklenir.
+Neden bayrak (s0 bulgusu): varsayılan değerli bir proto3 hata mesajı
+sıfır bayta kodlanır; "yük boşsa motor reddi" kuralı onu yanlış okur.
+`PROTOCOL_VERSION` artmaz; eski istemci `game_error`'ı okumaz, `ok=false`
+görür. s0'ın `RpcRequest.target`/`RPC_RESP` önerileri hub'la birlikte
+düştü; `Push`/`PUSH`/`Auth.features` olaylar turunda.
 
-**`ffi.proto` taslağı** (istemci çekirdeği ↔ sarmalayıcı; telde değil):
+Oyun tarafı `.proto` için `gsb/options.proto`:
 
 ```proto
-syntax = "proto3";
-package gsb.ffi;
-
-message Config {
-  string url = 1;               // ws://, tcp://, udp://… (B28 kapı seçimi)
-  string name = 2;              // yerel auth
-  bytes ticket = 3;             // bilet auth
-  bytes server_key = 4;         // rUDP sabitlenmiş anahtar (grant)
-  uint32 request_timeout_ms = 5;// çekirdeğin yerel zaman aşımı
-}
-
-enum Target { TARGET_ROOM = 0; TARGET_HUB = 1; }
-
-message Command {
-  oneof kind {
-    JoinRoom join = 1;          // { uint64 room }
-    LeaveRoom leave = 2;
-    SendAction action = 3;      // { uint32 op; bytes payload } — ateşle-unut
-    Request request = 4;        // { uint64 id; uint32 op; bytes payload; Target target }
-    Disconnect disconnect = 5;
-  }
-}
-
-enum Status {
-  STATUS_OK = 0;
-  STATUS_GAME_ERROR = 1;        // payload = Request::Error
-  STATUS_ENGINE_REJECTED = 2;   // reason = motorun metni
-  STATUS_LOCAL_TIMEOUT = 3;     // çekirdeğin kendi süresi
-  STATUS_SESSION_ENDED = 4;     // oturum bitti; uçuştaki her istek bununla kapanır
-}
-
-message Response { uint64 id = 1; uint32 op = 2; Status status = 3; string reason = 4; bytes payload = 5; Target target = 6; }
-message Push     { uint32 op = 1; bytes payload = 2; }
-
-message Event {
-  oneof kind {
-    Connected connected = 1;    // { string player; uint64 pinned_room }
-    Joined joined = 2;          // { uint64 room; uint64 entity }
-    Left left = 3;
-    Frame frame = 4;            // oyun bandı kare: { uint32 op; bytes payload } (snapshot, Private'ın oyun kısmı)
-    Response response = 5;
-    Push push = 6;
-    ServerError error = 7;      // { uint32 code; string message } (ErrorCode)
-    Disconnected disconnected = 8; // { string reason; bool by_server }
-  }
+extend google.protobuf.MethodOptions {
+  uint32 op = 50001;     // (gsb.op)
+  string error = 50002;  // (gsb.error): hata mesajının adı
 }
 ```
 
-C ABI (sabit, beş fonksiyon):
+## 17. Spike: `spikes/s0-calls`
 
-```c
-uint32_t gsb_abi_version(void);
-void*    gsb_new(const uint8_t* config, size_t len);       // NULL = bozuk config
-int32_t  gsb_command(void* c, const uint8_t* cmd, size_t len); // 0 = kabul; <0 = bozuk / kuyruk dolu
-int64_t  gsb_poll(void* c, uint8_t* buf, size_t cap);      // >0 = bir Event'in uzunluğu; 0 = yok;
-                                                            // <0 = -gereken; olay çekirdekte bekler
-void     gsb_free(void* c);
-```
+gsb çalışma alanının üyesi değil (kök `exclude`), kendi küçük çalışma
+alanı: `s0-calls` + `macros/` (`s0-calls-macros`, `#[service]`). Motora
+dokunmaz; kendi senkron tick'ini modeller. Çalıştırma:
+`cd spikes/s0-calls && cargo test --workspace` (22 test + 1 doc testi +
+5 `compile_fail`; iki crate'in `build.rs`'i `gsb-lint`'i koşar).
+Bağımlılıklar: tokio (sync/rt/time), tower 0.5, prost, bevy_ecs 0.19,
+hecs 0.10 (yalnız spike), syn/quote.
 
-İstek id'sini sarmalayıcı seçer (kendi `TaskCompletionSource` haritası
-için); çekirdek uçuşta tekrarı yerel olarak `STATUS_ENGINE_REJECTED`
-ile reddeder.
+| Gereksinim | Test |
+|---|---|
+| Arkadaşa altın uçtan uca: rezerv, tek ücret, `.answers` ile cevap; çift tık + aynı id → tek ücret | `transfer` (2) |
+| Dört envanter deseni (girişte yükleme, ganimette bekleyen durum, kilitli üretim + `.answers`, servissiz kuşanma + otomatik kayıt) | `inventory` |
+| Ret (dolu / yok / pay) `take_resolved`'dan, bir sonraki tick; `.answers`'lı retin istemci cevabı; `Shed` | `refusal` (4) + `live` |
+| Alınmayan sonuç, cevaplanmayan/alınmayan istek, geç cevap kapatılır + sayılır; sahip yok sayılır | `refusal` (3) |
+| `forward`: oyun görmez, istemci cevaplanır, kimlik servise geçer; forward+accept çakışması | `forward` (2) |
+| Tip başına FIFO ve `take_incoming_all` kanonik sırası | `ordering` |
+| Göç: export → import → aynı anahtar → tek ücret; kaynağın geç cevabı | `migration` |
+| Servisten servise `Handle`, admin'den doğrudan `Handle`; tower timeout + load_shed | `live` (2, gerçek tokio) |
+| Aynı senaryo bevy / hecs / ECS'siz → aynı cevaplar, aynı tick hash'leri, aynı servis etkisi | `three_ways` |
+| Rastgele gecikmeli canlı koşu kaydı → iki REPLAY aynı hash'ler, servis çağrılmadı; negatif kontrol; TEST modu iki koşu aynı | `determinism` (2) |
+| Yanlış cevap tipi derleme hatası (5 biçim: `.answers`, `reply`, servis impl'i, `take_resolved`, `forward`) | `src/lib.rs` doc testleri |
+| Boşta maliyet: tick başına iki boş `try_recv`, tampon kapasitesi 0 | `idle_cost` |
+| Op çakışması boot'ta; bilinmeyen/bozuk/id 0 motor cevabı | `boot` (2) |
 
-## 15. Elenen alternatifler
+**Bulgular:**
+
+1. **Kayıt fonksiyonu yetim kuralına takılır** (§19 S1): oyun crate'inde
+   `impl<T: Inventory> gsb::ServiceImpl<..> for T` yazılamaz (yabancı
+   trait, örtük tip parametresi önde). Spike `Inventory::serve(impl)`
+   biçimini kullanır; makro ayrıca kendi yönlendirici tipini oyun
+   crate'inde üretir (motorun `Router<S>`'i için `tower::Service` impl'i
+   de aynı kurala takılırdı).
+2. **`&svc.method` Rust ifadesi değildir** (alıcıya bağlı metot değeri
+   yok) → `forward` kapanış alır (§19 S2).
+3. **bevy `Resource`** adaptör crate'inden `Calls`'a verilemez (yetim
+   kuralı) → çekirdekte `bevy` özelliği (§19 S3).
+4. **REPLAY ayrışması** (§10.2): kayıt çağrı tipini tutmalı;
+   `replay_diverged`.
+5. `RoomLogic::state_hash` `&mut self` ister: bevy sorguları dünyaya
+   `&mut` ister (sorgu durumu kurulumu).
+6. Tek iş parçacıklı bevy yürütücüsü determinizm için şart; adaptör
+   ayarlar.
+7. `async fn` → RPITIT (`impl Future + Send`) dönüşümü 1.95'te temiz
+   çalışıyor; impl'ler düz `async fn` yazıyor, `async-trait` gerekmiyor.
+8. Canlı koşuda senaryonun kaç çağrı yaptığı bile gecikmeye bağlı
+   (yükleme t3'ten sonra gelirse transfer `NOT_LOADED` olur) — kaydın
+   neden şart olduğunun canlı örneği.
+9. Doc testlerinde `use super::*` üreten makro fonksiyon gövdesinde
+   çalışmaz (gövde içi öğeler alt modülden görünmez) → bloklar
+   `fn main() {}` içerir; gerçek kodda (modül düzeyinde) sorun yok.
+   Kararlı rustdoc `compile_fail`'de hata kodunu denetlemez; beşi elle de
+   derlendi ve beklenen kodla düştü (E0271, E0308, E0271, E0308, E0271).
+10. Kilitsiz sahte servis: `Mutex` yasak olduğundan sahte arka uç
+    atomikler + CAS'lı sabit boyutlu bir anahtar→sonuç tablosu
+    (idempotency deposu) kullanır — gerçek servisler bunu veritabanında
+    yapar.
+
+**Kanıtlayamadıkları:** gerçek oda/shard aktörü ve registry; gerçek tel
+baytları (`wire.rs` ayna); `.proto` kod üretici (spike `impl Call/Request`'i
+elle yazar, üreticinin çıktısı gibi); span/OTLP; dosyaya kayıt ve onun
+biçimi; ayırma sayımı (sayan `GlobalAlloc` `unsafe` ister — yapısal
+kanıt); süreçler arası göç; FFI ve dil sarmalayıcıları; yük altında
+maliyet.
+
+## 18. Elenen alternatifler
 
 | # | Alternatif | Neden elendi |
 |---|---|---|
-| A1 | Çağrı başına handle (future/promise) bileşende saklanır, sistemler yoklar | Kullanıcı kararı 3; ayrıca her tick O(handle) yoklama, toplu teslim yok, kayıp sayımı dağınık. |
-| A2 | Tick içinde `await`/`block_on`/yerel executor | Tek-await kuralı; senkron tick'in tüm maliyet garantileri gider. |
-| A3 | Etiketi servise gönder, servis geri yollasın | Zaman aşımı ve servis ölümünde etiket kaybolur → oyunun rezervi sonsuza kadar kilitli kalır; servis oyun tipini bilmek zorunda kalır. |
-| A4 | Tipi silinmiş etiket (`Box<dyn Any>`) + oyunun çalışma zamanında downcast'i | Derleme zamanı güvencesi kaybolur (karar 2). Spike'ta silme yalnız motorun içinde; `attempt` eşleşmesi doğru tipi garanti eder. |
-| A5 | Etiket değer + `done.outcome::<R>()` erişimcisi | Yanlış `R` ile okuma çalışma zamanı hatası; kurucu-kapanış hem tipli hem tek kavram. |
-| A6 | Tamamlamaları bağlantı kutusundan dolaştır | RPC-CONTROL-PLANE §2 alternatif 2 ile aynı nedenle (ikinci sahip, ek atlama). |
-| A7 | `Dest::World` için oda başına itme kutusu + kimlik→oda | Sharded odada sahiplik yayını; geçiş anındaki kayıp sayılamaz (§6.2). |
-| A8 | RESPONSES + EVENTS tek "gelen kutusu" fazı | Kullanıcı kararı 5; anlam, uzlaşma ve sayaçlar farklı. |
-| A9 | Göçte cevabı yeni shard'a yönlendir | Etiket serileştirilemez, zincir göç, yeniden başlatmada imkânsız; anahtarla yeniden yayın üçünü birden çözüyor (§11). |
-| A10 | Motor kalıcı bir giden kutusuyla tam-bir-kez etki | C1 kapsamı; motor en-çok-bir-kez `Done` + anahtar verir, tam-bir-kez etki idempotent servisin işi. |
-| A11 | Servis içinde oda başına alt kuyruk (adil okuma) | Çoklu bekleme yasak; uyandırma kanalı ek kavram. Pay + boyutlandırma kuralı ilk sürüme yeter; ölçüm gösterirse dönülür. |
-| A12 | Sınırsız servis kutusu | Geri basınç yok; yavaş servis belleği yer. |
-| A13 | Kapasite için bekle (`send().await`) | Senkron tick'te imkânsız. |
-| A14 | `PROTOCOL_VERSION` artışıyla `PUSH`'u aç | Tam eşitlik politikası bütün eski istemcileri reddeder; `Auth.features` eklemeli. |
-| A15 | "Yük boş değilse oyun hatası" kuralı | Varsayılan değerli hata sıfır bayt (spike bulgusu) → `game_error` bayrağı. |
+| A1 | `Done` enum'u + etiket kapanışları (s0) | Her oyun bir "bitti" enum'u ve eşleme yazar; kapanış serileştirilemez (göç/kayıt); ECS sistemleri `TickCtx`'e ulaşamaz. `take_resolved::<C, X>()` aynı tip güvenliğini enum'suz verir. |
+| A2 | Devamlar (continuation: `call(..).then(\|world, r\| ..)`) | Kapanış dünyayı yakalar → ödünç alma çatışması, serileştirilemez, tekrar oynatılamaz; mantık zamanla dağılır. |
+| A3 | Bileşende yoklanan `Pending<T>` handle'ları | Her tick O(handle) yoklama, toplu teslim yok, kayıp sayımı dağınık; varlık silinince handle sessizce kaybolur. |
+| A4 | Bileşenleri depolama olarak kullanmak (sonuç = eklenen bileşen) | ECS'e bağımlı (hecs/ECS'siz oyun?), aynı varlığa iki sonuç çakışır, alınmayan sonuç sayılamaz, motor her ECS için ayrı yazılır. |
+| A5 | Hub (s0: üyesiz, simülasyonsuz oda + bağlantının kendi cevap yolu) | İkinci oda türü + ikinci cevap yolu (`RPC_RESP`, `target`); "her oyuncu her zaman bir odada" ile gereksiz: lobi bir odadır, maç içindeki meta istekler `forward` ile her odada çözülür. |
+| A6 | Ret `call()`'dan hemen `Err` olarak | İki hata yolu (hemen + sonra); REPLAY'de servis yokken üretilemez; sistem tick içinde yeniden deneyebilir. §5.3. |
+| A7 | Tick içinde `await`/`block_on` | Tek-await kuralı; senkron tick'in maliyet garantileri gider. |
+| A8 | Tipi silinmiş sonuç + oyunun çalışma zamanında downcast'i | Silme yalnız motorun içinde; oyun her yerde tipli (`Resolved<C, X>`). |
+| A9 | Göçte cevabı yeni odaya yönlendir | Zincir göç, yeniden başlatmada imkânsız; anahtarla yeniden yayın üçünü birden çözer (s0 §11). |
+| A10 | Bağlamı servise gönder, servis geri yollasın | Zaman aşımı/ölümde bağlam kaybolur, rezerv kilitli kalır; servis oyun tipini bilir. |
+| A11 | `async-trait` crate'i | Her çağrıda kutulanmış future + `Send` belirsizliği; RPITIT 1.75'ten beri kararlı. |
+| A12 | İstek tipi ile süreç içi çağrı tipini tek trait'te birleştirmek | Süreç içi tipler protobuf olmak zorunda kalırdı; `Call`/`Request` ayrımı `InventoryData` gibi düz tipleri serbest bırakır. |
 
-## 16. Açık sorular (her biri öneriyle)
+## 19. Açık sorular (her biri öneriyle)
 
-1. **S1 — Etiketin şekli.** Kurucu-kapanış (`impl FnOnce(Outcome<R>) -> D`,
-   spike) mi, değer + tipli erişimci mi? **Öneri:** kurucu-kapanış (tam
-   tipli, tuple kolu doğrudan kurucu). Bedel: çağrı başına bir `Box`.
-2. **S2 — `GameLogic`'e iki ilişkili tip** (`Done`, `Req`; mevcut oyun
-   başına 2 satır) mi, ayrı bir opt-in alt-trait mi? **Öneri:** ilişkili
-   tipler; alt-trait aktörde ikinci bir `dyn` yolu ister.
-3. **S3 — ECS sistemlerinin fiile erişimi.** **Öneri:** `SystemCtx<'a, X = ()>`'e
-   `ext: &'a X`; oyun `TickCtx`'ini geçirir.
-4. **S4 — İtme yönlendiricisi registry'de mi, ayrı aktörde mi?**
-   **Öneri:** registry'de başla (kimlik tablosu orada); loadgen'e sohbet
-   modu ekle; join gecikmesi yükselirse ayrı `PushRouter` aktörüne böl.
-5. **S5 — Park edilmiş oyuncuya `Dest::World` itmesi.** **Öneri:** s1'de
-   `pushes_world_parked` olarak say; defter-tabanlı teslim (resume
-   yayını deseni) gerçek bir oyun isteyince.
-6. **S6 — Odası olmayan oyuncuya `Dest::World`.** **Öneri:** hub
-   yapılandırılmışsa hub'a, değilse `pushes_world_no_room`.
-7. **S7 — Göçte istemci isteği.** Bugünkü "bırak + `requests_abandoned`"
-   mı, `ClientCall` + bekleyen girişin `KitMig`'le taşınması mı?
-   **Öneri:** bugünkü duruş; onayı oyun bir `Dest::Client` itmesiyle
-   verir ("satın alma tamamlandı").
-8. **S8 — Hub sayısı.** **Öneri:** süreç başına bir hub; kimlik-hash'li
-   bölme DISTRIBUTED turuna.
-9. **S9 — Yetenek pazarlığı.** **Öneri:** `Auth.features` bit alanı.
-10. **S10 — Format değiştirilebilirliği.** **Öneri:** `WireMessage` +
-    varsayılan `prost` özelliğiyle kapsayıcı impl; başka biçim = özelliği
-    kapat, tipe impl yaz.
-11. **S11 — FFI'da `unsafe`.** C ABI ham işaretçi okur; proje `unsafe`
-    yasaklıyor. **Öneri:** tek, küçük, denetlenen `gsb-ffi` crate'i
-    (beş fonksiyon, `#![deny(unsafe_op_in_unsafe_fn)]`, her blokta
-    `SAFETY:` yorumu, fuzz testi) için açık, belgelenmiş istisna;
-    alternatifi uniffi (üretilen kod yine `unsafe`, kontrol bizde değil).
-12. **S12 — Servis adaleti payın ötesinde.** **Öneri:** pay +
-    boyutlandırma kuralı; alt kuyruk ölçümle.
-13. **S13 — Çağrı süresi nerede ayarlanır?** **Öneri:** servis başına
-    varsayılan (`ServiceRef::with_timeout`), çağrı başına geçersiz
-    kılma; oda genelinde tek değer yok.
-14. **S14 — Çok süreçli itme.** Kimlik başka süreçteyse yerel
-    yönlendirici `pushes_offline` der (yanlış anlam). **Öneri:** ilk
-    sürümde oyunun veri yolu (NATS) itmeyi doğru sürece taşır; motor
-    tarafında `pushes_not_here` adı DISTRIBUTED turunda.
-15. **S15 — "hub" isim çakışması** (`TeamHub`). **Öneri:** yeni kavram
-    `Hub`; `registry/hub.rs` → `registry/team_hub.rs`.
-16. **S16 — İstemci çekirdeğinin yerel zaman aşımı.** **Öneri:** evet,
-    istek başına (`Config.request_timeout_ms` varsayılanı) + oturum
-    sonunda hepsini `SESSION_ENDED` ile kapat.
+1. **S1 — Kayıt biçimi** (onaylanan `server.service(PgInventory::new(db), ..)`
+   yetim kuralı yüzünden olduğu gibi yazılamıyor). Seçenekler:
+   (a) `server.service(Inventory::serve(PgInventory::new(db)), ..)` —
+   spike'ta çalışan; bir tip birden çok servis trait'i uygulasa bile
+   belirsiz değil; (b) impl bloğuna da öznitelik:
+   `#[gsb::service] impl Inventory for PgInventory {..}` → makro somut
+   `impl ServiceImpl<inventory::Kind> for PgInventory` üretir, onaylanan
+   satır **aynen** çalışır (tip birden çok servis uygularsa turbofish
+   gerekir); (c) turbofish: `server.service::<inventory::Kind, _>(x, ..)`.
+   **Öneri: (a)**; tek öznitelik, tek kural. (b) "aynı satır" için
+   istenirse eklenebilir, (a) ile birlikte yaşar.
+2. **S2 — `forward` biçimi** (`&svc.method` Rust'ta değer değil).
+   Spike: `calls.forward(move |r: ListFriends| friends.list(r))` — `R`
+   kapanış parametresinden çıkar, tipler derlemede denetlenir. Seçenek:
+   makro, tek argümanı bir `Request` olan metotlar için
+   `friends.forward_list()` üretebilir → `calls.forward(friends.forward_list())`.
+   **Öneri:** kapanış; şeker gerekirse sonra.
+3. **S3 — bevy `Resource`**. (a) çekirdek crate'te `bevy` özelliği
+   (`Calls`'a `#[derive(Resource)]`; spike böyle); (b) adaptörde
+   `GsbCalls(Calls)` yeni tipi + `Deref` (`ResMut<GsbCalls>`). **Öneri:
+   (a)**; o özellik açıkken `impl From<Entity> for Owner` de çekirdekte
+   mümkün olur (`.owner(e)` doğrudan) — `.entity()` uzantısı yine kalır.
+4. **S4 — Tick'i aşan cevap** (eşleştirme kuyruğu gibi "birkaç tick sonra
+   cevaplarım" istekleri). Şimdi: tick sonunda `requests_unanswered`.
+   **Öneri:** açık bir `calls.hold(r.reply, ticks) -> Held<R>` (bileşende
+   saklanabilir, süre sonunda motor cevaplar ve
+   `requests_hold_expired` sayar) — ilk gerçek ihtiyaçta.
+5. **S5 — Girdi kaydının dosya biçimi.** Süreç içi sonuçlar (`InventoryData`)
+   serileştirme ister; spike yalnız bellekte tutar (`Clone`). **Öneri:**
+   `record` özelliği açıkken `Call` tiplerine `WireMessage` (ya da serde)
+   sınırı; makro bu sınırı özellikle ekler. Biçim: oda başına dosya,
+   tick başına uzunluk önekli çerçeve, başlıkta ikili sürümü + tohum.
+6. **S6 — Oda tarafı süre süpürmesi** (servis hiç cevaplamaz ve timeout
+   katmanı yoksa giriş sonsuza kadar yolda; spike'ta süpürme yok).
+   **Öneri:** `server.service` varsayılan bir timeout katmanı koysun (ör.
+   30 s, kapatılabilir) + RESPONSES'ta yalnız yolda çağrı varken koşan
+   tick tabanlı güvenlik süpürmesi (`results_timed_out`; kayda RESPONSES
+   girdisi olarak girer → tekrar oynatılabilir).
+7. **S7 — Kapasite varsayılanları.** Pay 64/servis, tamamlanma kanalı
+   1024. **Öneri:** tamamlanma kapasitesi ≥ 2 × Σpay, yapılandırma
+   doğrulamasıyla (s0'ın kuralı).
+8. **S8 — Süreçler arası göç.** `Exported` bugün süreç içi (`Box<dyn Any>`
+   bağlam). **Öneri:** `distributed` özelliğinde `.with(x)` için
+   `X: Serialize` sınırı; DISTRIBUTED turuna.
+9. **S9 — Yanlış `X` ile `take_resolved`.** Sessizce boş döner, tick
+   sonunda `responses_unhandled`. **Öneri:** debug derlemede tick
+   sonunda bekleyen `(C, X)` tip adlarını günlüğe yaz.
+10. **S10 — İz yayılımı.** `within(cx)` bugün yalnız oyuncuyu taşır.
+    **Öneri:** `CallCx` bir üst iz id'si taşısın; `within` onu ayarlasın;
+    span'ler bağlansın.
+11. **S11 — `.proto` kod üretici nerede?** **Öneri:** `gsb-build` crate'i
+    (prost-build + `(gsb.op)`/`(gsb.error)` okuyan küçük üretici);
+    `reserved` op denetimi orada.
+12. **S12 — "Sonucu kim alır" kuralı** (§5.2: owner/with yoksa ve
+    `.answers` varsa yalnız istemci). Alternatif: her zaman oyuna da ver
+    (`.answers`'lı çağrılar için `responses_unhandled` gürültüsü).
+    **Öneri:** spike'taki kural.
+13. **S13 — FFI'da `unsafe`** (s0 S11). **Öneri:** değişmedi — tek, küçük,
+    denetlenen `gsb-ffi` istisnası.
+14. **S14 — "Oyuncuyu bağlantıdan bul" tekrarı.** Örneklerde her sistem
+    `conn → varlık` araması yazıyor. **Öneri:** adaptör bir
+    `ConnId → Entity` dizini versin (`Res<Members>`), motorun üyelik
+    tablosundan beslenir.
 
-## 17. Hâlâ eksik olanlar (bu tasarımın kapsamadığı)
+## 20. Uygulama planı
 
-- **Varlık (presence) beslemesi:** arkadaş servisi "X çevrimiçi" için
-  auth/close olaylarını ister. Registry'den oyunun servisine bir
-  `PresenceSink` (match-result sink'inin ikizi) doğal; bu turda yok.
-- **Çevrimdışı kutu / davet saklama:** oyunun servisi.
-- **Odaya/herkese yayın itmesi** (kimlik değil oda/sunucu adresli
-  duyuru) — kimlik adresli `push_many` dışında yok.
-- **Kimlik başına itme hız sınırı** (bir sohbet spamcısının kurbanın
-  bağlantı kutusunu doldurması): servisin işi; motor yalnız sayar.
-- **İstemci tarafı boşluk algılama** (itmelerde sıra numarası) yok.
-- **İptal:** `forget` yereldir; servise iptal sinyali yok.
-- **Hub'a özel op tablosu ve yetkilendirme** (hangi op'lar yalnız hub'da;
-  maç içinden hub'a hız sınırı) — s1c'de belirlenecek.
-- **Metrik/golden/loadgen bağlantısı:** bu turda bilerek yok.
-- **Oyun mesajlarının sürümlenmesi** (yeni alan eklemeli; yeni op'u
-  bilmeyen eski sunucu "no handler" der) — oyunun kararı (motor, oyun
-  değil).
-- **wasm'da taşıma:** yalnız WebSocket; rUDP/QUIC tarayıcıda yok.
-- **Sözleşme crate'i deseni** (sunucu + istemci aynı `Request` impl'leri):
-  `gsb-demo`'nun proto'su bugün sunucu crate'inin içinde; s1'de bir
-  `gsb-demo-contract` örneği gerekecek.
+**Faz 1 — çekirdek `Calls` (s1a; tel değişikliği yok)**
+- `gsb-core`: `contract` (`Call`, `Request`, `WireMessage`, `CallKey`,
+  `CallCx`, `Outcome`), `Calls` tablosu, `CallSpec`/`Route`/`ReplySink`,
+  sayaçlar → metrikler.
+- Oda ve shard aktörlerinde fazlar: `phase_completions` → RESPONSES;
+  READ'de istek çözümü tabloya; FLUSH; tick sonu kapatma. `GameLogic`'e
+  tablo erişimi ve `alive(owner)` (spike'taki `RoomLogic::with_calls`
+  deseni, §5.5).
+- `External` → yerleşik forward; `handle_request` geçiş yolu.
+- Kapılar: hedefli testler ajanda, tam set ebeveynde.
 
-## 18. Uygulama planı
+**Faz 2 — servis tarafı (s1b)**
+- `gsb-macros`: `#[gsb::service]` (spike makrosu, motor yolu `::gsb`).
+- Canlı host: `RegistryParts::service(Inventory::serve(..), |s| ..)`
+  (F5 `Service` durdurma sırasıyla birleşik), tower bağımlılığı,
+  varsayılan timeout (S6), span + gecikme katmanı (OTLP).
+- Demo ekonomisinin `#[gsb::service] trait Economy`'ye geçişi.
 
-**Faz 1 — B28: istemci çekirdeği** (sunucu değişmez)
-- `gsb-client`'ı `gsb-core`/`gsb-net` sunucu tarafından ayır (`UdpClient`
-  bölmesi — B28'in kendisi); sans-IO oturum çekirdeği (`gsb-client-core`):
-  AUTH/JOIN/HEARTBEAT/LEAVE, istek tablosu (tek id sayacı), `poll` ile
-  `ClientEvent`; wasm derleme kapısı.
-- Ortak sözleşme: `Request`/`Event`/`WireMessage` küçük bir crate'te
-  (`gsb-contract`, ya da `gsb-protocol` içinde) — sunucu ve istemci
-  buna bağlanır.
-- `ffi.proto` `gsb-protocol`'de tanımlanır; çekirdek `Command`/`Event`
-  konuşur (henüz C ABI yok).
-- Tel: istemci yalnız bugünkü baytları yollar; `RPC_RESP`/`PUSH`
-  çözücüleri var ama sunucu henüz göndermez.
+**Faz 3 — `.proto` istekleri (s1c)**
+- `gsb/options.proto`, `gsb-build` üretici (S11), `RpcResponse.game_error`
+  (+ `wire_contract.rs` kilidi), op çakışma/`reserved` denetimi.
 
-**Faz 2 — s1: sunucu tarafı** (üç alt tur)
-- **s1a — çağrılar + RESPONSES + tipli istekler** (tel değişikliği yok):
-  `CallTable` (oda/shard/hub ortak), `TickCtx<'a, D = ()>`,
-  `GameLogic::{Done, Req, requests, on_request, on_done}`,
-  `phase_completions` → RESPONSES, `External`'ın motor tablosuna
-  taşınması, `ServiceRef`/`Call`/`Reply`, servis sayaçları,
-  `gsb-ecs` `SystemCtx::ext`, kit dikişleri, `gsb-kit::testing`'e
-  `FakeService` + elle ilerletilen ticker, demo ekonomisinin `Call<R>`'ye
-  geçişi, sayaç adları (metrik bağlantısı ayrı küçük paket).
-- **s1b — itmeler + tel:** `base.proto` eklemeleri (`Auth.features`,
-  `RpcResponse.game_error`, `Push`, `PUSH`), `wire_contract.rs` kilitleri,
-  registry'de kimlik dizini + `Pusher`, `ConnIn::Push`/`Deliver`, READ'de
-  itme işareti ayırma, EVENTS fazı, `on_events`, sayaçlar.
-- **s1c — hub:** `RpcRequest.target`, `RPC_RESP`, bağlantı aktöründe hedef
-  yönlendirmesi, hub tutamacının auth'ta verilmesi, `[hub]` config'i,
-  hub'a `Dest::World` düşüşü, `TeamHub` yeniden adlandırması.
-- Her alt turun kapıları: hedefli testler ajanda, tam set ebeveynde;
-  loadgen'e çağrı/itme/hub modları (ölçüm turu).
+**Faz 4 — determinizm (s1d)**
+- `TickCtx::{time, dt, rng}`, deterministik anahtar kökeni, durum hash
+  kancası, `record` özelliği (S5), REPLAY modu + `replay_diverged`,
+  `gsb-kit::testing`: `Sim` + `Delay`; loadgen/golden'e kayıt-tekrar
+  senaryosu.
 
-**Faz 3 — FFI + dil paketleri**
-- `gsb-ffi` (C ABI, S11 kararına göre), C#/Unity UPM paketi (üretilmiş
-  protobuf + `GsbClient`), Godot gdext eklentisi (sinyaller + GDScript
-  `GsbCall`), JS wasm paketi (Promise), Bevy eklentisi (Events).
-- Tek **uygunluk senaryosu** (bağlan → katıl → istek → itme → hub → kopuş)
-  her sarmalayıcıya karşı aynı sunucuyla koşar.
+**Faz 5 — ECS adaptörleri ve kit**
+- `bevy` özelliği (S3), hecs adaptörü, ECS'siz adaptör; kit dikişleri;
+  `Members` dizini (S14).
+
+**Faz 6 — olaylar turu** (§15'in yeniden tasarımı), sonra **istemci
+çekirdeği B28 + FFI** (C#, `Forget`, üretilmiş istemciler).
