@@ -131,10 +131,12 @@ impl GameModule for DemoModule {
         // A `#[gsb_core::service]` trait hosted on tower (SERVICES.md
         // §4.1); the rooms reach it through its awaitable client.
         use gsb_demo::economy::{Economy, EconomyService, PriceList};
-        parts.service(
-            Economy::serve(PriceList::new(EconomyService::default_latency())),
-            |s| s.mailbox(EconomyService::mailbox()),
-        );
+        parts
+            .service(
+                Economy::serve(PriceList::new(EconomyService::default_latency())),
+                |s| s.mailbox(EconomyService::mailbox()),
+            )
+            .expect("the demo hosts its economy once");
         let economy = EconomyService::from_handle(parts.client());
         let grace = s.disconnect_grace;
         // The sharded builds report one match result per shard through the

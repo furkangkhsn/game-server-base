@@ -138,15 +138,21 @@ impl RegistryParts {
     /// from [`Self::client`].
     ///
     /// ```ignore
-    /// parts.service(Inventory::serve(PgInventory::new(db)), |s| s.timeout(Duration::from_secs(3)));
+    /// parts.service(Inventory::serve(PgInventory::new(db)), |s| s.timeout(Duration::from_secs(3)))?;
     /// let inv: InventoryClient = parts.client();   // rooms (non-blocking)
     /// let inv_h: InventoryHandle = parts.client(); // services, admin (awaitable)
     /// ```
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When a service of the same kind is already hosted.
-    pub fn service<K, S, L, F>(&mut self, served: Served<K, S>, setup: F) -> &mut Self
+    /// [`RegisterError::Duplicate`](gsb_core::calls::RegisterError) when a
+    /// service of the same kind is already hosted (BACKLOG B169: an error
+    /// the module handles, not a panic); nothing is spawned for it.
+    pub fn service<K, S, L, F>(
+        &mut self,
+        served: Served<K, S>,
+        setup: F,
+    ) -> Result<&mut Self, gsb_core::calls::RegisterError>
     where
         K: ServiceDef<S>,
         S: Send + Sync + 'static,
@@ -157,9 +163,9 @@ impl RegistryParts {
         <L::Service as tower::Service<Dispatch<K::Bare>>>::Future: Send,
         <L::Service as tower::Service<Dispatch<K::Bare>>>::Error: Into<BoxError> + Send,
     {
-        self.hosted.service(served, setup);
+        self.hosted.service(served, setup)?;
         self.services.extend(self.hosted.take_stops());
-        self
+        Ok(self)
     }
 
     /// A generated client of a hosted service (`InventoryClient` for

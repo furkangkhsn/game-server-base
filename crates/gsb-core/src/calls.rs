@@ -53,8 +53,8 @@ pub use contract::{
 };
 pub use host::serve;
 pub use live::{
-    BoxError, BoxFuture, DEFAULT_MAILBOX, DEFAULT_SERVICE_TIMEOUT, Dispatch, Served, ServiceClient,
-    ServiceDef, ServiceKind, Services, Setup, spawn,
+    BoxError, BoxFuture, DEFAULT_MAILBOX, DEFAULT_SERVICE_TIMEOUT, Dispatch, RegisterError, Served,
+    ServiceClient, ServiceDef, ServiceKind, Services, Setup, spawn,
 };
 pub use route::{
     AnyOutcome, Ask, CallSpec, Envelope, Mail, MethodStats, OnBehalf, Reply, Route, ServiceId,

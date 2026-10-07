@@ -192,7 +192,9 @@ impl GameModule for Module {
     }
     fn register(&self, _table: &mut MessageTable) {}
     fn spawn_registry(&self, mut parts: RegistryParts) -> RegistryTask {
-        parts.service(Judge::serve(Referee), |s| s.timeout(Duration::from_secs(5)));
+        parts
+            .service(Judge::serve(Referee), |s| s.timeout(Duration::from_secs(5)))
+            .expect("hosted once");
         let judge: JudgeClient = parts.client();
         let factory: RoomFactory<(), (), (), ()> = Arc::new(move |_id, _config| {
             let (hold, inbox) = Route::new("hold", 16);

@@ -161,12 +161,14 @@ impl GameModule for LedgerGame {
         }
         let (ledger, service) = ledger(self.events.clone());
         parts.add_service(service);
-        parts.service(
-            Audit::serve(AuditLog {
-                events: self.events.clone(),
-            }),
-            |s| s,
-        );
+        parts
+            .service(
+                Audit::serve(AuditLog {
+                    events: self.events.clone(),
+                }),
+                |s| s,
+            )
+            .expect("hosted once");
         let _audit: AuditClient = parts.client();
         let events = self.events.clone();
         let factory: RoomFactory<(), (), (), ()> =

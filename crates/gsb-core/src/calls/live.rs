@@ -324,6 +324,18 @@ fn end(result: Result<AnyOutcome, BoxError>, reply: Reply, stats: &ServiceStats)
     }
 }
 
+/// A composition-root mistake in registering services (BACKLOG B169).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RegisterError {
+    /// A service of this kind is already registered: one kind, one route
+    /// (two implementations of one trait need two traits today).
+    #[error("service {service} is registered twice")]
+    Duplicate {
+        /// The service's name (its trait's).
+        service: &'static str,
+    },
+}
+
 /// The live services of a composition root: registered once, each
 /// handed out as clients by its kind, stopped together after the rooms
 /// (F5: [`Self::into_stops`]).
@@ -352,13 +364,18 @@ impl Services {
     }
 
     /// Register and spawn a service:
-    /// `services.service(Inventory::serve(PgInventory::new(db)), |s| s.timeout(..))`.
+    /// `services.service(Inventory::serve(PgInventory::new(db)), |s| s.timeout(..))?`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When a service of the same kind is already registered (a
-    /// composition-root mistake: one kind, one route).
-    pub fn service<K, S, L, F>(&mut self, served: Served<K, S>, setup: F) -> &mut Self
+    /// [`RegisterError::Duplicate`] when a service of the same kind is
+    /// already registered (a composition-root mistake: one kind, one
+    /// route). Nothing is spawned then; the first registration stays.
+    pub fn service<K, S, L, F>(
+        &mut self,
+        served: Served<K, S>,
+        setup: F,
+    ) -> Result<&mut Self, RegisterError>
     where
         K: ServiceDef<S>,
         S: Send + Sync + 'static,
@@ -369,16 +386,14 @@ impl Services {
         <L::Service as tower::Service<Dispatch<K::Bare>>>::Future: Send,
         <L::Service as tower::Service<Dispatch<K::Bare>>>::Error: Into<BoxError> + Send,
     {
-        assert!(
-            !self.routes.contains_key(&TypeId::of::<K>()),
-            "service {} is registered twice",
-            K::NAME
-        );
+        if self.routes.contains_key(&TypeId::of::<K>()) {
+            return Err(RegisterError::Duplicate { service: K::NAME });
+        }
         let (route, stop) = spawn(served, setup);
         self.stats.push((K::NAME, Arc::clone(route.stats())));
         self.routes.insert(TypeId::of::<K>(), Box::new(route));
         self.stops.push(stop);
-        self
+        Ok(self)
     }
 
     /// A generated client of a registered service, `None` if it is not

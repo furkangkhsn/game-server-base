@@ -22,7 +22,7 @@
 //! #[tokio::main(flavor = "current_thread")]
 //! async fn main() {
 //!     let mut services = Services::new();
-//!     services.service(Bank::serve(Vault), |s| s.timeout(std::time::Duration::from_secs(1)));
+//!     services.service(Bank::serve(Vault), |s| s.timeout(std::time::Duration::from_secs(1))).expect("once");
 //!     let bank: BankClient = services.client();
 //!     let handle: BankHandle = services.client();
 //!     let mut calls = Calls::default();
@@ -67,7 +67,7 @@
 //! struct NotABank;
 //! fn main() {
 //!     let mut services = Services::new();
-//!     services.service(Bank::serve(NotABank), |s| s);
+//!     services.service(Bank::serve(NotABank), |s| s).expect("once");
 //! }
 //! ```
 //!
@@ -88,7 +88,7 @@
 //! }
 //! fn main() {
 //!     let mut services = Services::new();
-//!     services.service(Bank::serve(Vault), |s| s);
+//!     services.service(Bank::serve(Vault), |s| s).expect("once");
 //!     let bank: BankClient = services.client();
 //!     let _ = bank.refund(5);
 //! }
@@ -111,7 +111,7 @@
 //! }
 //! fn main() {
 //!     let mut services = Services::new();
-//!     services.service(Bank::serve(Vault), |s| s);
+//!     services.service(Bank::serve(Vault), |s| s).expect("once");
 //!     let bank: BankClient = services.client();
 //!     let _ = bank.charge("five");
 //! }

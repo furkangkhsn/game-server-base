@@ -106,7 +106,9 @@ async fn settle(calls: &mut Calls, m: &mut RoomCounters) {
 #[tokio::test]
 async fn a_table_call_reaches_the_service_and_comes_back_at_responses() {
     let mut services = Services::new();
-    services.service(Bank::serve(Vault::default()), |s| s);
+    services
+        .service(Bank::serve(Vault::default()), |s| s)
+        .expect("registered once");
     let bank: BankClient = services.client();
     let mut calls = table(None);
     let mut m = RoomCounters::default();
@@ -159,11 +161,15 @@ async fn a_handle_awaits_and_carries_the_player() {
 #[tokio::test]
 async fn a_service_calls_another_within_its_callers_context() {
     let mut services = Services::new();
-    services.service(Bank::serve(Vault::default()), |s| s);
+    services
+        .service(Bank::serve(Vault::default()), |s| s)
+        .expect("registered once");
     let till = Till {
         bank: services.client(),
     };
-    services.service(Shop::serve(till), |s| s);
+    services
+        .service(Shop::serve(till), |s| s)
+        .expect("registered once");
     let shop: ShopClient = services.client();
     let mut calls = table(None);
     let mut m = RoomCounters::default();
@@ -191,9 +197,11 @@ async fn a_service_calls_another_within_its_callers_context() {
 #[tokio::test]
 async fn the_timeout_layer_ends_a_call_timed_out_and_counts_it() {
     let mut services = Services::new();
-    services.service(Bank::serve(Vault::default()), |s| {
-        s.timeout(Duration::from_millis(20))
-    });
+    services
+        .service(Bank::serve(Vault::default()), |s| {
+            s.timeout(Duration::from_millis(20))
+        })
+        .expect("registered once");
     let bank: BankClient = services.client();
     let mut calls = table(None);
     let mut m = RoomCounters::default();
@@ -251,9 +259,11 @@ async fn load_shed_over_a_concurrency_limit_refuses_shed() {
         }
     }
     let mut services = Services::new();
-    services.service(Bank::serve(Shared(Arc::clone(&vault))), |s| {
-        s.load_shed().concurrency_limit(1)
-    });
+    services
+        .service(Bank::serve(Shared(Arc::clone(&vault))), |s| {
+            s.load_shed().concurrency_limit(1)
+        })
+        .expect("registered once");
     let bank: BankClient = services.client();
     let mut calls = table(None);
     let mut m = RoomCounters::default();
@@ -282,7 +292,9 @@ async fn load_shed_over_a_concurrency_limit_refuses_shed() {
 #[tokio::test]
 async fn a_concurrency_limit_queues_instead_of_running_in_parallel() {
     let mut services = Services::new();
-    services.service(Bank::serve(Vault::default()), |s| s.concurrency_limit(1));
+    services
+        .service(Bank::serve(Vault::default()), |s| s.concurrency_limit(1))
+        .expect("registered once");
     let h: BankHandle = services.client();
     let a = tokio::spawn({
         let h = h.clone();
@@ -410,7 +422,9 @@ fn a_registered_kind_hands_out_both_clients_and_a_missing_one_none() {
     rt.block_on(async {
         let mut services = Services::new();
         assert!(services.try_client::<BankClient>().is_none());
-        services.service(Bank::serve(Vault::default()), |s| s);
+        services
+            .service(Bank::serve(Vault::default()), |s| s)
+            .expect("registered once");
         assert!(services.try_client::<BankClient>().is_some());
         assert!(services.try_client::<BankHandle>().is_some());
         assert!(services.try_client::<ShopHandle>().is_none());
@@ -418,17 +432,30 @@ fn a_registered_kind_hands_out_both_clients_and_a_missing_one_none() {
     });
 }
 
+/// B169: a second registration of one kind is an error, not a panic;
+/// nothing is spawned for it and the first route stays.
 #[test]
-#[should_panic(expected = "registered twice")]
-fn registering_a_kind_twice_panics() {
+fn registering_a_kind_twice_is_an_error() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("rt");
     rt.block_on(async {
         let mut services = Services::new();
-        services.service(Bank::serve(Vault::default()), |s| s);
-        services.service(Bank::serve(Vault::default()), |s| s);
+        services
+            .service(Bank::serve(Vault::default()), |s| s)
+            .expect("the first registration");
+        let again = services.service(Bank::serve(Vault::default()), |s| s);
+        assert_eq!(
+            again.err(),
+            Some(RegisterError::Duplicate { service: "Bank" })
+        );
+        assert_eq!(
+            RegisterError::Duplicate { service: "Bank" }.to_string(),
+            "service Bank is registered twice"
+        );
+        assert!(services.try_client::<BankClient>().is_some());
+        assert_eq!(services.into_stops().len(), 1, "nothing spawned for it");
     });
 }
 
