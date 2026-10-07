@@ -296,11 +296,10 @@ mod logic;
 /// .. `udp_stateless_resets_send_failed`).
 /// GSNS = the GSNR layout with one more transport counter at the end of
 /// that section (B142's drain: `udp_game_paced_drains`).
-/// (q1 — the magic is NOT bumped yet, the parent assigns it: the next
-/// layout, GSNT, is the GSNS layout plus each room's call-table counters
-/// — round q1, `docs/SERVICES.md` §9: every `CallCounts` field, in its
-/// declaration order — right after the stop counters.)
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E53;
+/// GSNT = the GSNS layout plus each room's call-table counters (round
+/// q1, `docs/SERVICES.md` §9: every `CallCounts` field, in its
+/// declaration order) right after the stop counters.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E54;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
