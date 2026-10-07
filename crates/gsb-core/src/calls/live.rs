@@ -115,6 +115,12 @@ impl<K, S> Served<K, S> {
             _k: PhantomData,
         }
     }
+
+    /// The implementation (TEST mode's host runs it without tower:
+    /// `determinism::Sim::served`).
+    pub(crate) fn into_inner(self) -> S {
+        self.svc
+    }
 }
 
 /// A generated client (`…Client` or `…Handle`): built from the service's

@@ -204,3 +204,57 @@ fn the_call_key_origin_derives_from_the_seed_and_the_room() {
         crate::calls::mix(1 ^ crate::calls::mix(crate::room::RoomConfig::default().id.0))
     );
 }
+
+/// A generated service's implementation runs in TEST mode too:
+/// `Delay::ticks(n, Svc::serve(fake))` answers `n` ticks after the call,
+/// through its generated router — no runtime, no tower host.
+#[test]
+fn a_generated_service_serves_in_test_mode_on_the_engines_clock() {
+    use crate::calls::{CallError, Calls, Owner, ServiceClient};
+    use crate::room::RoomCounters;
+
+    let mut sim = Sim::new();
+    let route = sim.served(8, Delay::ticks(2, Purse::serve(Fake)));
+    let purse = PurseClient::from_route(route);
+    let mut calls = Calls::default();
+    let mut m = RoomCounters::default();
+    let alive = |_: Owner| true;
+    calls.call(purse.spend(3)).with(1u8);
+    calls.call(purse.spend(30)).with(2u8);
+    calls.flush(); // tick 1's FLUSH
+    let mut seen = Vec::new();
+    for tick in 1..=4u64 {
+        sim.step(tick);
+        calls.responses(crate::ticker::now(), &alive, &mut m); // tick + 1
+        for r in calls.take_resolved::<purse::Spend, u8>() {
+            seen.push((tick + 1, r.ctx, r.outcome));
+        }
+    }
+    assert_eq!(
+        seen,
+        vec![
+            (3, 1, Ok(7)),
+            (3, 2, Err(CallError::Service("poor".to_string())))
+        ]
+    );
+}
+
+// A generated service (the macro works at module level).
+use crate::calls::CallCx;
+
+#[crate::service]
+pub trait Purse {
+    async fn spend(&self, cx: &CallCx, amount: u64) -> Result<u64, String>;
+}
+
+struct Fake;
+
+impl Purse for Fake {
+    async fn spend(&self, _cx: &CallCx, amount: u64) -> Result<u64, String> {
+        if amount > 10 {
+            Err("poor".into())
+        } else {
+            Ok(10 - amount)
+        }
+    }
+}

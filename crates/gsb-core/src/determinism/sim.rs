@@ -20,7 +20,11 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::task::{Context, Waker};
 
-use crate::calls::{Envelope, Mail, Route, ServiceId};
+use std::sync::Arc;
+
+use tower::ServiceExt;
+
+use crate::calls::{Dispatch, Envelope, Mail, Route, Served, ServiceDef, ServiceId};
 use crate::channel::Inbox;
 
 /// A handler's future.
@@ -176,6 +180,40 @@ impl Sim {
             held: Vec::new(),
         }));
         route
+    }
+
+    /// Register a generated service's implementation
+    /// (`Delay::ticks(3, Inventory::serve(FakeInventory::default()))`) —
+    /// what [`calls::spawn`](crate::calls::spawn) runs live, here without
+    /// tower: its router serves each released call, the engine owns the
+    /// timing (no host timeout: a call `Delay::never` holds is ended by
+    /// [`Self::kill`], or by the table's own deadline).
+    pub fn served<K, S>(&mut self, mailbox: usize, delay: Delay<Served<K, S>>) -> Route<K::Msg>
+    where
+        K: ServiceDef<S>,
+        S: Send + Sync + 'static,
+    {
+        let wrap = |served: Served<K, S>| {
+            let router = K::router(Arc::new(served.into_inner()));
+            move |env: Envelope<K::Msg>| {
+                let (bare, reply) = K::split(env.msg);
+                let call = router.clone().oneshot(Dispatch {
+                    cx: env.cx,
+                    msg: bare,
+                });
+                async move {
+                    match call.await {
+                        Ok(out) => reply.complete(out),
+                        Err(_) => reply.abandon(),
+                    }
+                }
+            }
+        };
+        let delay = match delay {
+            Delay::Ticks(n, s) => Delay::Ticks(n, wrap(s)),
+            Delay::Never(s) => Delay::Never(wrap(s)),
+        };
+        self.service(K::NAME, mailbox, delay)
     }
 
     /// Run the services after the room's tick `now` (the tick whose FLUSH
