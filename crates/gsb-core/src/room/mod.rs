@@ -74,9 +74,9 @@ mod counters;
 mod idle;
 mod kick;
 mod logic;
-mod requests;
 #[cfg(feature = "record")]
 pub(crate) mod replay;
+mod requests;
 pub(crate) mod sim;
 mod stop;
 mod takeover;

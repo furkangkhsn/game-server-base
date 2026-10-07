@@ -13,6 +13,8 @@ use tokio::sync::{broadcast, mpsc};
 
 mod control;
 mod lifecycle;
+#[cfg(feature = "record")]
+mod record;
 mod snapshot;
 mod tick;
 
@@ -112,6 +114,10 @@ pub struct RoomActor<W, G, Sp> {
     pub(in crate::room) rng: crate::determinism::RoomRng,
     /// The room clock: the sum of the steps' `dt` (`TickCtx::time`).
     pub(in crate::room) clock: std::time::Duration,
+    /// The room's input log sink (feature `record`; `None`: not
+    /// recording — no input is kept).
+    #[cfg(feature = "record")]
+    pub(in crate::room) recorder: Option<crate::determinism::Recorder>,
     /// Room's own step counter (keep-alive cadence is in *room* steps, so a
     /// slower room keeps the same keep-alive rate in real time).
     pub(in crate::room) steps: u64,

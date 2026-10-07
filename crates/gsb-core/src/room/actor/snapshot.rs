@@ -316,6 +316,11 @@ where
                     if has_replies && !self.replies_buf.is_empty() {
                         unsent.push((rc.conn, std::mem::take(&mut self.replies_buf)));
                     }
+                    #[cfg(feature = "record")]
+                    self.calls.note(|| crate::determinism::Input::BatchDropped {
+                        player,
+                        snapshot: with_snapshot,
+                    });
                     self.logic
                         .on_batch_dropped(&mut self.world, player, with_snapshot);
                 } else {
@@ -324,6 +329,9 @@ where
                         // The first batch through after a run of drops:
                         // the logic may release what it paced (F11).
                         rc.dropping = false;
+                        #[cfg(feature = "record")]
+                        self.calls
+                            .note(|| crate::determinism::Input::BatchResumed { player });
                         self.logic.on_batch_resumed(&mut self.world, player);
                     }
                 }

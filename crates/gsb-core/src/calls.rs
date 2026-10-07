@@ -36,6 +36,8 @@ mod engine;
 mod host;
 mod live;
 mod macro_checks;
+#[cfg(feature = "record")]
+mod record;
 mod route;
 mod table;
 
@@ -43,6 +45,8 @@ mod table;
 mod tests;
 
 pub use builder::CallBuilder;
+#[cfg(feature = "record")]
+pub(crate) use contract::Erased;
 pub use contract::{
     ActorId, Call, CallCx, CallError, CallKey, Caller, DecodeError, Identity, Outcome, Owner,
     Refusal, Request, WireMessage, mix,

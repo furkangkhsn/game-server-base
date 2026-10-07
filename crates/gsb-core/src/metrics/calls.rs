@@ -119,4 +119,16 @@ call_counts! {
     /// Replies (or `.answers`) to a request the engine had already
     /// closed: ignored.
     requests_replied_late,
+    /// A replay met a recorded ending that does not fit the game: no
+    /// call of its type waits under its key (the log is another game's,
+    /// or another binary's). Never applied; never in a true replay.
+    replay_diverged,
+    /// A replay met a recorded outcome it could not decode (a log file
+    /// whose call type no codec covers): not applied.
+    replay_undecodable,
+    /// Steps a recording room handed its sink (one record each).
+    records_written,
+    /// Step records (or the header) a recording room's full or gone sink
+    /// refused: lost, the log has a hole.
+    records_dropped,
 }

@@ -49,6 +49,9 @@ where
                 .collect();
             let mut due: Vec<(PlayerId, ExpireTo)> = Vec::new();
             for pid in ask {
+                #[cfg(feature = "record")]
+                self.calls
+                    .note(|| crate::determinism::Input::Release { player: pid });
                 let released = self.logic.may_release(&mut self.world, pid);
                 let Some(rc) = self.conns.get(&pid) else {
                     continue;
@@ -64,6 +67,9 @@ where
                 }
             }
             for (pid, to) in due {
+                #[cfg(feature = "record")]
+                self.calls
+                    .note(|| crate::determinism::Input::Expire { player: pid, to });
                 self.logic.on_detach_expired(&mut self.world, pid, to);
                 match to {
                     ExpireTo::Despawn => {

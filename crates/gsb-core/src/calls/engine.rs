@@ -46,6 +46,11 @@ impl Call for External {
     type Error = String;
 }
 
+/// The built-in External call's type name in an input log (its late
+/// answers count on the request counters).
+#[cfg(feature = "record")]
+pub(crate) const EXTERNAL: &str = "gsb::External";
+
 /// The future an `External` decision hands over.
 pub(crate) type ExternalFuture = Pin<Box<dyn Future<Output = Result<Bytes, String>> + Send>>;
 
@@ -106,14 +111,35 @@ impl Calls {
                 break;
             }
             self.deadlines.pop_front();
-            if let Some(e) = self.pending.remove(&key) {
-                self.untrack(&e);
-                m.requests_timed_out += 1;
-                if let Some(a) = &e.answer {
-                    let out: Outcome<External> = Err(CallError::TimedOut);
-                    let out: Erased = Box::new(out);
-                    self.answer_now(a.conn, a.wire_id, a.op, a.encode, &out);
-                }
+            #[cfg(feature = "record")]
+            if self.pending.contains_key(&key) {
+                let out: Outcome<External> = Err(CallError::TimedOut);
+                let out: Erased = Box::new(out);
+                self.note_ending(
+                    EXTERNAL,
+                    crate::calls::contract::copy_outcome::<External>,
+                    &out,
+                    crate::determinism::Arrival::Deadline,
+                    false,
+                    key,
+                );
+            }
+            self.expire_external(key, m);
+        }
+        #[cfg(feature = "record")]
+        self.note_responses();
+    }
+
+    /// An External request's deadline passed: answer its client
+    /// `TimedOut` (a no-op when it already ended).
+    pub(crate) fn expire_external(&mut self, key: CallKey, m: &mut RoomCounters) {
+        if let Some(e) = self.pending.remove(&key) {
+            self.untrack(&e);
+            m.requests_timed_out += 1;
+            if let Some(a) = &e.answer {
+                let out: Outcome<External> = Err(CallError::TimedOut);
+                let out: Erased = Box::new(out);
+                self.answer_now(a.conn, a.wire_id, a.op, a.encode, &out);
             }
         }
     }
@@ -129,11 +155,14 @@ impl Calls {
             // A key this table no longer holds: an External report after
             // its deadline or its session's end, an answer for a call
             // exported away, or one the table's own deadline ended.
-            if outcome.is::<Outcome<External>>() {
+            let external = outcome.is::<Outcome<External>>();
+            if external {
                 m.requests_late += 1;
             } else {
                 self.counts.results_late += 1;
             }
+            #[cfg(feature = "record")]
+            self.note_late(key, external);
             return;
         };
         self.finish(key, e, outcome, alive);
@@ -141,7 +170,25 @@ impl Calls {
 
     /// A game call ended (`e` already out of `pending`): count its
     /// ending, answer its client, hand its result to the game.
-    fn finish(&mut self, key: CallKey, e: Entry, outcome: Erased, alive: &dyn Fn(Owner) -> bool) {
+    pub(crate) fn finish(
+        &mut self,
+        key: CallKey,
+        e: Entry,
+        outcome: Erased,
+        alive: &dyn Fn(Owner) -> bool,
+    ) {
+        #[cfg(feature = "record")]
+        if self.recording() {
+            let lives = e.owner == Owner::ACTOR || alive(e.owner);
+            self.note_ending(
+                e.call,
+                e.copy,
+                &outcome,
+                crate::determinism::Arrival::Ended,
+                lives,
+                key,
+            );
+        }
         self.untrack(&e);
         if e.legacy {
             if let Some(a) = &e.answer {
@@ -220,6 +267,16 @@ impl Calls {
         op: u16,
         payload: &[u8],
     ) {
+        #[cfg(feature = "record")]
+        self.note(|| crate::determinism::Input::Read {
+            conn,
+            player,
+            from: from.clone(),
+            owner,
+            wire_id,
+            op,
+            payload: Bytes::copy_from_slice(payload),
+        });
         if let Some(rule) = self.forwards.get(&op).cloned() {
             match rule(self, conn, from, wire_id, payload) {
                 Ok(()) => {
@@ -327,6 +384,10 @@ impl Calls {
             ended: crate::calls::contract::ended_of::<External>,
             sent: true,
             legacy: true,
+            #[cfg(feature = "record")]
+            call: EXTERNAL,
+            #[cfg(feature = "record")]
+            copy: crate::calls::contract::copy_outcome::<External>,
         };
         *self.in_flight_by.entry((e.type_id, e.owner)).or_insert(0) += 1;
         *self.legacy_by_conn.entry(conn).or_insert(0) += 1;
@@ -334,6 +395,11 @@ impl Calls {
         self.live_insert(conn, wire_id);
         self.deadlines.push_back((due, key));
         self.pending.insert(key, e);
+        // REPLAY: the future is not run — its ending is in the log.
+        #[cfg(feature = "record")]
+        if self.replay {
+            return;
+        }
         let tx = self.tx.clone();
         tokio::spawn(async move {
             // Timed out: no report — the RESPONSES sweep owns the
@@ -378,6 +444,13 @@ impl Calls {
             }
         };
         e.key = Some(key);
+        // REPLAY: the services are not called — the call waits under its
+        // key for its recorded ending.
+        #[cfg(feature = "record")]
+        if self.replay {
+            self.pending.insert(key, e);
+            return;
+        }
         let used = self.per_service.get(&e.service).copied().unwrap_or(0);
         if used >= self.cfg.share {
             self.counts.calls_refused_share += 1;

@@ -98,6 +98,8 @@ where
             seed,
             rng: crate::determinism::RoomRng::new(seed),
             clock: std::time::Duration::ZERO,
+            #[cfg(feature = "record")]
+            recorder: None,
             steps: 0,
             keepalive_every,
             metrics_every,

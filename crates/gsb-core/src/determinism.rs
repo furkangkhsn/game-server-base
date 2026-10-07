@@ -33,8 +33,8 @@ mod file;
 mod log;
 
 pub use crate::room::sim::{SimClient, SimRoom};
-pub(crate) use hash::fold;
 pub use hash::StateHasher;
+pub(crate) use hash::fold;
 pub use rng::{Rng, RoomRng, fresh_seed};
 pub use sim::{Delay, Handler, Sim};
 
@@ -47,3 +47,5 @@ pub use log::{
     Arrival, Codecs, FORMAT_VERSION, Input, InputLog, LogHeader, RecordMsg, Recorded,
     RecordedAction, RecordedOutcome, Recorder, TickRecord,
 };
+#[cfg(feature = "record")]
+pub(crate) use log::{Codec, decode_with, encode_with};

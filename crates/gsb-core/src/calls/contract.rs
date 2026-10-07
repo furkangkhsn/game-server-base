@@ -156,6 +156,19 @@ pub(crate) enum Failure {
     Abandoned,
 }
 
+/// Copy an outcome (an input log keeps one, the table hands the other
+/// on). Every call's answer and error are `Clone` (the [`Call`] bound).
+#[cfg(feature = "record")]
+pub(crate) fn copy_outcome<C: Call>(o: &Erased) -> Erased {
+    match o.downcast_ref::<Outcome<C>>() {
+        Some(o) => Box::new(o.clone()),
+        None => {
+            let o: Outcome<C> = Err(CallError::Abandoned);
+            Box::new(o)
+        }
+    }
+}
+
 pub(crate) fn fail_for<C: Call>(f: Failure) -> Erased {
     let e: CallError<C::Error> = match f {
         Failure::Refused(r) => CallError::Refused(r),

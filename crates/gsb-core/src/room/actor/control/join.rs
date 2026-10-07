@@ -44,6 +44,9 @@ where
             let mut rc = self.conns.remove(&stale).expect("binding implies row");
             self.roster_remove(&stale);
             self.drop_conn_request_state(conn);
+            #[cfg(feature = "record")]
+            self.calls
+                .note(|| crate::determinism::Input::Leave { player: stale });
             self.logic.on_leave(&mut self.world, stale);
             // The old session's unread requests go with its channel (B36).
             self.m.count_unread(drop_unread(&mut rc.actions));
@@ -70,6 +73,12 @@ where
         // The verified claims (B21) ride the join to the logic only;
         // the row keeps the identity alone.
         let joiner = crate::auth::Joiner::new(&identity).with_claims(claims.as_ref());
+        #[cfg(feature = "record")]
+        self.calls.note(|| crate::determinism::Input::Join {
+            conn,
+            identity: identity.clone(),
+            claims: claims.clone(),
+        });
         let admission = self.logic.on_join_verified(&mut self.world, conn, &joiner);
         self.m.joins += 1;
         let (act_tx, act_rx) = self.config.action_channel();
@@ -201,6 +210,13 @@ where
         // (locked by `actions_from_the_old_session_are_dropped_after_resume`).
         self.binding.remove(&old_conn);
         self.binding.insert(conn, player);
+        #[cfg(feature = "record")]
+        self.calls.note(|| crate::determinism::Input::Resume {
+            identity: identity.clone(),
+            conn,
+            player,
+            entity,
+        });
         self.logic
             .on_resume(&mut self.world, &identity, conn, player, entity);
         let _ = reply.send(Ok((entity, act_tx)));
@@ -234,6 +250,9 @@ where
         // any queued answer is dropped (a reply to a gone session is not
         // delivered).
         self.drop_conn_request_state(rc.conn);
+        #[cfg(feature = "record")]
+        self.calls
+            .note(|| crate::determinism::Input::Leave { player });
         self.logic.on_leave(&mut self.world, player);
         if count_as_leave {
             self.m.leaves += 1;

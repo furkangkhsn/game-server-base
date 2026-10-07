@@ -113,6 +113,20 @@ where
         //    All fire-and-forget actions are processed before the
         //    requests (the ordering contract; a request sees the world
         //    after this tick's actions were applied).
+        #[cfg(feature = "record")]
+        self.calls.note(|| {
+            crate::determinism::Input::Actions(
+                actions
+                    .iter()
+                    .map(|a| crate::determinism::RecordedAction {
+                        conn: a.conn,
+                        player: a.player,
+                        op: a.op,
+                        payload: a.payload.clone(),
+                    })
+                    .collect(),
+            )
+        });
         self.logic.ingest(&mut self.world, &ctx, &mut actions);
 
         // -- Phase 2c — the requests no table rule claims: the logic's
@@ -123,6 +137,8 @@ where
         //    call table; then FLUSH: this tick's calls leave, in issue
         //    order (a refusal is decided here and delivered at the next
         //    RESPONSES).
+        #[cfg(feature = "record")]
+        self.calls.note(|| crate::determinism::Input::Systems);
         self.logic
             .update_with_calls(&mut self.world, &ctx, &mut self.calls);
         self.calls.flush();
@@ -153,6 +169,8 @@ where
         //    (the step counter was bumped at the top of `step`)
         //    First the call table closes what nobody took or answered
         //    this tick (the engine's answers ride this broadcast).
+        #[cfg(feature = "record")]
+        self.calls.note(|| crate::determinism::Input::EndTick);
         parts!(self).end_tick();
         self.broadcast_phase(&ctx);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
@@ -162,6 +180,10 @@ where
         self.rng = rng;
         self.paths = paths;
         self.apply_kicks(kicks.take());
+        // The step's input record (feature `record`; a no-op unless the
+        // room records).
+        #[cfg(feature = "record")]
+        self.finish_record(t.tick, dt);
         true
     }
 }

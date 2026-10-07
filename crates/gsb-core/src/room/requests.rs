@@ -123,6 +123,9 @@ impl<G> Parts<'_, G> {
     /// it (`requests_undelivered`) and every answer the table owed it
     /// (`requests_abandoned`, B53).
     pub(crate) fn drop_session(&mut self, conn: ConnectionId) {
+        #[cfg(feature = "record")]
+        self.calls
+            .note(|| crate::determinism::Input::SessionEnd { conn });
         self.calls.drop_session(conn, self.m);
         if let Some(owed) = self.queued.remove(&conn) {
             self.m.requests_undelivered += owed.len() as u64;
@@ -279,6 +282,14 @@ impl<G> Parts<'_, G> {
                 self.m.requests_refused_congested += 1;
                 continue;
             }
+            #[cfg(feature = "record")]
+            self.calls.note(|| crate::determinism::Input::Request {
+                conn: req.conn,
+                player: req.player,
+                id: req.id,
+                op: req.op,
+                payload: req.payload.clone(),
+            });
             // Duplicate id that is still in flight: reject WITHOUT
             // re-processing — for every decision kind, not just external.
             // An in-flight id is already correlated with a pending

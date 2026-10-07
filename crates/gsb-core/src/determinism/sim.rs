@@ -102,9 +102,7 @@ impl<M: Send + 'static, H: Handler<M>> SimService for Svc<M, H> {
             while let Ok(mail) = inbox.try_recv() {
                 match mail {
                     Mail::Call(env) => {
-                        self.stats
-                            .calls_received
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.stats.calls_received.fetch_add(1, Ordering::Relaxed);
                         self.held.push(Held {
                             issued: now,
                             env: Some(env),

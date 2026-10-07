@@ -82,6 +82,12 @@ where
         report: bool,
         cause: DisconnectCause,
     ) {
+        #[cfg(feature = "record")]
+        self.calls.note(|| crate::determinism::Input::Disconnect {
+            player,
+            identity: identity.to_owned(),
+            cause,
+        });
         match self
             .logic
             .on_disconnect_with(&mut self.world, player, identity, cause)

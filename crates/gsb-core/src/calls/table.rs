@@ -254,6 +254,12 @@ pub(crate) struct Entry {
     /// The built-in path of `RequestDecision::External`: counted on the
     /// request counters (`requests_*`), never on the calls family.
     pub(crate) legacy: bool,
+    /// The call's type name (a replay matches a recorded ending to it).
+    #[cfg(feature = "record")]
+    pub(crate) call: &'static str,
+    /// Copies an outcome of the call's type (the input log's copy).
+    #[cfg(feature = "record")]
+    pub(crate) copy: fn(&Erased) -> Erased,
 }
 
 /// Calls carried out of a table by `export` (migration). In-process only
@@ -331,6 +337,13 @@ pub struct Calls {
     // Out.
     pub(crate) outbox: Vec<(ConnectionId, RpcReply)>,
     pub(crate) counts: CallCounts,
+    // The input log and REPLAY (feature `record`, `record.rs`).
+    #[cfg(feature = "record")]
+    pub(crate) rec: Option<Box<crate::calls::record::Rec>>,
+    #[cfg(feature = "record")]
+    pub(crate) replay: bool,
+    #[cfg(feature = "record")]
+    pub(crate) codecs: crate::determinism::Codecs,
 }
 
 impl std::fmt::Debug for Calls {
@@ -380,6 +393,19 @@ impl Calls {
             call_deadlines: VecDeque::new(),
             outbox: Vec::new(),
             counts: CallCounts::default(),
+            #[cfg(feature = "record")]
+            rec: None,
+            #[cfg(feature = "record")]
+            replay: false,
+            #[cfg(feature = "record")]
+            codecs: {
+                let mut c = crate::determinism::Codecs::default();
+                c.insert(
+                    crate::calls::engine::EXTERNAL,
+                    crate::calls::record::external_codec(),
+                );
+                c
+            },
         }
     }
 
@@ -451,6 +477,10 @@ impl Calls {
             Ok(())
         });
         self.forwards.insert(R::OP, rule);
+        // The rule's call answers with a request's types: it has a wire
+        // form, so a log file can carry its outcomes.
+        #[cfg(feature = "record")]
+        self.codecs.register::<C>();
         Ok(())
     }
 
@@ -742,6 +772,10 @@ pub(crate) fn entry_of<C: Call, X: Send + Sync + 'static>(
         ended: crate::calls::contract::ended_of::<C>,
         sent: false,
         legacy: false,
+        #[cfg(feature = "record")]
+        call: std::any::type_name::<C>(),
+        #[cfg(feature = "record")]
+        copy: crate::calls::contract::copy_outcome::<C>,
     }
 }
 
