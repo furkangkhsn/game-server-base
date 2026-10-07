@@ -21,6 +21,14 @@
 > sunucu config'i, demo ekonomisi `trait Economy`. Sapmalar §20 "Faz 2 —
 > uygulanan biçim"de.
 >
+> **Faz 4 uygulandı (tur q4):** `gsb_core::determinism` — `TickCtx::{time,
+> rng}` (oda saati = `dt`'lerin toplamı; tohumlu SplitMix64, `RoomConfig::seed`
+> ya da enkarnasyon başına taze tohum), tohumdan türeyen çağrı anahtarı
+> kökeni, `GameLogic::state_hash`, TEST modu (`Sim` + `Delay` + `SimRoom`),
+> `record` özelliği (oda başına girdi kaydı, çerçeveli dosya, `Replay`) ve
+> `replay_diverged`/`replay_undecodable`/`records_written`/`records_dropped`
+> sayaçları. Sapmalar §20 "Faz 4 — uygulanan biçim"de.
+>
 > **Durum:** TASARIM — kullanıcı incelemesi bekliyor. Uygulama YOK; bu
 > turun çıktısı bu doküman ve `spikes/s0-calls` (gsb çalışma alanının
 > üyesi olmayan, motoru değiştirmeyen bir kanıt crate'i + `#[service]`
@@ -1437,6 +1445,91 @@ somutlaşanlar:
   kancası, `record` özelliği (S5), REPLAY modu + `replay_diverged`,
   `gsb-kit::testing`: `Sim` + `Delay`; loadgen/golden'e kayıt-tekrar
   senaryosu.
+
+**Faz 4 — uygulanan biçim (tur q4).** Tasarımdan farklar ve
+somutlaşanlar:
+
+- **Modül:** `gsb_core::determinism` (ECS'siz; `Sim`/`SimRoom` çekirdekte,
+  kit'te değil — kit testleri bevy'ye bağlı, sürücü her `W` ve her
+  `RoomLogic` için).
+- **Zaman ve rastgelelik:** `TickCtx` iki alan aldı: `time: Duration`
+  (oda saati, bu adımın `dt`'si dahil) ve `rng: Rng<'_>` (odanın
+  `RoomRng`'sinin ödünç görünümü — `Cell`, çünkü kancalar `&TickCtx`
+  alır; kick kuyruğu deseni). `ctx.rng.next_u64() / below(n) / unit() /
+  chance(p)`. Elle kurulan bağlamın varsayılanı ETKİSİZ tutamaçtır: iş
+  parçacığına yerel, 0 tohumlu akış (test başına deterministik, kayda
+  girmez). Shard da tohum/saat/rng alır (tohum `mix(seed ^ indeks)`); kayıt
+  yalnız odada.
+- **Tohum:** `RoomConfig::seed: Option<u64>`; `None` = enkarnasyon başına
+  taze tohum (`determinism::fresh_seed`: std'nin OS tohumlu hasher anahtarı
+  + süreç sayacı + oda id'si; yeni bağımlılık yok) — canlı anahtarlar
+  yeniden doğuşlar arasında da benzersiz. Anahtar kökeni
+  `mix(seed ^ mix(oda))` (q1'in `mix(oda)`'sının yerine).
+- **Durum hash'i:** `GameLogic::state_hash(&mut self, &mut W) ->
+  Option<u64>` (varsayılan `None`; `&mut W` bevy sorguları için). Motor
+  sonucu rng durumu ve oda saatiyle katlar (`StateHasher` = FNV-1a 64,
+  `std::hash::Hasher`). Yalnız kayıt, tekrar ve TEST modunda, adımın
+  SONUNDA (yayından sonra) sorulur; kayıtsız canlı oda hiç sormaz.
+- **Kayıt (`record` özelliği, kapalıyken kodu yok):**
+  `RoomActor::with_record(Recorder)` / `SimRoom::record`. Kayıt oda
+  sınırında değil **mantık sınırında** tutulur: oyunun gördüğü her girdi,
+  odanın işlediği sırayla — CONTROL kancaları (join/resume/leave/
+  disconnect/may_release/expire/batch dropped-resumed) ve oturum sonu,
+  RESPONSES (her son: anahtar, çağrı tipi adı, sahip yaşıyor muydu,
+  sonucun kopyası; External son tarihleri; geç gelenler yalnız anahtar),
+  READ (tablonun aldığı istekler, `ingest`'in aksiyonları,
+  `handle_request`'in gördüğü istekler), faz işaretleri (SYSTEMS, tick
+  sonu) + `dt` + hash. Tıkanma/bozuk zarf gibi taşıma kararları mantığa
+  ulaşmadığından kayıtta yoktur. Girdiler tabloda (`Calls`) tutulur; adım
+  sonunda bir `TickRecord` sınırlı kanala `try_send` edilir (dolu/kapalı →
+  `records_dropped`). `Input` `#[non_exhaustive]`: EVENTS için yuva.
+- **Dosya (S5):** `write_log` / `spawn_writer` (kanalı `blocking_recv` ile
+  boşaltan düz iş parçacığı — tick ve çalışma zamanı dosyaya dokunmaz) /
+  `read_log`. Biçim: `GSBINLOG` + biçim sürümü + başlık (motor ve oyun
+  sürümü, oda, tohum, düğmeler) + tick başına uzunluk önekli çerçeve;
+  elle yazılmış LE, yeni bağımlılık yok. **Sapma (S5'in sınırı):** süreç
+  içi çağrı tiplerine `record` altında `WireMessage` sınırı EKLENMEDİ —
+  özellikler toplamsaldır; bir crate `record`'u açınca başka bir crate'in
+  kodlanamayan çağrı tipleri derlenmez olurdu. Bunun yerine sonuç
+  kodekleri tip adıyla kayıtlıdır: `forward` kuralının çağrısı kendiliğinden,
+  diğerleri boot'ta `calls.record_as::<C>()` ile. Bellekten tekrar kodek
+  istemez (`Clone` yeter); kodeksiz bir sonuç dosyaya "eksik" yazılır
+  (yazar `outcomes_unencodable` sayar), tekrarda `replay_undecodable`.
+- **REPLAY:** `Replay::new(Arc<InputLog>, world, logic)` → `tick()` /
+  `run() -> ReplayReport { hashes, first_divergent, counts }`. Aktör yok,
+  taşıma yok, çalışma zamanı yok: girdiler kayıttaki sırayla aynı kancalara
+  verilir; tablo REPLAY'de hiç göndermez (çağrı anahtarıyla bekler,
+  External geleceği koşturulmaz, süre süpürmeleri koşmaz), sonlar kayıttan
+  anahtarla gelir ve yalnız **aynı tipteki** bekleyen çağrıya uygulanır
+  (`replay_diverged` aksi hâlde — anahtarda bekleyen yoksa da);
+  "sahip yaşıyor mu" kayıttaki cevaptır. İlk farklı hash'in tick'i
+  raporlanır (hile doğrulama). Boşta-girdi ve yol görünümleri tekrarda
+  BOŞ okunur (taşıma ölçümleri, kaydedilmez).
+- **TEST modu:** `Sim::service(name, cap, Delay::ticks(n, handler))` —
+  işleyici q1'in `serve` biçimi (`Fn(Envelope<M>) -> Future`); q2'nin
+  üretilmiş servisi için `Sim::served(cap, Delay::ticks(n, X::serve(fake)))`
+  (yönlendiricisi tower'sız koşar). T tick'inin FLUSH'ında verilen çağrı
+  T+n'in RESPONSES'unda görünür; `Delay::never` tutar, `sim.kill(id)`
+  `Abandoned` verir, sonraki çağrılar `Gone`. `SimRoom`: gerçek oda
+  aktörü, sabit `dt` (periyot, tam sayı nanosaniye), tohumlu (verilmezse 0),
+  her adımda hash, betikli istemciler (`SimClient::{request, raw_request,
+  action, frames}`); `tick_at(Instant)` canlı zamanlamalı koşu için.
+- **Testler** (`determinism/tests`): TEST modu aynı tohumla iki kez aynı
+  (hash + cevaplar), farklı tohum farklı; `Delay::ticks(n)` tam n. tick;
+  `Delay::never` + `kill`; üretilmiş servis TEST modunda; boştaki kayıtsız
+  oda hiçbir tampon ayırmaz; anahtar kökeni tohumdan. `record` ile: tokio
+  üzerinde 0–8 ms rastgele gecikmeli canlı koşu (External isteği ve
+  aksiyonlar dahil, sahibi giden bir çağrı) kaydedilir → iki tekrar aynı
+  hash'ler, aynı cevaplar, aynı son sayaçları, servis çağrılmadı, tablo hiç
+  göndermedi; negatif kontrol (ilk RESPONSES bir tick geç) tam o tick'te
+  ayrışır; tipi değiştirilmiş son `replay_diverged` sayılır, uygulanmaz;
+  dosyaya yazılan kayıt bellektekiyle aynı oynar, kodeksiz yazılan kayıp
+  iki tarafta sayılır; yazar iş parçacığı odanın kaydını yazar.
+- **Sayaçlar:** `CallCounts`'a `replay_diverged`, `replay_undecodable`,
+  `records_written`, `records_dropped` (satır, Prometheus, OTLP, golden'ler;
+  loadgen teli `CALL_COUNT` dizisiyle 4 alan büyüdü — sihir sayısı
+  `GSNT` değişmedi, bir sonraki boş `GSNU`).
+- Ertelenenler BACKLOG'da `q4:` satırları.
 
 **Faz 5 — ECS adaptörleri ve kit**
 - Çekirdek ECS'siz kalır; isteğe bağlı adaptör crate'leri

@@ -350,3 +350,16 @@ göredir:
   görünür — iddia tam eşitlik olarak kalır (mutasyonla sınandı: +1 ve
   −1, ikisi de düşer).
 
+### Determinizm sınırı (tur q4, 2026-10-08)
+
+Oda determinizm sınırıdır (`docs/SERVICES.md` §10): mantığın gördüğü
+zaman `TickCtx::dt` ve `TickCtx::time` (oda saati = adımların `dt`
+toplamı; `dt` hâlâ tick damgalarının farkı, sıkışmada sınırlı), gördüğü
+rastgelelik `TickCtx::rng` (oda başına tohumlu SplitMix64). Mantıkta duvar
+saati, kendi RNG'si ve `HashMap` iterasyon sırasına bağımlılık yoktur.
+`record` özelliğiyle oda her adımın girdisini (CONTROL kancaları →
+RESPONSES → READ → SYSTEMS → tick sonu, işlendiği sırayla) ve durum
+hash'ini kaydeder; `Replay` aynı mantığı servis çağırmadan aynı hash'lere
+götürür. Kayıtsız odada yeni bir tick maliyeti yok: kayıt kodu özellik
+kapalıyken derlenmez, açıkken kaydedici verilmemiş odada tablo girdi
+tutmaz (`determinism` testi `a_quiet_room_that_records_nothing_keeps_nothing`).

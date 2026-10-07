@@ -388,6 +388,31 @@ ve `Result<TransferDone, RequestError<GameError>>` alır. Örnek: gsb-demo'nun
 `DemoRequests` servisi (`AbilityUse`, 1005) ve
 `gsb-server/tests/typed_requests.rs`.
 
+### 4.7 Deterministik mantık (tur q4)
+
+Bir odanın mantığı tekrar oynatılabilir olsun diye (`docs/SERVICES.md`
+§10, `gsb_core::determinism`) yalnız motorun verdiği zamanı ve
+rastgeleliği kullanır:
+
+- adım uzunluğu `ctx.dt`, oda saati `ctx.time` — mantıkta duvar saati
+  (`Instant::now`, `SystemTime`) yok;
+- rastgelelik `ctx.rng` (odanın tohumlu üreteci; tohum
+  `RoomConfig::seed` ya da taze, kayda girer) — kendi RNG'si yok;
+- `HashMap`/`HashSet` **iterasyon sırasına** bağlı karar yok (arama sorun
+  değil; sıralı iterasyon için `BTreeMap` ya da ECS sorgusu);
+- yeniden üretilmesi gereken durum girdi kancalarında ve SYSTEMS'te
+  yazılır; yayın kancaları (`snapshot`, `private`, `keepalive`) tekrarda
+  koşmaz, tekrarlanan durumu değiştirmemeli;
+- boşta-girdi (`ctx.since_input`) ve yol (`ctx.budget`/`ctx.path`)
+  görünümleri taşıma ölçümüdür, kaydedilmez: onlara göre dallanan mantık
+  tekrarda ayrışır;
+- `GameLogic::state_hash` simülasyon durumunu `StateHasher` ile katlar
+  (anti-cheat doğrulaması ve TEST modu karşılaştırması bunu okur).
+
+TEST modu: `SimRoom` + `Sim` (`Delay::ticks(n, ..)`, `Delay::never`),
+betikli istemciler; kayıt/tekrar: `record` özelliği, `RoomActor::with_record`,
+`Replay`.
+
 ## 5. Fazlar
 
 | Faz | Kapsam | Kapı |
