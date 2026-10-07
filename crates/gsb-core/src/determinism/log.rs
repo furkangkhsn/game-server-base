@@ -222,6 +222,20 @@ pub enum Input {
         /// The session.
         conn: ConnectionId,
     },
+    /// A session parked (detach-hold): the table abandons what it owed
+    /// it but keeps its explicit bind (BACKLOG B156).
+    SessionPark {
+        /// The session.
+        conn: ConnectionId,
+    },
+    /// A parked session resumed on a new transport: its explicit bind
+    /// moves (B156).
+    SessionMove {
+        /// The parked session.
+        from: ConnectionId,
+        /// The resumed one.
+        to: ConnectionId,
+    },
     /// RESPONSES: the endings the table took in, in order.
     Responses(Vec<Recorded>),
     /// READ: one request of a claimed op, as the table took it.

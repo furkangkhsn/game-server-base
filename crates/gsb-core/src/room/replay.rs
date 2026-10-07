@@ -212,6 +212,8 @@ where
                 }
                 Input::BatchResumed { player } => logic.on_batch_resumed(world, *player),
                 Input::SessionEnd { conn } => p.drop_session(*conn),
+                Input::SessionPark { conn } => p.park_session(*conn),
+                Input::SessionMove { from, to } => p.calls.resume_session(*from, *to),
                 Input::Responses(list) => {
                     p.calls.replay_responses(list, p.m);
                     p.drain_outbox();

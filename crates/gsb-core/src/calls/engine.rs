@@ -626,6 +626,8 @@ impl Calls {
     /// explicit binding moves with it (BACKLOG B156). Nothing else of the
     /// old session survives the park.
     pub(crate) fn resume_session(&mut self, old: ConnectionId, new: ConnectionId) {
+        #[cfg(feature = "record")]
+        self.note(|| crate::determinism::Input::SessionMove { from: old, to: new });
         if let Some(owner) = self.bound.remove(&old) {
             self.bound.insert(new, owner);
         }

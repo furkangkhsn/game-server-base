@@ -136,6 +136,9 @@ impl<G> Parts<'_, G> {
     /// [`Self::drop_session`], its explicit binding stays for the resume
     /// (B156).
     pub(crate) fn park_session(&mut self, conn: ConnectionId) {
+        #[cfg(feature = "record")]
+        self.calls
+            .note(|| crate::determinism::Input::SessionPark { conn });
         self.calls.park_session(conn, self.m);
         if let Some(owed) = self.queued.remove(&conn) {
             self.m.requests_undelivered += owed.len() as u64;

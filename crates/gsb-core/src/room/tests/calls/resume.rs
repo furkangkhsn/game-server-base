@@ -83,3 +83,59 @@ fn a_parked_bind_ends_with_the_row() {
     rig.step();
     assert_eq!(rig.room.calls.bound(ConnectionId(1)), None);
 }
+
+/// A recorded room replays the park and the bind's move (feature
+/// `record`): the replayed game sees the resumed session's request under
+/// the bound owner, exactly as the live one did.
+#[cfg(feature = "record")]
+#[test]
+fn a_recorded_resume_replays_the_bind_it_carried() {
+    use crate::determinism::{InputLog, Recorder, Replay, Sim, SimRoom};
+    use std::sync::Arc;
+
+    let game = |seen| Game {
+        bank: Bank::new(4, 1).0,
+        friends: None,
+        mode: Mode {
+            hold: true,
+            bind: Some((1, BOUND)),
+            ..Mode::default()
+        },
+        wallets: BTreeMap::new(),
+        seen,
+        boot_twice: false,
+        parked: BTreeMap::new(),
+    };
+    let owners = |rx: &smpsc::Receiver<Seen>| -> Vec<Owner> {
+        rx.try_iter()
+            .filter_map(|s| match s {
+                Seen::Request(_, _, o) => Some(o),
+                _ => None,
+            })
+            .collect()
+    };
+    let (tx, live_seen) = smpsc::channel();
+    let mut room = SimRoom::new(RoomConfig::default(), (), Box::new(game(tx)));
+    let (recorder, mut inbox) = Recorder::channel(1 << 10, "resume");
+    room.record(recorder);
+    let mut sim = Sim::new();
+    let alice = room.join(1, "alice");
+    room.tick(&mut sim);
+    alice.request(1, &transfer("bob", 10));
+    room.tick(&mut sim);
+    room.disconnect(&alice);
+    room.tick(&mut sim);
+    let back = room.join(2, "alice");
+    back.request(2, &transfer("bob", 10));
+    room.tick(&mut sim);
+    let live = owners(&live_seen);
+    assert_eq!(live, [BOUND, BOUND]);
+
+    let log = Arc::new(InputLog::collect(&mut inbox).expect("the header arrived"));
+    let (tx, replay_seen) = smpsc::channel();
+    let mut replay = Replay::new(log, (), Box::new(game(tx)));
+    while replay.tick().is_some() {}
+    let report = replay.run();
+    assert_eq!(report.counts.replay_diverged, 0);
+    assert_eq!(owners(&replay_seen), live, "the bind replays");
+}

@@ -297,6 +297,8 @@ const ACTIONS: u8 = 12;
 const REQUEST: u8 = 13;
 const SYSTEMS: u8 = 14;
 const END_TICK: u8 = 15;
+const SESSION_PARK: u8 = 16;
+const SESSION_MOVE: u8 = 17;
 
 fn input(e: &mut Enc, i: &Input, codecs: &Codecs, stats: &mut WriterStats) {
     match i {
@@ -373,6 +375,15 @@ fn input(e: &mut Enc, i: &Input, codecs: &Codecs, stats: &mut WriterStats) {
         Input::SessionEnd { conn } => {
             e.u8(SESSION_END);
             e.u64(conn.0);
+        }
+        Input::SessionPark { conn } => {
+            e.u8(SESSION_PARK);
+            e.u64(conn.0);
+        }
+        Input::SessionMove { from, to } => {
+            e.u8(SESSION_MOVE);
+            e.u64(from.0);
+            e.u64(to.0);
         }
         Input::Responses(list) => {
             e.u8(RESPONSES);
@@ -526,6 +537,13 @@ fn read_input(d: &mut Dec<'_>) -> Option<Input> {
         },
         SESSION_END => Input::SessionEnd {
             conn: ConnectionId(d.u64()?),
+        },
+        SESSION_PARK => Input::SessionPark {
+            conn: ConnectionId(d.u64()?),
+        },
+        SESSION_MOVE => Input::SessionMove {
+            from: ConnectionId(d.u64()?),
+            to: ConnectionId(d.u64()?),
         },
         RESPONSES => {
             let n = d.u64()?;
