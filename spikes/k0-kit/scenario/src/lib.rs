@@ -7,6 +7,8 @@
 //!   binding;
 //! - [`Agnostic`] over [`HecsTrackedFeed`]: the core + the hecs binding
 //!   (`Tracked<T>` flags);
+//! - [`Agnostic`] over [`HecsLoggedFeed`]: the same `Tracked<T>` flags,
+//!   removals from the [`KitWorld`] wrapper's log;
 //! - [`Agnostic`] over [`HecsDiffFeed`]: the core + hecs with no change
 //!   source (every record, every tick).
 //!
@@ -24,7 +26,7 @@ use k0_kit_core::{
     Cell, CellBook, CellFeed, Gone, Grid2, Minter, Owner, Planar, ToWire, WireId, WireValue,
     assemble_group_packet, run_tick,
 };
-use k0_kit_hecs::{HecsDiffFeed, HecsTrackedFeed, Tracked};
+use k0_kit_hecs::{HecsDiffFeed, HecsLoggedFeed, HecsTrackedFeed, KitWorld, Tracked};
 
 /// The scenario's AOI cell edge (wire units).
 pub const CELL_SIZE: f32 = 64.0;
@@ -176,9 +178,9 @@ pub fn script(
             pos[s] = Some((np, m));
             ops.push(Op::Move { slot: s, pos: np });
         }
-        let churn = (alive.len() * churn_per_mille / 1000).max(1);
+        let churn = alive.len() * churn_per_mille / 1000;
         let mut killed = 0;
-        let mut left = false;
+        let mut left = churn_per_mille == 0;
         for _ in 0..churn * 4 {
             let s = alive[rng.below(alive.len())];
             match pos[s] {
@@ -323,6 +325,34 @@ impl GameSide for HecsTrackedSide {
     type Feed = HecsTrackedFeed<Position>;
     fn world() -> Self::World {
         hecs::World::new()
+    }
+    fn spawn(w: &mut Self::World, pos: Position, wire: WireId) -> Owner {
+        k0_kit_hecs::EntityExt::to_owner(w.spawn((Tracked::new(pos), wire)))
+    }
+    #[inline]
+    fn write(w: &mut Self::World, owner: Owner, pos: Position) {
+        if let Some(e) = k0_kit_hecs::OwnerExt::entity(owner)
+            && let Ok(p) = w.query_one_mut::<&mut Tracked<Position>>(e)
+        {
+            **p = pos;
+        }
+    }
+    fn despawn(w: &mut Self::World, owner: Owner) {
+        if let Some(e) = k0_kit_hecs::OwnerExt::entity(owner) {
+            let _ = w.despawn(e);
+        }
+    }
+}
+
+/// hecs game side over a [`KitWorld`] (the logged wrapper).
+#[derive(Default)]
+pub struct HecsLoggedSide;
+
+impl GameSide for HecsLoggedSide {
+    type World = KitWorld;
+    type Feed = HecsLoggedFeed<Position>;
+    fn world() -> Self::World {
+        KitWorld::default()
     }
     fn spawn(w: &mut Self::World, pos: Position, wire: WireId) -> Owner {
         k0_kit_hecs::EntityExt::to_owner(w.spawn((Tracked::new(pos), wire)))

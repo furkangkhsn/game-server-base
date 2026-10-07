@@ -4,7 +4,9 @@
 //! packet bytes for every member cell.
 
 use k0_kit_scenario::native::NativeBevy;
-use k0_kit_scenario::{Agnostic, BevySide, Driver, HecsDiffSide, HecsTrackedSide, script};
+use k0_kit_scenario::{
+    Agnostic, BevySide, Driver, HecsDiffSide, HecsLoggedSide, HecsTrackedSide, script,
+};
 
 fn run(n: usize, ticks: usize, move_pct: usize, churn: usize, seed: u64) {
     let s = script(n, ticks, move_pct, churn, seed);
@@ -17,6 +19,10 @@ fn run(n: usize, ticks: usize, move_pct: usize, churn: usize, seed: u64) {
         (
             "core+hecs-tracked",
             Box::new(Agnostic::<HecsTrackedSide>::new(s.slots)),
+        ),
+        (
+            "core+hecs-logged",
+            Box::new(Agnostic::<HecsLoggedSide>::new(s.slots)),
         ),
         (
             "core+hecs-diff",

@@ -13,9 +13,10 @@
 //!   checks a tick per entity.
 //! - **Removal — the census**: the feed counts the records it scanned;
 //!   when the count equals the book's known records, nothing left and
-//!   the sweep is skipped. Otherwise each known owner is checked against
-//!   a dense per-entity-index stamp written during the scan (an array
-//!   read, no archetype lookup).
+//!   the sweep is skipped. Otherwise one sequential pass over a dense
+//!   per-entity-index stamp written during the scan finds the records
+//!   seen last scan and not this one (no archetype lookup, no walk of
+//!   the book's hash map).
 //!
 //! [`HecsDiffFeed`] is the fallback with no change source at all: it
 //! reports EVERY record every tick and lets the book's wire compare drop
@@ -92,11 +93,29 @@ impl<T> DerefMut for Tracked<T> {
 
 /// The census both hecs feeds keep: records scanned this tick, and a
 /// dense `entity index → (tick, owner bits)` stamp.
-#[derive(Default)]
 struct Census {
+    /// The scan counter (starts at 1: a fresh stamp `(0, 0)` is never
+    /// "seen last scan").
     tick: u64,
+    /// Records scanned this tick.
     scanned: usize,
+    /// `entity index → (last scan that saw it, its entity bits)`: dense,
+    /// written in the scan's own (archetype) order.
     seen: Vec<(u64, u64)>,
+    /// Entities seen last scan whose index a NEW entity took this scan
+    /// (hecs recycles indices; the stamp alone would hide the death).
+    displaced: Vec<u64>,
+}
+
+impl Default for Census {
+    fn default() -> Self {
+        Self {
+            tick: 1,
+            scanned: 0,
+            seen: Vec::new(),
+            displaced: Vec::new(),
+        }
+    }
 }
 
 impl Census {
@@ -104,6 +123,7 @@ impl Census {
     fn begin(&mut self) {
         self.tick += 1;
         self.scanned = 0;
+        self.displaced.clear();
     }
 
     #[inline]
@@ -113,27 +133,36 @@ impl Census {
         if i >= self.seen.len() {
             self.seen.resize(i + 1, (0, 0));
         }
-        self.seen[i] = (self.tick, entity.to_bits().get());
+        let bits = entity.to_bits().get();
+        let (last, was) = self.seen[i];
+        if last == self.tick - 1 && was != bits {
+            self.displaced.push(was);
+        }
+        self.seen[i] = (self.tick, bits);
     }
 
+    /// The records the book knows that this scan did not see: skipped
+    /// outright when the census balances (no despawn this tick — the
+    /// steady state); otherwise one SEQUENTIAL pass over the dense stamps
+    /// (seen last scan, not this one) plus the displaced, each confirmed
+    /// against `known` (a parked removal is already out of it).
     fn gone<C>(&self, world: &World, known: &HashMap<Owner, (u64, C)>, mut sink: impl FnMut(Gone)) {
         if known.len() == self.scanned {
             return; // every known record was scanned: nothing left
         }
-        for &owner in known.keys() {
-            let Some(entity) = owner.entity() else {
+        let prev = self.tick - 1;
+        let stale = self
+            .seen
+            .iter()
+            .filter(|&&(t, _)| t == prev)
+            .map(|&(_, bits)| bits);
+        for bits in stale.chain(self.displaced.iter().copied()) {
+            let owner = Owner(bits);
+            if !known.contains_key(&owner) {
                 continue;
-            };
-            let here = self
-                .seen
-                .get(entity.id() as usize)
-                .is_some_and(|&s| s == (self.tick, owner.0));
-            if !here {
-                sink(Gone {
-                    owner,
-                    alive: world.contains(entity),
-                });
             }
+            let alive = owner.entity().is_some_and(|e| world.contains(e));
+            sink(Gone { owner, alive });
         }
     }
 }
@@ -210,4 +239,127 @@ impl<T: ToWire + Send + Sync + 'static> CellFeed<T::Wire> for HecsDiffFeed<T> {
 
     #[inline]
     fn close(&mut self, _world: &mut World) {}
+}
+
+// ── The removal log: a world wrapper ───────────────────────────────────
+
+/// A hecs world whose structural changes are LOGGED — the removal events
+/// hecs lacks, made structural the way bevy's are: the wrapper derefs
+/// only to `&hecs::World` (queries, `query::<&mut T>()` writes — a
+/// `Tracked<T>` still flags them), and every call that can take a record
+/// out of the broadcast set (`despawn`, `remove`, `remove_one`) goes
+/// through it and is logged. A game holding `&mut KitWorld` has no other
+/// path to a despawn. `query_mut` / `query_one_mut` (no structural
+/// change) are passed through.
+#[derive(Default)]
+pub struct KitWorld {
+    world: World,
+    /// Entities a structural call touched since the last close.
+    touched: Vec<Entity>,
+}
+
+impl Deref for KitWorld {
+    type Target = World;
+    #[inline]
+    fn deref(&self) -> &World {
+        &self.world
+    }
+}
+
+impl KitWorld {
+    /// Spawn (no log: a spawn is seen by the change flags).
+    pub fn spawn(&mut self, components: impl hecs::DynamicBundle) -> Entity {
+        self.world.spawn(components)
+    }
+
+    /// Despawn, logged.
+    pub fn despawn(&mut self, entity: Entity) -> Result<(), hecs::NoSuchEntity> {
+        self.touched.push(entity);
+        self.world.despawn(entity)
+    }
+
+    /// Insert one component (an insert cannot take a record out).
+    pub fn insert_one(
+        &mut self,
+        entity: Entity,
+        component: impl hecs::Component,
+    ) -> Result<(), hecs::NoSuchEntity> {
+        self.world.insert_one(entity, component)
+    }
+
+    /// Remove one component, logged.
+    pub fn remove_one<C: hecs::Component>(
+        &mut self,
+        entity: Entity,
+    ) -> Result<C, hecs::ComponentError> {
+        self.touched.push(entity);
+        self.world.remove_one::<C>(entity)
+    }
+
+    /// The exclusive query (no structural change).
+    pub fn query_mut<Q: hecs::Query>(&mut self) -> hecs::QueryMut<'_, Q> {
+        self.world.query_mut::<Q>()
+    }
+
+    /// The exclusive one-entity query (no structural change).
+    pub fn query_one_mut<Q: hecs::Query>(
+        &mut self,
+        entity: Entity,
+    ) -> Result<Q::Item<'_>, hecs::QueryOneError> {
+        self.world.query_one_mut::<Q>(entity)
+    }
+}
+
+/// The hecs feed over a [`KitWorld`]: `Tracked<T>` flags for changes,
+/// the wrapper's log for removals — O(removals), no census.
+pub struct HecsLoggedFeed<T> {
+    _t: PhantomData<fn() -> T>,
+}
+
+impl<T> Default for HecsLoggedFeed<T> {
+    fn default() -> Self {
+        Self { _t: PhantomData }
+    }
+}
+
+impl<T: ToWire + Send + Sync + 'static> CellFeed<T::Wire> for HecsLoggedFeed<T> {
+    type World = KitWorld;
+
+    #[inline]
+    fn changed(&mut self, world: &mut KitWorld, mut sink: impl FnMut(Owner, u64, T::Wire)) {
+        for (entity, (wire, rec)) in world.world.query_mut::<(&WireId, &mut Tracked<T>)>() {
+            if rec.changed {
+                rec.changed = false;
+                sink(entity.to_owner(), wire.get(), rec.value.wire());
+            }
+        }
+    }
+
+    fn gone<C>(
+        &mut self,
+        world: &KitWorld,
+        known: &HashMap<Owner, (u64, C)>,
+        mut sink: impl FnMut(Gone),
+    ) {
+        for &entity in &world.touched {
+            let owner = entity.to_owner();
+            let Some(&(wire, _)) = known.get(&owner) else {
+                continue;
+            };
+            let alive = world.world.contains(entity);
+            let still_placed = alive
+                && world.world.entity(entity).ok().is_some_and(|e| {
+                    e.has::<Tracked<T>>() && e.get::<&WireId>().is_some_and(|w| w.get() == wire)
+                });
+            if !still_placed {
+                sink(Gone { owner, alive });
+            }
+        }
+    }
+
+    /// The log is the window: cleared here, like bevy's buffers.
+    #[inline]
+    fn close(&mut self, world: &mut KitWorld) {
+        world.touched.clear();
+    }
 }

@@ -4,12 +4,16 @@
 //! runs `ROUNDS` times interleaved, the reported figure per driver is the
 //! median over rounds of the per-round median tick (p90 likewise).
 //!
-//! `cargo run --release --bin bench [-- quick]`
+//! `cargo run --release --bin bench [-- quick]` — `quick`: the 10k
+//! sizes only. `CHURN=<per mille>` (default 1): the NPC despawn/spawn
+//! rate per tick (with 0, no player leaves or joins either).
 
 use std::time::{Duration, Instant};
 
 use k0_kit_scenario::native::NativeBevy;
-use k0_kit_scenario::{Agnostic, BevySide, Driver, HecsDiffSide, HecsTrackedSide, script};
+use k0_kit_scenario::{
+    Agnostic, BevySide, Driver, HecsDiffSide, HecsLoggedSide, HecsTrackedSide, script,
+};
 
 const ROUNDS: usize = 5;
 
@@ -18,6 +22,7 @@ fn make(name: &str, slots: usize) -> Box<dyn Driver> {
         "native-bevy" => Box::new(NativeBevy::new(slots)),
         "core+bevy_ecs" => Box::new(Agnostic::<BevySide>::new(slots)),
         "core+hecs-tracked" => Box::new(Agnostic::<HecsTrackedSide>::new(slots)),
+        "core+hecs-logged" => Box::new(Agnostic::<HecsLoggedSide>::new(slots)),
         "core+hecs-diff" => Box::new(Agnostic::<HecsDiffSide>::new(slots)),
         _ => unreachable!(),
     }
@@ -34,10 +39,11 @@ fn main() {
         "native-bevy",
         "core+bevy_ecs",
         "core+hecs-tracked",
+        "core+hecs-logged",
         "core+hecs-diff",
     ];
     let sizes: &[(usize, usize, usize)] = if quick {
-        &[(1_000, 10, 100), (10_000, 10, 50)]
+        &[(10_000, 10, 300), (10_000, 1, 300)]
     } else {
         &[
             (1_000, 10, 600),
@@ -48,7 +54,13 @@ fn main() {
     };
     println!("size,move_pct,driver,update_median_us,update_p90_us,apply_median_us");
     for &(n, move_pct, ticks) in sizes {
-        let s = script(n, ticks + 20, move_pct, 1, 42);
+        let s = script(
+            n,
+            ticks + 20,
+            move_pct,
+            std::env::var("CHURN").map_or(1, |v| v.parse().unwrap()),
+            42,
+        );
         let mut med: Vec<Vec<Duration>> = vec![Vec::new(); names.len()];
         let mut p90: Vec<Vec<Duration>> = vec![Vec::new(); names.len()];
         let mut app: Vec<Vec<Duration>> = vec![Vec::new(); names.len()];
