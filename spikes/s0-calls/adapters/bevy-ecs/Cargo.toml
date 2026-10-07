@@ -1,0 +1,16 @@
+# Optional bevy_ecs adapter for the s0b spike (engine: `gsb-calls-bevy-ecs`).
+# Depends on the bevy_ecs crate only — never the Bevy engine.
+[package]
+name = "s0-calls-bevy-ecs"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+publish = false
+
+[dependencies]
+s0-calls = { path = "../.." }
+bevy_ecs = "0.19"
+
+[build-dependencies]
+gsb-lint = { path = "../../../../crates/gsb-lint" }

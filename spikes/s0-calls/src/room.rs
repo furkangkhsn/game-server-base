@@ -329,6 +329,8 @@ impl<L: RoomLogic> Room<L> {
                 }
                 Control::Leave { conn } => {
                     self.members.remove(conn);
+                    let conn = *conn;
+                    self.logic.with_calls(|calls, _| calls.unbind(conn));
                 }
             }
             self.logic.control(c, &mut self.ctx);

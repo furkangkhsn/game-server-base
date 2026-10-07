@@ -41,6 +41,7 @@ pub mod reason {
     pub const UNDECODABLE: &str = "undecodable request payload";
     pub const DUPLICATE: &str = "duplicate request id (the request is still in flight)";
     pub const MALFORMED: &str = "malformed request envelope (or correlation id = 0)";
+    pub const NOT_BOUND: &str = "session not bound to an owner";
     pub const UNTAKEN: &str = "request not handled this tick";
     pub const UNANSWERED: &str = "request taken but not answered";
     pub const REFUSED_FULL: &str = "service busy";

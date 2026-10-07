@@ -697,13 +697,29 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "s0-calls"
 version = "0.0.0"
 dependencies = [
- "bevy_ecs",
  "gsb-lint",
- "hecs",
  "prost",
  "s0-calls-macros",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "s0-calls-bevy-ecs"
+version = "0.0.0"
+dependencies = [
+ "bevy_ecs",
+ "gsb-lint",
+ "s0-calls",
+]
+
+[[package]]
+name = "s0-calls-hecs"
+version = "0.0.0"
+dependencies = [
+ "gsb-lint",
+ "hecs",
+ "s0-calls",
 ]
 
 [[package]]
@@ -714,6 +730,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "s0-calls-scenario"
+version = "0.0.0"
+dependencies = [
+ "bevy_ecs",
+ "gsb-lint",
+ "hecs",
+ "prost",
+ "s0-calls",
+ "s0-calls-bevy-ecs",
+ "s0-calls-hecs",
+ "tokio",
 ]
 
 [[package]]

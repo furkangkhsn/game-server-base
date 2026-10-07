@@ -32,6 +32,9 @@ use crate::wire::{RpcRequest, RpcResponse, reason};
 /// and still hand `reply` to `.answers(..)` (partial moves).
 pub struct Incoming<R> {
     pub body: R,
+    /// The owner the session was bound to (`calls.bind(conn, owner)` in
+    /// the join hook): the player's entity / id. No lookup needed.
+    pub owner: Owner,
     /// The verified identity of the sender (from the ticket, never from
     /// the payload).
     pub from: Identity,
@@ -131,6 +134,10 @@ pub struct Counters {
     pub requests_no_handler: u64,
     pub requests_undecodable: u64,
     pub requests_duplicate: u64,
+    /// A request from a session no owner is bound to (before the join
+    /// hook bound it, or after a leave/export unbound it): answered by
+    /// the engine, never shown to the game.
+    pub requests_unbound: u64,
     pub requests_forwarded: u64,
     pub requests_answered: u64,
     pub requests_untaken: u64,
@@ -165,7 +172,8 @@ impl Default for CallsConfig {
     }
 }
 
-type Decoder = fn(&[u8], ConnId, Identity, u64) -> Result<Box<dyn Any + Send + Sync>, DecodeError>;
+type Decoder =
+    fn(&[u8], ConnId, Identity, Owner, u64) -> Result<Box<dyn Any + Send + Sync>, DecodeError>;
 type ForwardFn =
     Arc<dyn Fn(&mut Calls, ConnId, &Identity, u64, &[u8]) -> Result<(), DecodeError> + Send + Sync>;
 type DeliverFn = fn(&mut Buckets, CallKey, Owner, Box<dyn Any + Send + Sync>, Erased);
@@ -234,6 +242,8 @@ struct Entry {
 /// questions for the cross-process form).
 pub struct Exported {
     calls: Vec<Entry>,
+    /// The sessions bound to the exported owner: rebound on import.
+    conns: Vec<ConnId>,
 }
 
 impl Exported {
@@ -251,10 +261,9 @@ impl Exported {
 
 /// The per-actor call table. See the module docs.
 ///
-/// A bevy `Resource` (in the engine: behind a `bevy` feature of the core
-/// crate — the adapter crate could not implement bevy's trait for a gsb
-/// type, the orphan rule).
-#[derive(bevy_ecs::prelude::Resource)]
+/// A plain struct: the core has no ECS dependency. bevy_ecs games use
+/// the adapter's `GsbCalls` newtype resource; hecs and ECS-free games
+/// pass `&mut Calls`.
 pub struct Calls {
     cfg: CallsConfig,
     seq: u64,
@@ -267,6 +276,7 @@ pub struct Calls {
     open: BTreeMap<u64, OpenReq>,
     live_ids: BTreeSet<(ConnId, u64)>,
     next_open: u64,
+    bound: BTreeMap<ConnId, Owner>,
     // Calls.
     drafts: Vec<Entry>,
     pending: BTreeMap<CallKey, Entry>,
@@ -300,6 +310,7 @@ impl Calls {
             open: BTreeMap::new(),
             live_ids: BTreeSet::new(),
             next_open: 0,
+            bound: BTreeMap::new(),
             drafts: Vec::new(),
             pending: BTreeMap::new(),
             in_flight_by: HashMap::new(),
@@ -370,6 +381,25 @@ impl Calls {
         });
         self.forwards.insert(R::OP, rule);
         Ok(())
+    }
+
+    // ---- sessions ----------------------------------------------------------
+
+    /// Bind a session to its owner, once, in the join hook. From then on
+    /// every `Incoming` from `conn` carries `owner`.
+    pub fn bind(&mut self, conn: ConnId, owner: Owner) {
+        self.bound.insert(conn, owner);
+    }
+
+    /// Forget a session's binding (the engine does this on leave; export
+    /// does it for the exported owner).
+    pub fn unbind(&mut self, conn: ConnId) {
+        self.bound.remove(&conn);
+    }
+
+    /// The owner a session is bound to.
+    pub fn bound(&self, conn: ConnId) -> Option<Owner> {
+        self.bound.get(&conn).copied()
     }
 
     // ---- requests ----------------------------------------------------------
@@ -499,13 +529,25 @@ impl Calls {
             }
         }
         self.counters.calls_exported += calls.len() as u64;
-        Exported { calls }
+        let conns: Vec<ConnId> = self
+            .bound
+            .iter()
+            .filter(|(_, o)| **o == owner)
+            .map(|(c, _)| *c)
+            .collect();
+        for c in &conns {
+            self.bound.remove(c);
+        }
+        Exported { calls, conns }
     }
 
     /// Take calls exported elsewhere, now owned by `owner`; each is
     /// re-issued at this tick's flush under its ORIGINAL key (the service
     /// dedupes by it: one effect).
     pub fn import(&mut self, exported: Exported, owner: Owner) {
+        for c in exported.conns {
+            self.bound.insert(c, owner);
+        }
         for mut e in exported.calls {
             e.owner = owner;
             e.sent = false;
@@ -662,9 +704,14 @@ impl Calls {
             self.reject(conn, req.id, req.op, reason::NO_HANDLER);
             return;
         };
+        let Some(owner) = self.bound.get(&conn).copied() else {
+            self.counters.requests_unbound += 1;
+            self.reject(conn, req.id, req.op, reason::NOT_BOUND);
+            return;
+        };
         self.next_open += 1;
         let open = self.next_open;
-        match decode(&req.payload, conn, from.clone(), open) {
+        match decode(&req.payload, conn, from.clone(), owner, open) {
             Ok(item) => {
                 let type_id = self.ops[&op].0;
                 self.open.insert(
@@ -972,11 +1019,13 @@ fn decode_incoming<R: Request>(
     bytes: &[u8],
     conn: ConnId,
     from: Identity,
+    owner: Owner,
     open: u64,
 ) -> Result<Box<dyn Any + Send + Sync>, DecodeError> {
     let body = R::from_wire(bytes)?;
     Ok(Box::new(Incoming::<R> {
         body,
+        owner,
         from,
         conn,
         reply: ReplyTo {
