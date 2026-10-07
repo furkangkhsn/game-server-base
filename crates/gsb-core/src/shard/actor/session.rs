@@ -96,6 +96,8 @@ where
         let moved_epoch = self.conn_epoch.remove(&old_conn);
         self.binding.remove(&old_conn);
         self.binding.insert(conn, player);
+        // The call table's explicit bind follows the session (B156).
+        self.calls.resume_session(old_conn, conn);
         self.conn_epoch
             .insert(conn, epoch.max(moved_epoch.unwrap_or(0)));
         self.logic

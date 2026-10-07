@@ -23,12 +23,15 @@ mod forward;
 mod idle;
 mod ordering;
 mod refusal;
+mod resume;
 mod transfer;
 
 const OP_SNAP: u16 = 0x7060;
 const OP_PRIV: u16 = 0x7061;
 /// Answered by `handle_request` (the migration path, untouched).
 const OP_LEGACY: u16 = 0x0002;
+/// Rejected by `handle_request` with an EMPTY reason (B163).
+const OP_LEGACY_REJECT: u16 = 0x0003;
 
 // ---- the wire contract (what `.proto` codegen would emit) -----------------
 
@@ -227,6 +230,12 @@ pub(super) struct Mode {
     pub owners_gone: bool,
     /// Take the requests through `take_incoming_all` (canonical order).
     pub take_all: bool,
+    /// Bind this session to this owner explicitly (`calls.bind`) at the
+    /// first systems run that sees the session's player (B156).
+    pub bind: Option<(u64, Owner)>,
+    /// Park a disconnected player (`Detach::Hold`) and resume it by its
+    /// identity.
+    pub hold: bool,
 }
 
 impl Default for Mode {
@@ -238,6 +247,8 @@ impl Default for Mode {
             unbound: false,
             owners_gone: false,
             take_all: false,
+            bind: None,
+            hold: false,
         }
     }
 }
@@ -251,6 +262,8 @@ pub(super) struct Game {
     /// Claim `Ping` too (and accept `TransferGold` a second time when set:
     /// the boot collision).
     pub boot_twice: bool,
+    /// The park ledger (`Mode::hold`): identity → player.
+    pub parked: BTreeMap<String, PlayerId>,
 }
 
 impl GameLogic<()> for Game {
@@ -321,7 +334,45 @@ impl GameLogic<()> for Game {
         _c: &TickCtx,
         req: &crate::rpc::RpcRequest,
     ) -> Option<crate::rpc::RequestDecision> {
-        (req.op == OP_LEGACY).then(|| crate::rpc::RequestDecision::Reply(b"legacy"[..].into()))
+        match req.op {
+            OP_LEGACY => Some(crate::rpc::RequestDecision::Reply(b"legacy"[..].into())),
+            OP_LEGACY_REJECT => Some(crate::rpc::RequestDecision::Reject(String::new())),
+            _ => None,
+        }
+    }
+
+    fn on_disconnect(
+        &mut self,
+        _w: &mut (),
+        player: PlayerId,
+        identity: &str,
+    ) -> crate::room::Detach {
+        if !self.mode.hold {
+            return crate::room::Detach::Despawn;
+        }
+        self.parked.insert(identity.to_owned(), player);
+        crate::room::Detach::Hold {
+            grace: Some(Duration::from_secs(60)),
+            to: crate::room::ExpireTo::Despawn,
+        }
+    }
+
+    fn resume_lookup(&self, _w: &(), identity: &str) -> crate::room::ResumeFound {
+        match self.parked.get(identity) {
+            Some(p) => crate::room::ResumeFound::Held(*p),
+            None => crate::room::ResumeFound::Never,
+        }
+    }
+
+    fn on_resume(
+        &mut self,
+        _w: &mut (),
+        identity: &str,
+        _conn: ConnectionId,
+        _player: PlayerId,
+        _entity: EntityId,
+    ) {
+        self.parked.remove(identity);
     }
 
     fn boot_calls(&mut self, calls: &mut Calls) -> Result<(), BootError> {
@@ -347,6 +398,13 @@ impl GameLogic<()> for Game {
     }
 
     fn update_with_calls(&mut self, _w: &mut (), _c: &TickCtx, calls: &mut Calls) {
+        // 0) The explicit bind, once (B156).
+        if let Some((conn, owner)) = self.mode.bind
+            && self.wallets.contains_key(&PlayerId(conn))
+        {
+            calls.bind(ConnectionId(conn), owner);
+            self.mode.bind = None;
+        }
         // 1) Results first: release the reserve, write the confirmed
         //    balance.
         if self.mode.take_resolved {
@@ -486,6 +544,7 @@ impl Rig {
             wallets: BTreeMap::new(),
             seen: tx,
             boot_twice: false,
+            parked: BTreeMap::new(),
         };
         Self {
             room: room_with(game, cfg.share),
@@ -683,6 +742,7 @@ fn an_op_claimed_twice_is_a_boot_error_and_the_first_claim_stays() {
         wallets: BTreeMap::new(),
         seen: tx,
         boot_twice: true,
+        parked: BTreeMap::new(),
     };
     let mut calls = Calls::default();
     let err = game.boot_calls(&mut calls).expect_err("collision");
@@ -710,4 +770,19 @@ fn an_unclaimed_op_still_reaches_handle_request() {
     assert_eq!(got[1].reason, crate::rpc::no_handler_reason(0x0999));
     assert_eq!(rig.room.m.requests_local, 1);
     assert_eq!(rig.room.m.requests_rejected_no_handler, 1);
+}
+
+/// B163: a legacy `Reject` with an empty reason reaches the client as an
+/// engine answer that says why, counted as a logic rejection.
+#[test]
+fn a_legacy_reject_without_a_reason_answers_the_engine_reason() {
+    let mut rig = Rig::new(RigCfg::default());
+    let mut a = rig.join(1, "alice");
+    a.raw(7, OP_LEGACY_REJECT, Vec::new());
+    rig.step();
+    let got = a.answers();
+    assert_eq!(got.len(), 1);
+    assert_eq!((got[0].id, got[0].ok, got[0].game_error), (7, false, false));
+    assert_eq!(got[0].reason, crate::rpc::REJECTED_REASON);
+    assert_eq!(rig.room.m.requests_rejected_logic, 1);
 }

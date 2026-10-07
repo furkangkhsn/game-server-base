@@ -2,7 +2,9 @@
 //! each phase (SERVICES.md §3):
 //!
 //! ```text
-//! CONTROL    drop_session (a session ended: unbind, abandon what it was owed)
+//! CONTROL    drop_session (a session ended: unbind, abandon what it was owed;
+//!            park_session/resume_session keep an explicit bind across a
+//!            detach-hold)
 //! RESPONSES  responses   (last FLUSH's refusals, the completion channel,
 //!                         the game calls' deadline sweep, the built-in
 //!                         External deadline sweep)
@@ -565,6 +567,15 @@ impl Calls {
     /// each counted once as `requests_abandoned`.
     pub(crate) fn drop_session(&mut self, conn: ConnectionId, m: &mut RoomCounters) {
         self.bound.remove(&conn);
+        self.park_session(conn, m);
+    }
+
+    /// A session parked (detach-hold): what it was owed is abandoned as
+    /// [`Self::drop_session`] abandons it, but its explicit binding
+    /// (`calls.bind`) stays with the parked row — a resume moves it onto
+    /// the new session ([`Self::resume_session`], BACKLOG B156); the
+    /// hold's end drops it with the row.
+    pub(crate) fn park_session(&mut self, conn: ConnectionId, m: &mut RoomCounters) {
         if self.owed(conn) == 0 && self.incoming.is_empty() {
             return;
         }
@@ -609,6 +620,15 @@ impl Calls {
         m.requests_abandoned += abandoned;
         self.live.retain(|(c, _)| *c != conn);
         self.owed.remove(&conn);
+    }
+
+    /// A parked session resumed through the fresh transport `new`: its
+    /// explicit binding moves with it (BACKLOG B156). Nothing else of the
+    /// old session survives the park.
+    pub(crate) fn resume_session(&mut self, old: ConnectionId, new: ConnectionId) {
+        if let Some(owner) = self.bound.remove(&old) {
+            self.bound.insert(new, owner);
+        }
     }
 
     /// The actor stops: every answer still owed is abandoned (counted as

@@ -132,6 +132,16 @@ impl<G> Parts<'_, G> {
         }
     }
 
+    /// A session parked (detach-hold): its answers go as on
+    /// [`Self::drop_session`], its explicit binding stays for the resume
+    /// (B156).
+    pub(crate) fn park_session(&mut self, conn: ConnectionId) {
+        self.calls.park_session(conn, self.m);
+        if let Some(owed) = self.queued.remove(&conn) {
+            self.m.requests_undelivered += owed.len() as u64;
+        }
+    }
+
     /// The storm bound (F14): whether a request from `conn` must be
     /// refused — not processed, not answered — because the connection is
     /// congested (its latest batch was dropped: `RoomConn.dropping`) and

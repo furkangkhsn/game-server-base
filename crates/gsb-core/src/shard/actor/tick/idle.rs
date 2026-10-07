@@ -68,7 +68,8 @@ where
                 // must not fire on top of a hold. Resume restarts it.
                 self.idle.stop(player);
                 self.paths.remove(player);
-                self.drop_conn_request_state(conn);
+                // An explicit `calls.bind` stays with the parked row (B156).
+                crate::room::parts!(self).park_session(conn);
                 debug!(
                     room = %self.config.id,
                     shard = self.index,

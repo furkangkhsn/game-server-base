@@ -132,8 +132,9 @@ where
                 // Today's leave semantics for in-flight work (§11 "RPC
                 // pending detach anında"): pending requests drop, late
                 // reports are silently discarded (structural already),
-                // queued answers for the dead session go.
-                self.drop_conn_request_state(conn);
+                // queued answers for the dead session go. An explicit
+                // `calls.bind` stays with the parked row (B156).
+                crate::room::parts!(self).park_session(conn);
                 debug!(
                     room = %self.config.id,
                     %conn,

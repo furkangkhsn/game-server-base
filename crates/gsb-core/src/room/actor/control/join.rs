@@ -217,6 +217,8 @@ where
             player,
             entity,
         });
+        // The call table's explicit bind follows the session (B156).
+        self.calls.resume_session(old_conn, conn);
         self.logic
             .on_resume(&mut self.world, &identity, conn, player, entity);
         let _ = reply.send(Ok((entity, act_tx)));
