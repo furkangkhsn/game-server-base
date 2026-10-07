@@ -131,11 +131,18 @@ fn a_recorded_resume_replays_the_bind_it_carried() {
     let live = owners(&live_seen);
     assert_eq!(live, [BOUND, BOUND]);
 
-    let log = Arc::new(InputLog::collect(&mut inbox).expect("the header arrived"));
-    let (tx, replay_seen) = smpsc::channel();
-    let mut replay = Replay::new(log, (), Box::new(game(tx)));
-    while replay.tick().is_some() {}
-    let report = replay.run();
-    assert_eq!(report.counts.replay_diverged, 0);
-    assert_eq!(owners(&replay_seen), live, "the bind replays");
+    let log = InputLog::collect(&mut inbox).expect("the header arrived");
+    // Through a file too: the two inputs encode and decode.
+    let path = std::env::temp_dir().join(format!("gsb-q5-{}-resume.log", std::process::id()));
+    crate::determinism::write_log(&path, &log, room.calls().codecs()).expect("written");
+    let read = crate::determinism::read_log(&path).expect("read");
+    let _ = std::fs::remove_file(&path);
+    for log in [Arc::new(log), Arc::new(read)] {
+        let (tx, replay_seen) = smpsc::channel();
+        let mut replay = Replay::new(log, (), Box::new(game(tx)));
+        while replay.tick().is_some() {}
+        let report = replay.run();
+        assert_eq!(report.counts.replay_diverged, 0);
+        assert_eq!(owners(&replay_seen), live, "the bind replays");
+    }
 }
