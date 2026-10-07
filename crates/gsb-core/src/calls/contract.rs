@@ -7,51 +7,9 @@ use std::sync::Arc;
 
 pub use crate::owner::Owner;
 
-/// The wire form of a client-facing message. Every `prost` message has
-/// it (a blanket impl); a game that wants another format implements it
-/// on its own types.
-pub trait WireMessage: Sized + Send + Sync + 'static {
-    /// Encode for the wire.
-    fn to_wire(&self) -> Vec<u8>;
-    /// Decode from the wire.
-    fn from_wire(bytes: &[u8]) -> Result<Self, DecodeError>;
-}
-
-/// A payload did not decode as the registered type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DecodeError;
-
-impl<T: prost::Message + Default + Send + Sync + 'static> WireMessage for T {
-    fn to_wire(&self) -> Vec<u8> {
-        self.encode_to_vec()
-    }
-    fn from_wire(bytes: &[u8]) -> Result<Self, DecodeError> {
-        T::decode(bytes).map_err(|_| DecodeError)
-    }
-}
-
-/// One in-process call: its answer type and its error type. No opcode,
-/// no wire. `#[gsb::service]` (q2) generates one per method; `.proto`
-/// codegen (Faz 3) one per `rpc`, together with [`Request`].
-///
-/// `Clone` (and `Clone` answers): the table keeps what it needs to
-/// re-issue a call after a migration and to copy an outcome into the
-/// input log (SERVICES.md §4.2, §19 S5).
-pub trait Call: Clone + Send + Sync + 'static {
-    /// The successful answer.
-    type Response: Clone + Send + Sync + 'static;
-    /// The service's own typed error.
-    type Error: Clone + Send + Sync + 'static;
-}
-
-/// A client-wire request: a [`Call`] whose request, answer and error all
-/// have a wire form, plus its opcode (the inner op of the `RpcRequest`
-/// envelope).
-pub trait Request: Call<Response: WireMessage, Error: WireMessage> + WireMessage {
-    /// The request's inner opcode. Never reused; a collision is a
-    /// [`BootError`](crate::calls::BootError).
-    const OP: u16;
-}
+// The request contract (`Call`, `Request`, `WireMessage`) lives in the
+// protocol crate, which the client shares; the core re-exports it.
+pub use gsb_protocol::request::{Call, DecodeError, Request, WireMessage};
 
 /// A verified identity (the ticket's player — the session's resume key).
 /// Never taken from a payload.

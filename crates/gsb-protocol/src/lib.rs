@@ -132,6 +132,7 @@ impl base::Error {
 
 #[cfg(test)]
 mod error_code;
+pub mod request;
 
 use std::any::Any;
 use std::collections::HashMap;
