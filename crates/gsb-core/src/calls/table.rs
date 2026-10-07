@@ -104,6 +104,16 @@ pub enum BootError {
         /// The type that claimed it second.
         second: &'static str,
     },
+    /// A request type claims an op in the engine's band (`op < 1000`,
+    /// `gsb_protocol::op::GAME_BAND_START`): the build refuses it for a
+    /// `.proto` request; this catches a hand-written `impl Request`
+    /// (B159).
+    EngineOp {
+        /// The opcode.
+        op: u16,
+        /// The type that claimed it.
+        ty: &'static str,
+    },
 }
 
 impl std::fmt::Display for BootError {
@@ -115,6 +125,11 @@ impl std::fmt::Display for BootError {
                     "request op {op:#06x} claimed by both {first} and {second}"
                 )
             }
+            BootError::EngineOp { op, ty } => write!(
+                f,
+                "request op {op} of {ty} is in the engine band (< {})",
+                gsb_protocol::op::GAME_BAND_START
+            ),
         }
     }
 }
@@ -382,6 +397,12 @@ impl Calls {
 
     fn claim_op<R: Request>(&mut self) -> Result<(), BootError> {
         let name = std::any::type_name::<R>();
+        if R::OP < gsb_protocol::op::GAME_BAND_START {
+            return Err(BootError::EngineOp {
+                op: R::OP,
+                ty: name,
+            });
+        }
         if let Some(first) = self.ops.get(&R::OP) {
             return Err(BootError::OpCollision {
                 op: R::OP,

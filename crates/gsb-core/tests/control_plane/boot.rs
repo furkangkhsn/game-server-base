@@ -15,17 +15,17 @@ impl Call for First {
     type Error = First;
 }
 impl Request for First {
-    const OP: u16 = 900;
+    const OP: u16 = 1900;
 }
 impl Call for Second {
     type Response = Second;
     type Error = Second;
 }
 impl Request for Second {
-    const OP: u16 = 900;
+    const OP: u16 = 1900;
 }
 
-/// [`ResultLogic`] whose boot claims op 900 twice when `collide`.
+/// [`ResultLogic`] whose boot claims op 1900 twice when `collide`.
 struct Booting {
     inner: ResultLogic,
     collide: bool,
@@ -89,7 +89,7 @@ async fn a_room_whose_call_table_does_not_boot_is_refused_at_create() {
     match create(&tx, RoomId(1)).await {
         Err(CoreError::RoomBoot { room, error }) => {
             assert_eq!(room, 1);
-            assert!(matches!(error, BootError::OpCollision { op: 900, .. }));
+            assert!(matches!(error, BootError::OpCollision { op: 1900, .. }));
         }
         other => panic!("expected RoomBoot, got {other:?}"),
     }

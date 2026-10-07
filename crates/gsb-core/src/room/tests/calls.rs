@@ -686,7 +686,9 @@ fn an_op_claimed_twice_is_a_boot_error_and_the_first_claim_stays() {
     };
     let mut calls = Calls::default();
     let err = game.boot_calls(&mut calls).expect_err("collision");
-    let BootError::OpCollision { op, first, second } = err;
+    let BootError::OpCollision { op, first, second } = err else {
+        panic!("expected a collision: {err:?}")
+    };
     assert_eq!(op, 1001);
     assert!(first.ends_with("TransferGold") && second.ends_with("TransferGold"));
     assert!(calls.handles(1001));

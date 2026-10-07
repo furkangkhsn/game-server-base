@@ -299,8 +299,10 @@ fn a_second_claim_of_an_op_is_a_boot_error() {
     }
     let mut calls = Calls::default();
     calls.accept::<AbilityUse>().expect("first claim");
-    let BootError::OpCollision { op, first, second } =
-        calls.accept::<Impostor>().expect_err("collision");
+    let err = calls.accept::<Impostor>().expect_err("collision");
+    let BootError::OpCollision { op, first, second } = err else {
+        panic!("expected a collision: {err:?}")
+    };
     assert_eq!(op, gsb_demo::op::ABILITY);
     assert!(first.ends_with("AbilityUse") && second.ends_with("Impostor"));
 }

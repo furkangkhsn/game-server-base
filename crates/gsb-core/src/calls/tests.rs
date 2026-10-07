@@ -30,7 +30,7 @@ impl Call for Pay {
     type Error = Nope;
 }
 impl Request for Pay {
-    const OP: u16 = 1;
+    const OP: u16 = 1001;
 }
 
 /// The bank's call.
@@ -322,4 +322,43 @@ fn without_a_deadline_a_call_waits_for_its_answer() {
     t.responses(crate::ticker::now(), &alive, &mut m);
     assert_eq!(t.take_resolved::<Charge, ()>().len(), 1);
     assert_eq!(t.counts().results_timed_out, 0);
+}
+
+/// A hand-written request in the engine's op band (`op < 1000`) is a
+/// boot error (B159): the build refuses it for `.proto` requests, the
+/// table for the rest — accepted or forwarded alike.
+#[test]
+fn a_request_in_the_engine_band_is_a_boot_error() {
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct Low {}
+    impl Call for Low {
+        type Response = Low;
+        type Error = Low;
+    }
+    impl Request for Low {
+        const OP: u16 = 999;
+    }
+    let mut t = Calls::default();
+    let err = t.accept::<Low>().expect_err("engine band");
+    assert!(
+        matches!(err, BootError::EngineOp { op: 999, .. }),
+        "{err:?}"
+    );
+    assert!(!t.handles(999));
+    #[derive(Clone, Debug)]
+    struct Echo;
+    impl Call for Echo {
+        type Response = Low;
+        type Error = Low;
+    }
+    #[allow(dead_code)] // never sent: the rule is refused at boot
+    enum EchoMsg {
+        Echo(Ask<Echo>),
+    }
+    let (echo, _inbox) = Route::<EchoMsg>::new("echo", 1);
+    let err = t
+        .forward(move |_: Low| CallSpec::new(&echo, Echo, EchoMsg::Echo))
+        .expect_err("engine band");
+    assert!(matches!(err, BootError::EngineOp { op: 999, .. }));
+    assert!(!t.handles(999));
 }
