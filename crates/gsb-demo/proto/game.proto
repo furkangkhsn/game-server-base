@@ -157,14 +157,21 @@ message DemoError {
 // message's own name (protoc resolves `rpc AbilityUse(AbilityUse)`'s
 // argument to the rpc itself). 1001/1002 are the retired frame opcodes
 // (`gsb_demo::op::RETIRED`): the demo's ops share one numbering, so
-// they stay out of the request ops too. `ECONOMY` (1006, `BuyItem`) is
-// not declared here yet: it still answers through `handle_request`'s
-// External path and moves with the economy service's migration.
+// they stay out of the request ops too. `ECONOMY` (1006, `Buy`) is
+// declared (its op is claimed and typed), but the demo rooms still answer
+// it through `handle_request`'s External path: its refusals ride
+// `ok = false` with the reason text — the bytes the demo's wire contract
+// locks — and the economy service (`gsb_demo::economy`, a
+// `#[gsb_core::service]` trait) is reached through its awaitable client.
 service DemoRequests {
   option (gsb.reserved_op) = 1001;
   option (gsb.reserved_op) = 1002;
   rpc Ability(AbilityUse) returns (AbilityResult) {
     option (gsb.op) = 1005;
+    option (gsb.error) = "DemoError";
+  }
+  rpc Buy(BuyItem) returns (BuyResult) {
+    option (gsb.op) = 1006;
     option (gsb.error) = "DemoError";
   }
 }
