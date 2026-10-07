@@ -217,7 +217,14 @@ async fn the_default_deadline_ends_a_call_that_never_answers() {
     let (route, _stop) = spawn(Bank::serve(Vault::default()), |s| s);
     let h = BankHandle::from_route(route.clone());
     let started = tokio::time::Instant::now();
-    assert_eq!(h.hang().await, Err(CallError::TimedOut));
+    // Bounded on the (paused) clock: a host that lost its deadline fails
+    // here instead of hanging the test run.
+    let ended = tokio::time::timeout(DEFAULT_SERVICE_TIMEOUT * 2, h.hang()).await;
+    assert_eq!(
+        ended,
+        Ok(Err(CallError::TimedOut)),
+        "the host's default deadline must end the call"
+    );
     assert!(started.elapsed() >= DEFAULT_SERVICE_TIMEOUT);
     assert_eq!(route.stats().calls_timed_out.load(Ordering::Relaxed), 1);
 }
