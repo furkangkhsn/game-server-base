@@ -846,6 +846,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gsb-build"
+version = "0.1.0"
+dependencies = [
+ "gsb-lint",
+ "gsb-protocol",
+ "heck",
+ "prost",
+ "prost-build",
+ "protoc-bin-vendored",
+]
+
+[[package]]
 name = "gsb-client"
 version = "0.1.0"
 dependencies = [

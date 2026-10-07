@@ -3,11 +3,25 @@ fn main() {
     gsb_lint::check(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
     let proto_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/proto");
     let mut cfg = prost_build::Config::new();
+    let mut includes = vec![std::path::PathBuf::from(proto_dir)];
     if let Some(protoc) = vendored_protoc() {
         cfg.protoc_executable(protoc);
+        // `gsb/options.proto` imports `google/protobuf/descriptor.proto`.
+        if let Ok(inc) = protoc_bin_vendored::include_path() {
+            includes.push(inc);
+        }
     }
-    cfg.compile_protos(&[format!("{proto_dir}/base.proto")], &[proto_dir])
-        .expect("prost codegen failed (using vendored protoc)");
+    // `gsb/options.proto` (round q3) defines options only — no Rust is
+    // generated for it; compiling it here is the check that it parses
+    // with the protoc every game build uses.
+    cfg.compile_protos(
+        &[
+            format!("{proto_dir}/base.proto"),
+            format!("{proto_dir}/gsb/options.proto"),
+        ],
+        &includes,
+    )
+    .expect("prost codegen failed (using vendored protoc)");
     // Publish the proto directory to DIRECT dependents (via the `links`
     // key, see Cargo.toml) as `DEP_GSB_BASE_PROTO_DIR`: a game protocol
     // imports `base.proto` for `gsb.base.RpcResponse`, and its build
@@ -15,6 +29,7 @@ fn main() {
     // `../gsb-protocol/proto` would only work inside this workspace.
     println!("cargo:dir={proto_dir}");
     println!("cargo:rerun-if-changed=proto/base.proto");
+    println!("cargo:rerun-if-changed=proto/gsb/options.proto");
 }
 
 /// The vendored `protoc`, so the build needs NO system protoc and no

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/gsb-lint",
     "crates/gsb-protocol",
+    "crates/gsb-build",
     "crates/gsb-ecs",
     "crates/gsb-core",
     "crates/gsb-net",
@@ -35,6 +36,7 @@ rust-version = "1.95.0"
 # internal crates
 gsb-lint = { path = "crates/gsb-lint" }
 gsb-protocol = { path = "crates/gsb-protocol" }
+gsb-build = { path = "crates/gsb-build" }
 gsb-ecs = { path = "crates/gsb-ecs" }
 # No default features here: a dependent turns on the export features it
 # serves (gsb-server's `prometheus`, `otlp`), so a build without them
@@ -95,6 +97,9 @@ bevy_ecs = "0.19"
 prost = "0.14"
 prost-build = "0.14"
 protoc-bin-vendored = "3"
+# gsb-build: the same case conversion prost-build applies to type names
+# (already in the lock through prost-build).
+heck = "0.5"
 bytes = "1"
 
 # QUIC transport (Tur: DISTRIBUTED/ROADMAP quinn round)

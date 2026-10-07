@@ -1,0 +1,26 @@
+[package]
+name = "gsb-build"
+description = "Build-script helper for gsb games: prost-build plus the request codegen of `gsb/options.proto` (impl Call + Request per rpc, op checks)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+# Pure Rust over prost-build: no protoc plugin binary, no new system
+# requirement — the vendored protoc every gsb crate already builds with.
+[dependencies]
+prost = { workspace = true }
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+heck = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[dev-dependencies]
+# Only to pin the game band's start against the protocol's own constant.
+gsb-protocol = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,47 @@
+// gsb's custom protobuf options: how a game's `.proto` declares its
+// client-wire REQUESTS (docs/SERVICES.md §4.2, §11, §16; round q3).
+//
+//   import "gsb/options.proto";
+//
+//   service Game {
+//     option (gsb.reserved_op) = 1002;   // a retired request op: never reused
+//     rpc TransferGold(TransferGold) returns (TransferDone) {
+//       option (gsb.op) = 1001;           // the inner op (RpcRequest.op)
+//       option (gsb.error) = "GameError"; // the typed error message
+//     }
+//   }
+//
+// `gsb-build` (a build-script helper over prost-build) reads them and
+// writes, per rpc, `impl Call` + `impl Request` for the request message
+// (`OP`, `Response`, `Error`), refusing at build time: a duplicate op, an
+// op below the game band (the engine's range, < 1000), an op listed as
+// reserved, an rpc without `(gsb.error)`, a streaming rpc, one request
+// message behind two rpcs. This file defines OPTIONS ONLY — no message,
+// nothing on the wire; it ships with gsb-protocol beside `base.proto`
+// (the same `DEP_GSB_BASE_PROTO_DIR` include, via the crate's `links`
+// key), so a game's build script finds it wherever gsb-protocol comes
+// from.
+//
+// Numbers 50001..50003 are in protobuf's "in-house use" extension range
+// (50000-99999). Like field numbers they are frozen once shipped.
+syntax = "proto3";
+
+package gsb;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MethodOptions {
+  // The request's inner opcode (game band: 1000..=65535).
+  uint32 op = 50001;
+  // The name of the request's typed error message: a message of the
+  // same package (`"GameError"`), or a fully qualified one
+  // (`".shared.GameError"`).
+  string error = 50002;
+}
+
+extend google.protobuf.ServiceOptions {
+  // An op this game used and retired: `gsb-build` refuses any rpc that
+  // takes it again (the `reserved` keyword of the op space). Repeat the
+  // option once per op. Checked across every service of the build.
+  repeated uint32 reserved_op = 50003;
+}

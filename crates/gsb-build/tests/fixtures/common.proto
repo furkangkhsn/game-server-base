@@ -1,0 +1,3 @@
+syntax = "proto3";
+package fixture.common;
+message SharedError { uint32 code = 1; }

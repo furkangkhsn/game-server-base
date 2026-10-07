@@ -1,0 +1,7 @@
+syntax = "proto3";
+package fixture.bad;
+import "gsb/options.proto";
+message A { } message B { } message E { }
+service S {
+  rpc One(stream A) returns (B) { option (gsb.op) = 1001; option (gsb.error) = "E"; }
+}
