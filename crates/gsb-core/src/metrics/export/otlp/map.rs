@@ -89,6 +89,7 @@ pub fn request(
             at,
         ));
     }
+    services(&mut m, &report.services, at);
 
     let rooms = &report.rooms;
     if !rooms.is_empty() {
@@ -146,6 +147,45 @@ pub fn request(
             }],
             schema_url: String::new(),
         }],
+    }
+}
+
+/// The service-scoped families (B164), as the exposition has them: only
+/// when services report; the service (and the method) as attributes.
+fn services(m: &mut Vec<proto::Metric>, services: &[ServiceReport], at: Stamp) {
+    if services.is_empty() {
+        return;
+    }
+    for f in &families::SERVICE {
+        let points = services.iter().map(|s| {
+            int_point(
+                vec![attr("service", &s.service)],
+                (f.get)(&s.counts),
+                at,
+                true,
+            )
+        });
+        m.push(sum(f.name, f.help, points.collect()));
+    }
+    for f in &families::METHOD {
+        let (get, counter) = match f.value {
+            families::MethodValue::Counter(get) => (get, true),
+            families::MethodValue::Gauge(get) => (get, false),
+        };
+        let points: Vec<_> = services
+            .iter()
+            .flat_map(|s| {
+                s.methods.iter().map(move |mt| {
+                    let attrs = vec![attr("service", &s.service), attr("method", &mt.method)];
+                    int_point(attrs, get(mt), at, counter)
+                })
+            })
+            .collect();
+        m.push(if counter {
+            sum(f.name, f.help, points)
+        } else {
+            gauge(f.name, f.help, points)
+        });
     }
 }
 

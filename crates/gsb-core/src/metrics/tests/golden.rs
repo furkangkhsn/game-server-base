@@ -133,6 +133,13 @@
 //! non-zero on room 7). Round q4's four determinism counters
 //! (`replay_diverged`, `replay_undecodable`, `records_written`,
 //! `records_dropped`) after them, on the line and as families.
+//! Round q6's service scope (B164): a `scope=service` line per hosted
+//! service and a `scope=service_method` line per method after the
+//! transport line, and the seven `gsb_service_*_total` families (label
+//! `service`) plus three per-method ones (`service`, `method`) after the
+//! transport families; and the deliberate HELP change of
+//! `gsb_room_replay_diverged_total` (a replay's CONTROL answer — a
+//! join's admission, a hold's release — that differs counts too, B175).
 
 use super::*;
 use crate::conn::ServerClose;
@@ -141,7 +148,7 @@ use crate::conn::ServerClose;
 /// two rooms (the first sampled twice, so its rates are real numbers),
 /// connection traffic, one server close and one flooder.
 pub(super) fn golden_report() -> MetricReport {
-    let mut acc = MetricAccumulator::default();
+    let mut acc = MetricAccumulator::default().with_services(golden_services());
     let t0 = Instant::now();
     acc.apply(MetricsEvent::Registry(RegistrySample {
         rooms: 2,
@@ -338,6 +345,52 @@ pub(super) fn golden_report() -> MetricReport {
         .event(),
     );
     acc.report(t1)
+}
+
+/// B164's services: a generated one with two methods (one never
+/// called) and every counter distinct, and a hand-written one (no
+/// methods) — the `scope=service` / `scope=service_method` lines and the
+/// `gsb_service_*` families.
+fn golden_services() -> Vec<(&'static str, std::sync::Arc<crate::calls::ServiceStats>)> {
+    use crate::calls::{MethodStats, ServiceStats};
+    use std::sync::atomic::Ordering::Relaxed;
+    let economy = ServiceStats {
+        methods: vec![
+            MethodStats {
+                name: "buy",
+                ..Default::default()
+            },
+            MethodStats {
+                name: "refund",
+                ..Default::default()
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    for (i, c) in [
+        &economy.calls_received,
+        &economy.calls_timed_out,
+        &economy.calls_shed,
+        &economy.calls_failed,
+        &economy.calls_abandoned,
+        &economy.replies_undeliverable_full,
+        &economy.replies_undeliverable_gone,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        c.store(20 - i as u64, Relaxed);
+    }
+    economy.methods[0].calls.store(14, Relaxed);
+    economy.methods[0].latency_us_total.store(7_000, Relaxed);
+    economy.methods[0].latency_us_max.store(1_200, Relaxed);
+    let bank = ServiceStats::default();
+    bank.calls_received.store(3, Relaxed);
+    vec![
+        ("Economy", std::sync::Arc::new(economy)),
+        ("bank", std::sync::Arc::new(bank)),
+    ]
 }
 
 /// B21's ticket counts: two accepted, an expired and a game refusal

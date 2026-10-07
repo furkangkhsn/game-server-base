@@ -5,6 +5,10 @@ gsb-metric scope=net bytes_in=410 bytes_out_room=17700 bytes_out_control=60 byte
 gsb-metric scope=tickets accepted=2 rejected=2 reject_missing=0 reject_malformed=0 reject_unknown_key=0 reject_signature=0 reject_claims=0 reject_expired=1 reject_not_yet_valid=0 reject_lifetime=0 reject_audience=0 reject_replayed=0 reject_replay_unavailable=0 reject_game=1 reject_other=0 reject_timed_out=0 reject_validator_lost=0 game_season_pass=1
 gsb-metric scope=net actions_dropped_top=c1:5
 gsb-metric scope=transport udp_requests_dropped_full=11 udp_actions_dropped_full=2 udp_control_frames_dropped_full=3 udp_acks_not_forwarded=4 udp_datagrams_oversized=5 udp_datagrams_malformed=6 udp_bad_cookies=7 udp_frags_refused=8 udp_sessions_dropped_accept_full=9 udp_frames_dropped_oversized=10 udp_control_frames_abandoned=11 udp_frames_drained=12 ws_close_frames_dropped=13 ws_pongs_dropped=14 handshakes_refused=15 handshakes_timed_out=16 handshakes_failed=17 metrics_dropped=18 stream_frames_unwritten=19 stream_batches_unwritten=20 stream_requests_dropped_closed=21 stream_actions_dropped_closed=22 stream_control_frames_dropped_closed=23 ws_control_frames_unwritten=24 ws_frames_dropped_after_close=25 udp_game_datagrams_send_failed=26 udp_control_datagrams_send_failed=27 udp_acks_send_failed=28 udp_challenges_send_failed=29 udp_requests_dropped_closed=30 udp_actions_dropped_closed=31 udp_control_frames_dropped_closed=32 udp_datagrams_no_session=33 udp_frames_unsent=34 writer_verdicts_deferred=35 handshakes_cut_closed=36 handshakes_unaccepted_closed=37 udp_sessions_dropped_accept_gone=38 udp_sessions_unaccepted_closed=39 ws_teardown_closes_unsent_closed=40 ws_teardown_closes_unsent_stalled=41 ws_close_frames_dropped_closed=42 ws_pongs_dropped_closed=43 udp_control_retransmits_timeout=44 handshakes_refused_per_source=45 handshakes_retried_per_source=46 ops_http_conns_refused=47 ops_http_writes_timed_out=48 udp_datagrams_dropped_kernel=49 udp_game_announces_received=50 udp_game_probes_sent=51 udp_game_probes_send_failed=52 udp_game_probes_unanswered=53 udp_game_reports_received=54 udp_game_reports_late=55 udp_game_reports_invalid=56 udp_game_reports_clamped=57 udp_game_reports_not_forwarded=58 udp_game_datagrams_reported_sent=59 udp_game_datagrams_reported_lost=60 udp_game_rtt_samples=61 udp_game_rtt_sum_us=62 udp_game_probes_open_at_end=63 ops_http_routes_timed_out=64 idle_windows_restarted_late=65 udp_game_frames_queued_paced=66 udp_game_frames_dropped_paced=67 udp_game_frames_unsent_paced=68 udp_game_paced_episodes=69 udp_game_paced_rate_cuts=70 udp_cids_assigned=71 udp_entropy_draws_failed=72 udp_cid_unknown=73 udp_path_validations_started=74 udp_path_challenges_sent=75 udp_path_challenges_send_failed=76 udp_path_amplification_capped=77 udp_path_address_in_use=78 udp_path_responses_unmatched=79 udp_path_changes_not_forwarded=80 udp_path_validations_timed_out=81 udp_path_validations_superseded=82 udp_path_validations_open_at_end=83 udp_migrations=84 udp_migrations_port_only=85 udp_proofs_refused_per_source=86 udp_pending_source_moves_kept=87 udp_proofs_refused_budget=88 udp_proofs_refused_plaintext=89 udp_handshakes_malformed=90 udp_handshakes_failed_decrypt=91 udp_handshakes_failed_internal=92 udp_datagrams_unsealed=93 seal_integrity_limit=94 seal_malformed=95 seal_too_old=96 seal_replayed=97 seal_wrong_phase=98 seal_forged=99 udp_sessions_ended_seal_limit=100 udp_path_candidates_not_newest=101 udp_acks_not_queued=102 udp_path_challenges_not_queued=103 udp_rekeys=104 udp_rekeys_unconfirmed=105 udp_stateless_resets_sent=106 udp_stateless_resets_rate_limited=107 udp_stateless_resets_send_failed=108 udp_game_paced_drains=109
+gsb-metric scope=service name=Economy calls_received=20 calls_timed_out=19 calls_shed=18 calls_failed=17 calls_abandoned=16 replies_undeliverable_full=15 replies_undeliverable_gone=14
+gsb-metric scope=service_method service=Economy method=buy calls=14 latency_us_total=7000 latency_us_mean=500.0 latency_us_max=1200
+gsb-metric scope=service_method service=Economy method=refund calls=0 latency_us_total=0 latency_us_mean=0.0 latency_us_max=0
+gsb-metric scope=service name=bank calls_received=3 calls_timed_out=0 calls_shed=0 calls_failed=0 calls_abandoned=0 replies_undeliverable_full=0 replies_undeliverable_gone=0
 
 # HELP gsb_metrics_dropped_total Metric samples dropped on the bounded metrics channel across all producers.
 # TYPE gsb_metrics_dropped_total counter
@@ -523,6 +527,46 @@ gsb_transport_udp_stateless_resets_send_failed_total 108
 # HELP gsb_transport_udp_game_paced_drains_total Drains of paced rUDP sessions: no round trip near the path's base delay for 10 s, so half the rate for one report (frames it drops count as dropped_paced), cumulative.
 # TYPE gsb_transport_udp_game_paced_drains_total counter
 gsb_transport_udp_game_paced_drains_total 109
+# HELP gsb_service_calls_received_total Calls the service took out of its mailbox, cumulative.
+# TYPE gsb_service_calls_received_total counter
+gsb_service_calls_received_total{service="Economy"} 20
+gsb_service_calls_received_total{service="bank"} 3
+# HELP gsb_service_calls_timed_out_total Calls the service host's timeout ended (the caller got TimedOut), cumulative.
+# TYPE gsb_service_calls_timed_out_total counter
+gsb_service_calls_timed_out_total{service="Economy"} 19
+gsb_service_calls_timed_out_total{service="bank"} 0
+# HELP gsb_service_calls_shed_total Calls the service host's load-shedding layer refused (the caller got Refused(Shed)), cumulative.
+# TYPE gsb_service_calls_shed_total counter
+gsb_service_calls_shed_total{service="Economy"} 18
+gsb_service_calls_shed_total{service="bank"} 0
+# HELP gsb_service_calls_failed_total Calls another layer of the service host's stack failed (the caller got Abandoned), cumulative.
+# TYPE gsb_service_calls_failed_total counter
+gsb_service_calls_failed_total{service="Economy"} 17
+gsb_service_calls_failed_total{service="bank"} 0
+# HELP gsb_service_calls_abandoned_total Calls whose service task ended without answering (a panic in the service; the caller got Abandoned), cumulative.
+# TYPE gsb_service_calls_abandoned_total counter
+gsb_service_calls_abandoned_total{service="Economy"} 16
+gsb_service_calls_abandoned_total{service="bank"} 0
+# HELP gsb_service_replies_undeliverable_full_total Service answers the caller's full completion channel refused (lost), cumulative.
+# TYPE gsb_service_replies_undeliverable_full_total counter
+gsb_service_replies_undeliverable_full_total{service="Economy"} 15
+gsb_service_replies_undeliverable_full_total{service="bank"} 0
+# HELP gsb_service_replies_undeliverable_gone_total Service answers whose caller was gone (its call table dropped, or an awaiting handle stopped waiting; lost), cumulative.
+# TYPE gsb_service_replies_undeliverable_gone_total counter
+gsb_service_replies_undeliverable_gone_total{service="Economy"} 14
+gsb_service_replies_undeliverable_gone_total{service="bank"} 0
+# HELP gsb_service_method_calls_total Calls of the service method that finished (every ending), cumulative.
+# TYPE gsb_service_method_calls_total counter
+gsb_service_method_calls_total{service="Economy",method="buy"} 14
+gsb_service_method_calls_total{service="Economy",method="refund"} 0
+# HELP gsb_service_method_latency_us_total Summed service-side latency of the method's finished calls (mailbox take to answer), microseconds, cumulative (divide by gsb_service_method_calls_total for the mean).
+# TYPE gsb_service_method_latency_us_total counter
+gsb_service_method_latency_us_total{service="Economy",method="buy"} 7000
+gsb_service_method_latency_us_total{service="Economy",method="refund"} 0
+# HELP gsb_service_method_latency_us_max The largest service-side latency of one of the method's calls, microseconds, since startup.
+# TYPE gsb_service_method_latency_us_max gauge
+gsb_service_method_latency_us_max{service="Economy",method="buy"} 1200
+gsb_service_method_latency_us_max{service="Economy",method="refund"} 0
 # HELP gsb_room_hz Measured room step rate (Δsteps/s over the last sample interval).
 # TYPE gsb_room_hz gauge
 gsb_room_hz{room="r1"} 30
@@ -981,7 +1025,7 @@ gsb_room_requests_unanswered_total{room="r7"} 0
 # TYPE gsb_room_requests_replied_late_total counter
 gsb_room_requests_replied_late_total{room="r1"} 0
 gsb_room_requests_replied_late_total{room="r7"} 0
-# HELP gsb_room_replay_diverged_total Recorded endings a replay could not apply because no call of their type waited under their key, cumulative.
+# HELP gsb_room_replay_diverged_total Replay divergences: recorded endings no call of their type waited for under their key (not applied), and recorded CONTROL answers (a join's admission, a hold's release) the replay's logic answered differently, cumulative.
 # TYPE gsb_room_replay_diverged_total counter
 gsb_room_replay_diverged_total{room="r1"} 0
 gsb_room_replay_diverged_total{room="r7"} 1

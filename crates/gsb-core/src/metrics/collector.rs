@@ -132,6 +132,17 @@ impl MetricsCollector {
         self
     }
 
+    /// Read these services' stats into every report (B164; see
+    /// [`MetricAccumulator::with_services`]): the server hands it the
+    /// services its game hosts.
+    pub fn with_services(
+        mut self,
+        services: Vec<(&'static str, std::sync::Arc<crate::calls::ServiceStats>)>,
+    ) -> Self {
+        self.acc = std::mem::take(&mut self.acc).with_services(services);
+        self
+    }
+
     /// Hand every report to `exporters` as well (in this order, before
     /// the sink). The collector stays the one place export happens; an
     /// exporter only ever sees the folded report (see [`Exporter`]).

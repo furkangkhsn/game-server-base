@@ -358,6 +358,36 @@ gsb_transport_udp_stateless_resets_send_failed sum t=2 mono=true unit="" n=1 | r
   [] 1000..2000 int 108
 gsb_transport_udp_game_paced_drains sum t=2 mono=true unit="" n=1 | Drains of paced rUDP sessions: no round trip near the path's base delay for 10 s, so half the rate for one report (frames it drops count as dropped_paced), cumulative.
   [] 1000..2000 int 109
+gsb_service_calls_received sum t=2 mono=true unit="" n=2 | Calls the service took out of its mailbox, cumulative.
+  [service=Economy] 1000..2000 int 20
+  [service=bank] 1000..2000 int 3
+gsb_service_calls_timed_out sum t=2 mono=true unit="" n=2 | Calls the service host's timeout ended (the caller got TimedOut), cumulative.
+  [service=Economy] 1000..2000 int 19
+  [service=bank] 1000..2000 int 0
+gsb_service_calls_shed sum t=2 mono=true unit="" n=2 | Calls the service host's load-shedding layer refused (the caller got Refused(Shed)), cumulative.
+  [service=Economy] 1000..2000 int 18
+  [service=bank] 1000..2000 int 0
+gsb_service_calls_failed sum t=2 mono=true unit="" n=2 | Calls another layer of the service host's stack failed (the caller got Abandoned), cumulative.
+  [service=Economy] 1000..2000 int 17
+  [service=bank] 1000..2000 int 0
+gsb_service_calls_abandoned sum t=2 mono=true unit="" n=2 | Calls whose service task ended without answering (a panic in the service; the caller got Abandoned), cumulative.
+  [service=Economy] 1000..2000 int 16
+  [service=bank] 1000..2000 int 0
+gsb_service_replies_undeliverable_full sum t=2 mono=true unit="" n=2 | Service answers the caller's full completion channel refused (lost), cumulative.
+  [service=Economy] 1000..2000 int 15
+  [service=bank] 1000..2000 int 0
+gsb_service_replies_undeliverable_gone sum t=2 mono=true unit="" n=2 | Service answers whose caller was gone (its call table dropped, or an awaiting handle stopped waiting; lost), cumulative.
+  [service=Economy] 1000..2000 int 14
+  [service=bank] 1000..2000 int 0
+gsb_service_method_calls sum t=2 mono=true unit="" n=2 | Calls of the service method that finished (every ending), cumulative.
+  [service=Economy,method=buy] 1000..2000 int 14
+  [service=Economy,method=refund] 1000..2000 int 0
+gsb_service_method_latency_us sum t=2 mono=true unit="" n=2 | Summed service-side latency of the method's finished calls (mailbox take to answer), microseconds, cumulative (divide by gsb_service_method_calls_total for the mean).
+  [service=Economy,method=buy] 1000..2000 int 7000
+  [service=Economy,method=refund] 1000..2000 int 0
+gsb_service_method_latency_us_max gauge unit="" n=2 | The largest service-side latency of one of the method's calls, microseconds, since startup.
+  [service=Economy,method=buy] 0..2000 int 1200
+  [service=Economy,method=refund] 0..2000 int 0
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0
@@ -679,7 +709,7 @@ gsb_room_requests_unanswered sum t=2 mono=true unit="" n=2 | Requests taken from
 gsb_room_requests_replied_late sum t=2 mono=true unit="" n=2 | Replies to a request the engine had already closed, ignored, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
-gsb_room_replay_diverged sum t=2 mono=true unit="" n=2 | Recorded endings a replay could not apply because no call of their type waited under their key, cumulative.
+gsb_room_replay_diverged sum t=2 mono=true unit="" n=2 | Replay divergences: recorded endings no call of their type waited for under their key (not applied), and recorded CONTROL answers (a join's admission, a hold's release) the replay's logic answered differently, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 1
 gsb_room_replay_undecodable sum t=2 mono=true unit="" n=2 | Recorded outcomes a replay could not decode, not applied, cumulative.

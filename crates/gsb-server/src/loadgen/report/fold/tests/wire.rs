@@ -552,3 +552,46 @@ fn the_call_counts_survive_the_wire_and_fold_as_sums() {
     assert_eq!(folded.calls.calls_issued, 3 + 40 + 6, "summed over rows");
     assert_eq!(folded.calls.responses_unhandled, 54 + 2);
 }
+
+/// The hosted services' counters (B164) cross the wire after the
+/// transport section: every service in order, every counter in its slot,
+/// every method with its name and latency; a truncated record is refused.
+#[test]
+fn the_service_counts_survive_the_wire() {
+    use gsb_core::metrics::{MethodReport, SERVICE_COUNT, ServiceCounts, ServiceReport};
+    let mut sent = three_shards();
+    let mut values = [0u64; SERVICE_COUNT];
+    for (i, v) in values.iter_mut().enumerate() {
+        *v = 70 + i as u64;
+    }
+    sent.services = vec![
+        ServiceReport {
+            service: "Economy".into(),
+            counts: ServiceCounts::from_values(values),
+            methods: vec![
+                MethodReport {
+                    method: "buy".into(),
+                    calls: 9,
+                    latency_us_total: 900,
+                    latency_us_max: 250,
+                },
+                MethodReport {
+                    method: "refund".into(),
+                    ..Default::default()
+                },
+            ],
+        },
+        ServiceReport {
+            service: "bank".into(),
+            ..Default::default()
+        },
+    ];
+    let frame = encode_report(&sent);
+    let got = decode_report(&frame[8..]).expect("decodes");
+    assert_eq!(got.services, sent.services);
+    assert_eq!(got.transport, sent.transport, "its neighbour intact");
+    assert!(
+        decode_report(&frame[8..frame.len() - 1]).is_none(),
+        "a cut record"
+    );
+}

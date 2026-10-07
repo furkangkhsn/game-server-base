@@ -14,18 +14,20 @@
 //! histogram), and the families whose SET of names is only known at
 //! report time (the logic's own counters — their rule is still here).
 
-use crate::metrics::{MetricReport, RoomReport};
+use crate::metrics::{MethodReport, MetricReport, RoomReport, ServiceCounts};
 
 mod calls;
 mod registry;
 mod room;
 mod server;
+mod services;
 mod session;
 mod stop;
 mod transport;
 
 pub(super) use registry::REGISTRY;
 pub(super) use server::NET;
+pub(super) use services::{METHOD, SERVICE};
 pub(super) use transport::TRANSPORT;
 
 /// A family's type: a cumulative counter or a gauge.
@@ -76,6 +78,30 @@ pub(super) struct RoomFamily {
     pub(super) name: &'static str,
     pub(super) help: &'static str,
     pub(super) value: RoomValue,
+}
+
+/// One service-scoped counter (B164): a sample per service, the service
+/// as its label/attribute.
+pub(super) struct ServiceFamily {
+    pub(super) name: &'static str,
+    pub(super) help: &'static str,
+    pub(super) get: fn(&ServiceCounts) -> u64,
+}
+
+/// How a per-method family reads its value.
+#[derive(Clone, Copy)]
+pub(super) enum MethodValue {
+    /// A cumulative counter.
+    Counter(fn(&MethodReport) -> u64),
+    /// A gauge (a high-water mark).
+    Gauge(fn(&MethodReport) -> u64),
+}
+
+/// One per-method family (B164): a sample per (service, method).
+pub(super) struct MethodFamily {
+    pub(super) name: &'static str,
+    pub(super) help: &'static str,
+    pub(super) value: MethodValue,
 }
 
 /// A per-room counter (constructor for the tables).

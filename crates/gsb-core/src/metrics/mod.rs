@@ -109,6 +109,7 @@ mod logic;
 mod render;
 mod report;
 mod sample;
+mod services;
 mod stop;
 mod tickets;
 mod transport;
@@ -129,6 +130,7 @@ pub use logic::{
 };
 pub use report::{MetricReport, NetReport, RegistryReport, RoomReport};
 pub use sample::{ConnSample, MatchResultDrop, MetricsEvent, RegistrySample, RoomSample};
+pub use services::{MethodReport, SERVICE_COUNT, ServiceCounts, ServiceReport};
 pub use stop::{STOP_COUNT, StopCounts};
 pub use tickets::{TICKET_GAME_REASONS_MAX, TicketCounts};
 pub use transport::{TRANSPORT_COUNT, TransportCounters};

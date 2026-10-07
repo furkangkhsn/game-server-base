@@ -219,6 +219,11 @@ impl MetricAccumulator {
             },
             actions_dropped_top,
             transport: self.transport,
+            services: self
+                .services
+                .iter()
+                .map(|(name, stats)| ServiceReport::read(name, stats))
+                .collect(),
             rooms,
         }
     }

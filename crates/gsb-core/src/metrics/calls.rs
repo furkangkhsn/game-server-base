@@ -121,7 +121,9 @@ call_counts! {
     requests_replied_late,
     /// A replay met a recorded ending that does not fit the game: no
     /// call of its type waits under its key (the log is another game's,
-    /// or another binary's). Never applied; never in a true replay.
+    /// or another binary's) — never applied; or a recorded CONTROL
+    /// answer (a join's admission, a hold's `may_release`) its logic
+    /// answered differently (B175). Never in a true replay.
     replay_diverged,
     /// A replay met a recorded outcome it could not decode (a log file
     /// whose call type no codec covers): not applied.

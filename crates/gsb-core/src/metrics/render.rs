@@ -252,6 +252,27 @@ impl MetricReport {
             let _ = write!(line, " {k}={v}");
         }
         lines.push(line);
+        // The hosted services (B164): one line per service, then one per
+        // method (none without services).
+        for svc in &self.services {
+            let mut line = format!("gsb-metric scope=service name={}", svc.service);
+            for (k, v) in svc.counts.fields() {
+                let _ = write!(line, " {k}={v}");
+            }
+            lines.push(line);
+            for m in &svc.methods {
+                lines.push(format!(
+                    "gsb-metric scope=service_method service={} method={} calls={} \
+                     latency_us_total={} latency_us_mean={:.1} latency_us_max={}",
+                    svc.service,
+                    m.method,
+                    m.calls,
+                    m.latency_us_total,
+                    m.latency_us_mean(),
+                    m.latency_us_max
+                ));
+            }
+        }
         lines
     }
 }

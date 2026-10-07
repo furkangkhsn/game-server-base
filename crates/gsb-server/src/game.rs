@@ -230,6 +230,7 @@ impl RegistryParts {
         RegistryTask {
             _task: task,
             services: self.services,
+            service_stats: self.hosted.stats().to_vec(),
         }
     }
 }
@@ -241,6 +242,8 @@ impl RegistryParts {
 pub struct RegistryTask {
     _task: JoinHandle<()>,
     pub(crate) services: Vec<Service>,
+    /// The hosted services' stats, for the metrics collector (B164).
+    pub(crate) service_stats: Vec<(&'static str, std::sync::Arc<gsb_core::calls::ServiceStats>)>,
 }
 
 /// Errors of game selection and of the game modules themselves

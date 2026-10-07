@@ -350,6 +350,10 @@ pub struct MetricReport {
     /// The transport's own losses, cumulative, every door together (B58,
     /// see [`TransportCounters`]).
     pub transport: TransportCounters,
+    /// The hosted services' own counters and method latencies (B164, see
+    /// [`ServiceReport`]), in registration order; empty when the
+    /// collector was handed none.
+    pub services: Vec<ServiceReport>,
 }
 
 impl MetricReport {
@@ -400,6 +404,7 @@ impl MetricReport {
             },
             actions_dropped_top: Vec::new(),
             transport: TransportCounters::default(),
+            services: Vec::new(),
         }
     }
 }

@@ -128,7 +128,7 @@ pub(super) const CALLS: [RoomFamily; 28] = [
     ),
     counter(
         "gsb_room_replay_diverged_total",
-        "Recorded endings a replay could not apply because no call of their type waited under their key, cumulative.",
+        "Replay divergences: recorded endings no call of their type waited for under their key (not applied), and recorded CONTROL answers (a join's admission, a hold's release) the replay's logic answered differently, cumulative.",
         |r| r.calls.replay_diverged,
     ),
     counter(

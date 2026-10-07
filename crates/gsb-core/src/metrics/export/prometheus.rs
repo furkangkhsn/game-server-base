@@ -60,6 +60,7 @@ impl MetricReport {
         for f in &families::TRANSPORT {
             scalar(&mut out, f, &self.transport);
         }
+        services(&mut out, &self.services);
 
         let rooms = &self.rooms;
         if rooms.is_empty() {
@@ -104,6 +105,45 @@ fn header(out: &mut String, name: &str, kind: &str, help: &str) {
 fn scalar<T>(out: &mut String, f: &Scalar<T>, from: &T) {
     header(out, f.name, f.kind.word(), f.help);
     let _ = writeln!(out, "{} {}", f.name, (f.get)(from));
+}
+
+/// The service-scoped families (B164), only when services report: a
+/// sample per service, then per (service, method).
+fn services(out: &mut String, services: &[ServiceReport]) {
+    if services.is_empty() {
+        return;
+    }
+    for f in &families::SERVICE {
+        header(out, f.name, "counter", f.help);
+        for s in services {
+            let _ = writeln!(
+                out,
+                "{}{{service=\"{}\"}} {}",
+                f.name,
+                s.service,
+                (f.get)(&s.counts)
+            );
+        }
+    }
+    for f in &families::METHOD {
+        let (kind, get) = match f.value {
+            families::MethodValue::Counter(get) => ("counter", get),
+            families::MethodValue::Gauge(get) => ("gauge", get),
+        };
+        header(out, f.name, kind, f.help);
+        for s in services {
+            for m in &s.methods {
+                let _ = writeln!(
+                    out,
+                    "{}{{service=\"{}\",method=\"{}\"}} {}",
+                    f.name,
+                    s.service,
+                    m.method,
+                    get(m)
+                );
+            }
+        }
+    }
 }
 
 /// One labeled-per-room family: header once, then a sample line per room

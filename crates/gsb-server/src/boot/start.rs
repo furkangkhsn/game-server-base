@@ -170,12 +170,6 @@ async fn start_inner(
     // waited for — a pump ends with its socket, which a silent peer can
     // hold open past the stop. Same capacity, same drop accounting.
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(4096);
-    let metrics = tokio::spawn(
-        MetricsCollector::new(ticker.subscribe(), metrics_rx, metric_sink, REPORT_PERIOD)
-            .with_transport_events(transport_rx)
-            .with_exporters(exporters)
-            .run(),
-    );
 
     // The match-result sink (the control plane's result seam, feature A):
     // a bounded mailbox the composition root reads from via
@@ -208,6 +202,18 @@ async fn start_inner(
         #[cfg(feature = "record")]
         record,
     });
+
+    // The collector starts after the registry (B164): the game's services
+    // are hosted by then, and every report reads their stats. Nothing is
+    // lost meanwhile — the registry's early samples wait in the bounded
+    // channel the collector drains on its first tick.
+    let metrics = tokio::spawn(
+        MetricsCollector::new(ticker.subscribe(), metrics_rx, metric_sink, REPORT_PERIOD)
+            .with_transport_events(transport_rx)
+            .with_exporters(exporters)
+            .with_services(registry.service_stats.clone())
+            .run(),
+    );
 
     // Pre-create rooms 1..=room_count (at the global rate, unless the
     // id's `[rooms.<id>]` sets a slower rate that divides it). Enqueued

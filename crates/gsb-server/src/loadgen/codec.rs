@@ -12,6 +12,7 @@ use gsb_core::metrics::{
 };
 
 mod logic;
+mod services;
 
 /// Metric-report wire format (server process → orchestrator, one TCP
 /// connection). The *data* is exactly what the in-process mode already
@@ -92,6 +93,12 @@ mod logic;
 ///   [u64; ServerClose::COUNT] server_closes (ServerClose::ALL order)
 ///   u32 n_top  [per entry] u64 conn_id  u64 count
 ///   [u64; TRANSPORT_COUNT] transport (TransportCounters::fields order)
+///   u32 n_services
+///   per service (registration order): u32 name_len  [u8] name
+///     [u64; SERVICE_COUNT] counts (ServiceCounts::fields order)
+///     u32 n_methods
+///     per method: u32 name_len  [u8] name  u64 calls
+///                 u64 latency_us_total  u64 latency_us_max
 /// ```
 ///
 /// Both directions live in this binary (the server's `--serve` mode and
@@ -302,6 +309,9 @@ mod logic;
 /// GSNU = the GSNT layout with four more call-table counters per room
 /// (round q4: `replay_diverged`, `replay_undecodable`, `records_written`,
 /// `records_dropped`, at the end of `CallCounts`).
+/// (Round q6 appended the hosted services' counters after the transport
+/// counters — B164 — under the same magic; the next free one, `GSNV`,
+/// is the parent's to assign when it merges.)
 pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E55;
 
 /// Little-endian writer (the encode side of the format above).
@@ -478,6 +488,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     for (_, n) in r.transport.fields() {
         w.u64(n);
     }
+    services::encode(&mut w, &r.services);
     let mut frame = Vec::with_capacity(8 + w.0.len());
     frame.extend_from_slice(&METRICS_MAGIC.to_le_bytes());
     frame.extend_from_slice(&(w.0.len() as u32).to_le_bytes());
@@ -727,6 +738,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         *v = r.u64()?;
     }
     let transport = TransportCounters::from_values(values);
+    let services = services::decode(&mut r)?;
     if !r.done() {
         return None;
     }
@@ -745,5 +757,6 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         net,
         actions_dropped_top,
         transport,
+        services,
     })
 }

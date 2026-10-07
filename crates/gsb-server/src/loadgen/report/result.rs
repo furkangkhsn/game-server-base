@@ -454,7 +454,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_refused={} req_unread={} req_unbound={} req_to={} req_late={} req_undelivered={} req_abandoned={} req_pending={} actions_unread={} actions_unbound={}{} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{}{} game={}",
+             detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{}{}{}{} game={}",
         mode,
         match labels {
             Some(l) => l.visibility.to_string(),
@@ -667,6 +667,11 @@ pub(crate) fn print_report(
         rpc.as_ref()
             .map(|(rate, burst, t)| rpc_segment(*rate, *burst, t))
             .unwrap_or_default(),
+        // The call table's counters (B157; the room line's keys, every key
+        // always present) and the hosted services' (B164; only for a game
+        // that hosts any) — right before `game=` like the segments above.
+        calls_segment(room.as_ref().map(|r| &r.calls)),
+        services_segment(server_reports),
         // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
         // addition; every key before it keeps its place and format).
         args.game,

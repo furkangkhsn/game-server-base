@@ -4,6 +4,7 @@ use super::*;
 use crate::client::*;
 use crate::stats::*;
 
+mod calls;
 mod fold;
 mod logic;
 mod path;
@@ -11,6 +12,7 @@ mod result;
 mod rpc;
 mod spread;
 mod team;
+pub(crate) use calls::*;
 pub(crate) use fold::*;
 pub(crate) use logic::*;
 pub(crate) use path::*;

@@ -38,6 +38,9 @@ struct RoomAcc {
 /// stream — no shared state, no locks (owned by exactly one task).
 #[derive(Debug, Default)]
 pub struct MetricAccumulator {
+    /// The hosted services whose stats each report reads (B164; see
+    /// [`Self::with_services`]), in registration order.
+    services: Vec<(&'static str, std::sync::Arc<crate::calls::ServiceStats>)>,
     /// Live rooms plus destroyed rooms still inside their short
     /// report-window linger (see `ROOM_GONE_GRACE_REPORTS`): a destroyed
     /// room's entry is dropped when its windows run down, so this map is
@@ -129,6 +132,17 @@ pub struct MetricAccumulator {
 }
 
 impl MetricAccumulator {
+    /// Read these services' stats into every report (B164: the
+    /// `services` slice, the `gsb_service_*` families). Atomic loads at
+    /// report time; nothing is sent.
+    pub fn with_services(
+        mut self,
+        services: Vec<(&'static str, std::sync::Arc<crate::calls::ServiceStats>)>,
+    ) -> Self {
+        self.services = services;
+        self
+    }
+
     /// Apply one event. Pure state transition (owned by one task).
     pub fn apply(&mut self, ev: MetricsEvent) {
         match ev {
