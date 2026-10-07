@@ -126,7 +126,8 @@ call_counts! {
     /// A replay met a recorded outcome it could not decode (a log file
     /// whose call type no codec covers): not applied.
     replay_undecodable,
-    /// Steps a recording room handed its sink (one record each).
+    /// Input-log records a recording room handed its sink (the header,
+    /// then one per step).
     records_written,
     /// Step records (or the header) a recording room's full or gone sink
     /// refused: lost, the log has a hole.

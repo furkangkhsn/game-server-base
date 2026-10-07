@@ -130,7 +130,9 @@
 //! one `<field>=` per counter at the end of each room line (after the
 //! stop counters, before the logic's), and one `gsb_room_<field>_total`
 //! family per counter after the stop families (the report carries a few
-//! non-zero on room 7).
+//! non-zero on room 7). Round q4's four determinism counters
+//! (`replay_diverged`, `replay_undecodable`, `records_written`,
+//! `records_dropped`) after them, on the line and as families.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -267,6 +269,9 @@ pub(super) fn golden_report() -> MetricReport {
     b.calls.answers_sent = 2;
     b.calls.requests_unbound = 1;
     b.calls.requests_untaken = 1;
+    // The determinism counters (round q4, SERVICES.md §10).
+    b.calls.replay_diverged = 1;
+    b.calls.records_written = 3;
     acc.apply(MetricsEvent::Room(b));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(1),

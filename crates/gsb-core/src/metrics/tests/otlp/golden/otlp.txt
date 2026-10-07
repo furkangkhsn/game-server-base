@@ -679,6 +679,18 @@ gsb_room_requests_unanswered sum t=2 mono=true unit="" n=2 | Requests taken from
 gsb_room_requests_replied_late sum t=2 mono=true unit="" n=2 | Replies to a request the engine had already closed, ignored, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
+gsb_room_replay_diverged sum t=2 mono=true unit="" n=2 | Recorded endings a replay could not apply because no call of their type waited under their key, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_replay_undecodable sum t=2 mono=true unit="" n=2 | Recorded outcomes a replay could not decode, not applied, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_records_written sum t=2 mono=true unit="" n=2 | Input-log records a recording room handed its sink (the header, then one per step), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 3
+gsb_room_records_dropped sum t=2 mono=true unit="" n=2 | Input-log records a recording room's full or gone sink refused (lost), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
 gsb_room_logic_kills sum t=2 mono=true unit="" n=1 | Players felled, cumulative.
   [room=r1] 1000..2000 int 3
 gsb_room_logic_fights_peak gauge unit="" n=1 | The logic's own high-water mark.

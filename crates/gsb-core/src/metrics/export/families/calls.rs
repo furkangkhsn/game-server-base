@@ -5,7 +5,7 @@
 use super::{RoomFamily, counter};
 
 /// The call table's counters, in the counters' order.
-pub(super) const CALLS: [RoomFamily; 24] = [
+pub(super) const CALLS: [RoomFamily; 28] = [
     counter(
         "gsb_room_calls_issued_total",
         "Calls written into the room's call table (a game call, a forward rule, an import), cumulative.",
@@ -125,6 +125,26 @@ pub(super) const CALLS: [RoomFamily; 24] = [
         "gsb_room_requests_replied_late_total",
         "Replies to a request the engine had already closed, ignored, cumulative.",
         |r| r.calls.requests_replied_late,
+    ),
+    counter(
+        "gsb_room_replay_diverged_total",
+        "Recorded endings a replay could not apply because no call of their type waited under their key, cumulative.",
+        |r| r.calls.replay_diverged,
+    ),
+    counter(
+        "gsb_room_replay_undecodable_total",
+        "Recorded outcomes a replay could not decode, not applied, cumulative.",
+        |r| r.calls.replay_undecodable,
+    ),
+    counter(
+        "gsb_room_records_written_total",
+        "Input-log records a recording room handed its sink (the header, then one per step), cumulative.",
+        |r| r.calls.records_written,
+    ),
+    counter(
+        "gsb_room_records_dropped_total",
+        "Input-log records a recording room's full or gone sink refused (lost), cumulative.",
+        |r| r.calls.records_dropped,
     ),
 ];
 
