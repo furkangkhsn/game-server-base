@@ -1,0 +1,21 @@
+[package]
+name = "gsb-hecs"
+description = "The hecs binding of gsb: Owner <-> Entity and the owner-alive test for the call table."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+# One binding crate per ECS (docs/KIT-ECS.md K10 (b)): today its `calls`
+# module (docs/SERVICES.md §5.5); the kit's hecs binding joins it as a
+# `kit` module. The engine crates never depend on it.
+[dependencies]
+gsb-core = { workspace = true }
+hecs = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

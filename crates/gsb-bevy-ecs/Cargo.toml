@@ -1,0 +1,22 @@
+[package]
+name = "gsb-bevy-ecs"
+description = "The bevy_ecs binding of gsb: the call table as a Resource, service clients as resources, Owner <-> Entity. Only the bevy_ecs crate, never the Bevy engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+# One binding crate per ECS (docs/KIT-ECS.md K10 (b)): today its `calls`
+# module (docs/SERVICES.md §5.5); the kit's bevy_ecs binding joins it as
+# a `kit` module when the kit goes ECS-agnostic. The engine crates never
+# depend on it — a game that does not use bevy_ecs never compiles it.
+[dependencies]
+gsb-core = { workspace = true }
+bevy_ecs = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

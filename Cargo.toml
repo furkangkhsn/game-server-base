@@ -5,6 +5,11 @@ members = [
     "crates/gsb-protocol",
     "crates/gsb-build",
     "crates/gsb-ecs",
+    # The ECS binding crates (one per ECS, docs/KIT-ECS.md K10) and the
+    # scenario that holds them to one behaviour (not published).
+    "crates/gsb-bevy-ecs",
+    "crates/gsb-hecs",
+    "crates/gsb-conformance",
     "crates/gsb-macros",
     "crates/gsb-core",
     "crates/gsb-net",
@@ -39,6 +44,8 @@ gsb-lint = { path = "crates/gsb-lint" }
 gsb-protocol = { path = "crates/gsb-protocol" }
 gsb-build = { path = "crates/gsb-build" }
 gsb-ecs = { path = "crates/gsb-ecs" }
+gsb-bevy-ecs = { path = "crates/gsb-bevy-ecs" }
+gsb-hecs = { path = "crates/gsb-hecs" }
 gsb-macros = { path = "crates/gsb-macros" }
 # No default features here: a dependent turns on the export features it
 # serves (gsb-server's `prometheus`, `otlp`), so a build without them
@@ -95,8 +102,10 @@ tokio-rustls = { version = "0.26", default-features = false, features = [
 # config paths.
 rustls-pemfile = "2"
 
-# ecs
+# ecs — named only by the binding crates (gsb-bevy-ecs, gsb-hecs) and,
+# until the kit goes ECS-agnostic (docs/KIT-ECS.md), the kit and demos
 bevy_ecs = "0.19"
+hecs = "0.10"
 
 # serialization / protocol
 prost = "0.14"

@@ -1,0 +1,32 @@
+[package]
+name = "gsb-conformance"
+description = "Not published: one scenario, every ECS binding — the same game written in each style must give the same results against the real engine actors."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+# The library (the scenario's contract, its fake service and the actor
+# rig) is ECS-free; the styles that use an ECS are in `tests/`, and the
+# ECS crates are dev-dependencies only (the ECS-agnostic rule: an ECS is
+# named only by its binding crate and by what tests it).
+[dependencies]
+gsb-core = { workspace = true }
+gsb-protocol = { workspace = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+gsb-bevy-ecs = { workspace = true }
+gsb-hecs = { workspace = true }
+bevy_ecs = { workspace = true }
+hecs = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
