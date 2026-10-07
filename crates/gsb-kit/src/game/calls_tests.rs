@@ -130,6 +130,8 @@ fn ctx() -> TickCtx<'static> {
         idle: Default::default(),
         kicks: Default::default(),
         paths: Default::default(),
+        time: Duration::ZERO,
+        rng: Default::default(),
     }
 }
 
