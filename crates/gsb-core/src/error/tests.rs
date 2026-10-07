@@ -15,7 +15,7 @@ use super::CoreError;
 /// the `_ =>` arm to 4.
 #[test]
 fn every_variant_keeps_its_pre_enum_number() {
-    let cases: [(CoreError, ErrorCode); 13] = [
+    let cases: [(CoreError, ErrorCode); 14] = [
         (CoreError::RoomFull(1), ErrorCode::RoomFull),
         (CoreError::RoomRetired(1), ErrorCode::RoomRetired),
         (CoreError::RoomNotFound(1), ErrorCode::RoomOpFailed),
@@ -41,6 +41,17 @@ fn every_variant_keeps_its_pre_enum_number() {
             ErrorCode::RoomOpFailed,
         ),
         (CoreError::RoomGone, ErrorCode::RoomOpFailed),
+        (
+            CoreError::RoomBoot {
+                room: 1,
+                error: crate::calls::BootError::OpCollision {
+                    op: 1,
+                    first: "A",
+                    second: "B",
+                },
+            },
+            ErrorCode::RoomOpFailed,
+        ),
         (CoreError::ResumeStale, ErrorCode::RoomOpFailed),
         (CoreError::Protocol("x".into()), ErrorCode::RoomOpFailed),
         (CoreError::Io("x".into()), ErrorCode::RoomOpFailed),
@@ -52,7 +63,7 @@ fn every_variant_keeps_its_pre_enum_number() {
     // The count is asserted through the array's own length: the array
     // must list EVERY variant, and `wire_code`'s exhaustive match is what
     // makes a forgotten one a compile error rather than a silent gap.
-    assert_eq!(cases.len(), 13, "a CoreError variant was added or removed");
+    assert_eq!(cases.len(), 14, "a CoreError variant was added or removed");
 }
 
 /// A gsb server never sends the proto3 zero value (`base.proto` states it
