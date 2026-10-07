@@ -167,7 +167,10 @@ pub enum RequestDecision {
     Reply(Bytes),
     /// Rejected, room-local: a normal rejection with a
     /// client-actionable reason (never a violation signal). Answered in
-    /// the same tick.
+    /// the same tick. An EMPTY reason is answered with
+    /// [`REJECTED_REASON`] (BACKLOG B163: every engine-shaped answer
+    /// carries a reason) and counted `requests_rejected_logic` like any
+    /// other.
     Reject(String),
     /// External I/O: the work is delegated; the room registers the
     /// request as pending and the worker resolves the future (bounded by
@@ -212,12 +215,19 @@ impl RpcReply {
     }
 
     /// An engine (or legacy `Reject`) answer: the text is in `reason`.
+    /// An empty text becomes [`REJECTED_REASON`] (B163): an answer with
+    /// `ok = false`, `game_error = false` always says why — the empty
+    /// `reason` belongs to the typed game error alone.
     pub fn rejected(id: u64, op: u16, reason: impl Into<String>) -> Self {
+        let mut reason = reason.into();
+        if reason.is_empty() {
+            reason.push_str(REJECTED_REASON);
+        }
         Self {
             id,
             ok: false,
             op,
-            reason: reason.into(),
+            reason,
             payload: Bytes::new(),
             game_error: false,
         }
@@ -262,6 +272,12 @@ impl From<&RpcReply> for gsb_protocol::base::RpcResponse {
         }
     }
 }
+
+/// The reason of a legacy rejection that gave none
+/// (`RequestDecision::Reject(String::new())`, an `External` future's
+/// `Err(String::new())`): the engine never answers `ok = false,
+/// game_error = false` with an empty reason (BACKLOG B163).
+pub const REJECTED_REASON: &str = "request rejected (no reason given)";
 
 /// The client-visible reason string for the room's timeout sweep. Kept
 /// in one place so the sweep and the tests agree on it.
@@ -361,5 +377,21 @@ mod tests {
         assert_eq!(REFUSED_SHARE_REASON, "service share exhausted");
         assert_eq!(REFUSED_SHED_REASON, "service overloaded");
         assert_eq!(ABANDONED_REASON, "service dropped the request");
+        assert_eq!(REJECTED_REASON, "request rejected (no reason given)");
+    }
+
+    /// B163: an engine-shaped answer always says why; a reason the game
+    /// gave is kept as it is, and the typed game error keeps its empty
+    /// reason.
+    #[test]
+    fn an_empty_rejection_reason_becomes_the_engine_reason() {
+        assert_eq!(RpcReply::rejected(1, 2, "").reason, REJECTED_REASON);
+        assert_eq!(
+            RpcReply::rejected(1, 2, String::new()).reason,
+            REJECTED_REASON
+        );
+        assert_eq!(RpcReply::rejected(1, 2, "sold out").reason, "sold out");
+        let typed = RpcReply::game_error(1, 2, Bytes::new());
+        assert!(typed.reason.is_empty() && typed.game_error);
     }
 }
