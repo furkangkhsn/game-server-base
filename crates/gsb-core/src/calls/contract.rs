@@ -5,7 +5,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::PlayerId;
+pub use crate::owner::Owner;
 
 /// The wire form of a client-facing message. Every `prost` message has
 /// it (a blanket impl); a game that wants another format implements it
@@ -72,25 +72,6 @@ impl Identity {
 impl fmt::Debug for Identity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", &*self.0)
-    }
-}
-
-/// What a call (or its result) belongs to, opaque to the engine: an
-/// entity's bits, a player id, anything the game can test for life
-/// ([`GameLogic::owner_alive`](crate::room::GameLogic::owner_alive)).
-/// The engine's default owner of a session is its player
-/// (`Owner::from(PlayerId)`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Owner(pub u64);
-
-impl Owner {
-    /// "The actor itself": a call without `.owner(..)`; always alive.
-    pub const ACTOR: Owner = Owner(u64::MAX);
-}
-
-impl From<PlayerId> for Owner {
-    fn from(p: PlayerId) -> Self {
-        Owner(p.0)
     }
 }
 

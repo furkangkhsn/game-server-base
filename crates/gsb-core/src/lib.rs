@@ -38,6 +38,7 @@ pub mod conn;
 pub mod error;
 pub mod id;
 pub mod metrics;
+pub mod owner;
 pub mod path;
 pub mod registry;
 pub mod room;
@@ -53,5 +54,6 @@ pub use id::{ConnectionId, EntityId, PlayerId, RoomId};
 pub use metrics::{
     Exporter, MetricAccumulator, MetricReport, MetricSink, MetricsCollector, MetricsEvent,
 };
+pub use owner::Owner;
 pub use registry::{MatchResult, RoomStatus};
 pub use room::{Admission, Detach, ExpireTo, GameLogic, ResumeFound};
