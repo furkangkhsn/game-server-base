@@ -317,10 +317,16 @@ where
                          processed first)"
                     );
                     // The session's channel rode the message and dies
-                    // with it: its unread requests are counted (B36).
+                    // with it: its unread requests are counted (B36). So
+                    // do its calls' client answers (B152): the calls
+                    // themselves were sent by the sender, whose late
+                    // answer is `results_late` there; the answers they
+                    // owed the dead session are abandoned, counted as a
+                    // session end counts them.
                     if let Some(mut p) = player {
                         self.m
                             .count_unread(crate::room::drop_unread(&mut p.actions));
+                        self.m.requests_abandoned += p.calls.answers() as u64;
                     }
                     return true;
                 }
@@ -355,6 +361,18 @@ where
                     // known state, until the connection sends news.
                     if let Some(path) = p.path {
                         self.paths.set(p.player, path);
+                    }
+                    // Its in-flight calls (B152, SERVICES §8): imported
+                    // under the player's owner HERE (the logic's default
+                    // owner — the entity just rebuilt — or the player)
+                    // and re-issued at this tick's FLUSH under their
+                    // original keys; an explicit bind rebinds to it.
+                    if !p.calls.is_empty() || p.calls.binds() > 0 {
+                        let owner = self
+                            .logic
+                            .call_owner(&self.world, p.player)
+                            .unwrap_or_else(|| p.player.into());
+                        self.calls.import(p.calls, owner);
                     }
                     self.conns.insert(
                         p.player,

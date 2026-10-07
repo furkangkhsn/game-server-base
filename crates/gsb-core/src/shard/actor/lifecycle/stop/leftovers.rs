@@ -72,6 +72,8 @@ where
                     // end counts it.
                     if let Some(mut p) = player {
                         self.m.count_unread(drop_unread(&mut p.actions));
+                        // Its calls' client answers too (B152).
+                        self.m.requests_abandoned += p.calls.answers() as u64;
                     }
                 }
                 ShardMsg::RemoteEffect(_) => self.m.stop.effects_unapplied += 1,

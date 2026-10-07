@@ -263,12 +263,19 @@ pub(crate) struct Entry {
 }
 
 /// Calls carried out of a table by `export` (migration). In-process only
-/// (the contexts are `Box<dyn Any>`; SERVICES.md §19 S8).
+/// (the contexts are `Box<dyn Any>`; SERVICES.md §19 S8). A shard
+/// migration carries one inside its player row
+/// ([`PlayerMigration::calls`](crate::shard::PlayerMigration::calls),
+/// BACKLOG B152).
+#[derive(Default)]
 pub struct Exported {
     pub(crate) calls: Vec<Entry>,
     /// The sessions explicitly bound to the exported owner: rebound on
     /// import.
     pub(crate) conns: Vec<ConnectionId>,
+    /// `calls[..from_pending]` left the pending set (issued at a FLUSH),
+    /// the rest the drafts — where [`Calls::restore`] puts them back.
+    pub(crate) from_pending: usize,
 }
 
 impl Exported {
@@ -284,6 +291,27 @@ impl Exported {
     /// `None` = issued but not flushed yet: the destination keys it).
     pub fn keys(&self) -> Vec<Option<CallKey>> {
         self.calls.iter().map(|e| e.key).collect()
+    }
+
+    /// How many sessions' explicit binds travel.
+    pub(crate) fn binds(&self) -> usize {
+        self.conns.len()
+    }
+
+    /// How many client answers ride the calls (`.answers`): what is
+    /// abandoned, counted `requests_abandoned`, when the export never
+    /// lands (a dead join's migration, a stopping shard).
+    pub(crate) fn answers(&self) -> usize {
+        self.calls.iter().filter(|e| e.answer.is_some()).count()
+    }
+}
+
+impl std::fmt::Debug for Exported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Exported")
+            .field("keys", &self.keys())
+            .field("conns", &self.conns)
+            .finish()
     }
 }
 
@@ -623,6 +651,19 @@ impl Calls {
     /// Carry `owner`'s calls out (migration). Their keys and contexts
     /// travel; a late answer here is `results_late`.
     pub fn export(&mut self, owner: Owner) -> Exported {
+        let out = self.take_owner(owner);
+        self.counts.calls_exported += out.len() as u64;
+        out
+    }
+
+    /// [`Self::export`] without the count: a shard migration counts
+    /// `calls_exported` only once its send committed
+    /// ([`Self::count_exported`]) and puts a refused one back
+    /// ([`Self::restore`]).
+    pub(crate) fn take_owner(&mut self, owner: Owner) -> Exported {
+        if self.pending.is_empty() && self.drafts.is_empty() && self.bound.is_empty() {
+            return Exported::default();
+        }
         let keys: Vec<CallKey> = self
             .pending
             .iter()
@@ -639,6 +680,7 @@ impl Calls {
                 calls.push(e);
             }
         }
+        let from_pending = calls.len();
         let mut i = 0;
         while i < self.drafts.len() {
             if self.drafts[i].owner == owner {
@@ -652,7 +694,6 @@ impl Calls {
                 i += 1;
             }
         }
-        self.counts.calls_exported += calls.len() as u64;
         let conns: Vec<ConnectionId> = self
             .bound
             .iter()
@@ -662,7 +703,11 @@ impl Calls {
         for c in &conns {
             self.bound.remove(c);
         }
-        Exported { calls, conns }
+        Exported {
+            calls,
+            conns,
+            from_pending,
+        }
     }
 
     /// Take calls exported elsewhere, now owned by `owner`; each is
@@ -680,6 +725,37 @@ impl Calls {
             }
             self.counts.calls_imported += 1;
             self.push(e);
+        }
+    }
+
+    /// A committed export of `n` calls (see [`Self::take_owner`]).
+    pub(crate) fn count_exported(&mut self, n: usize) {
+        self.counts.calls_exported += n as u64;
+    }
+
+    /// Undo a [`Self::take_owner`] whose migration did not leave (the
+    /// neighbour refused the send): every call returns exactly as it was
+    /// — a sent one to the pending set, still waiting for its answer, a
+    /// draft to the drafts — and the sessions rebind to `owner`. Nothing
+    /// is counted: as far as the ledger knows, nothing moved.
+    pub(crate) fn restore(&mut self, exported: Exported, owner: Owner) {
+        for c in exported.conns {
+            self.bound.insert(c, owner);
+        }
+        for (i, e) in exported.calls.into_iter().enumerate() {
+            *self.in_flight_by.entry((e.type_id, e.owner)).or_insert(0) += 1;
+            if let Some(a) = &e.answer {
+                self.live_insert(a.conn, a.wire_id);
+            }
+            match e.key {
+                Some(key) if i < exported.from_pending => {
+                    if e.sent {
+                        *self.per_service.entry(e.service).or_insert(0) += 1;
+                    }
+                    self.pending.insert(key, e);
+                }
+                _ => self.drafts.push(e),
+            }
         }
     }
 

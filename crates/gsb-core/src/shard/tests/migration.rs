@@ -4,6 +4,7 @@
 
 use super::*;
 
+mod calls;
 mod ownership;
 
 /// Table-prune lock 1 — a Leave removes the connection's `conn_epoch`

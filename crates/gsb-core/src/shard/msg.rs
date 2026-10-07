@@ -67,6 +67,15 @@ pub struct PlayerMigration {
     /// the connection actor sends only news, so a crossing that dropped
     /// it would leave the member's budget unknown until the next change.
     pub path: Option<crate::path::PathState>,
+    /// The player's in-flight calls (BACKLOG B152, `docs/SERVICES.md`
+    /// §8): the sending shard exports what the session's owner (its
+    /// explicit `calls.bind`, else `GameLogic::call_owner`) has in
+    /// flight, the receiving shard imports it under the player's owner
+    /// THERE and re-issues every call at its next FLUSH under the SAME
+    /// key (an idempotent service: one effect), `.answers` included — the
+    /// client is answered from the receiving shard. Empty when nothing
+    /// travels.
+    pub calls: crate::calls::Exported,
 }
 
 /// A migrating entity: the full game state plus the owning player, when

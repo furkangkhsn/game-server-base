@@ -56,6 +56,9 @@ where
         for b in nb {
             let migrations = self.logic.collect_migrations(&mut self.world, b);
             for mig in migrations {
+                // The owner whose calls ride the row (B152), for the
+                // rollback of a refused send.
+                let mut calls_owner = None;
                 let player = mig.player.and_then(|p| {
                     let entry = self.conns.remove(&p)?;
                     // The input-idle stamp travels with the row and this
@@ -71,6 +74,18 @@ where
                     // player across the move, so control broadcasts still
                     // find the owner.
                     self.binding.remove(&entry.conn);
+                    // The session's in-flight calls ride the row too
+                    // (B152, SERVICES §8): the owner is its explicit bind,
+                    // else the logic's default owner — exactly the owner
+                    // its requests were bound to. Counted
+                    // `calls_exported` once the send commits.
+                    calls_owner = self
+                        .calls
+                        .bound(entry.conn)
+                        .or_else(|| self.logic.call_owner(&self.world, p));
+                    let calls = calls_owner
+                        .map(|o| self.calls.take_owner(o))
+                        .unwrap_or_default();
                     Some(Box::new(PlayerMigration {
                         player: p,
                         conn: entry.conn,
@@ -92,12 +107,14 @@ where
                         identity: entry.identity,
                         last_input,
                         path,
+                        calls,
                     }))
                 });
                 // The session whose request state dies with a COMMITTED
                 // move (the Ok arm below); read before the send consumes
                 // the message.
                 let moving_conn = player.as_ref().map(|pm| pm.conn);
+                let moving_calls = player.as_ref().map_or(0, |pm| pm.calls.len());
                 match self.links[b].send(ShardMsg::Migrate {
                     from: self.index,
                     at_tick: t.tick,
@@ -120,6 +137,11 @@ where
                         // id. (Dropped AFTER a successful send — on a failed
                         // one below, the connection is rolled back whole and
                         // keeps its in-flight work.)
+                        // (The calls of its owner left WITH the row above —
+                        // their `.answers` included — so the drop below
+                        // abandons only what the table still owed the
+                        // session: requests taken but not answered.)
+                        self.calls.count_exported(moving_calls);
                         if let Some(mc) = moving_conn {
                             self.drop_conn_request_state(mc);
                         }
@@ -169,6 +191,10 @@ where
                                 },
                             );
                             self.binding.insert(p.conn, p.player);
+                            // Its calls come back exactly as they were.
+                            if let Some(owner) = calls_owner {
+                                self.calls.restore(p.calls, owner);
+                            }
                             if let Some(at) = p.last_input {
                                 self.idle.start(p.player, at);
                             }

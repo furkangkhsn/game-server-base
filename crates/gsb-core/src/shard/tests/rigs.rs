@@ -369,6 +369,7 @@ pub(in crate::shard::tests) fn ghost_migrate(
             identity: String::new(),
             last_input: None,
             path: None,
+            calls: Default::default(),
         })),
     }
 }
