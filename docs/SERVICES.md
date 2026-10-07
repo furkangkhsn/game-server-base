@@ -178,12 +178,20 @@ görevinde tek `await` (`oneshot` yığın üzerinden). Select yok, kilit yok.
 ### 4.2 İstemci-tel istekleri: `.proto`
 
 ```proto
+import "gsb/options.proto";
+
 service Game {
-  rpc TransferGold(TransferGold) returns (TransferDone) { option (gsb.op) = 1001; option (gsb.error) = "GameError"; }
-  rpc Craft(CraftReq)            returns (Crafted)      { option (gsb.op) = 1003; option (gsb.error) = "GameError"; }
-  rpc ListFriends(ListFriends)   returns (FriendList)   { option (gsb.op) = 1005; option (gsb.error) = "GameError"; }
+  option (gsb.reserved_op) = 1002;   // emekli op: bir daha kullanılmaz (§11)
+  rpc Transfer(TransferGold)   returns (TransferDone) { option (gsb.op) = 1001; option (gsb.error) = "GameError"; }
+  rpc Craft(CraftReq)          returns (Crafted)      { option (gsb.op) = 1003; option (gsb.error) = "GameError"; }
+  rpc Friends(ListFriends)     returns (FriendList)   { option (gsb.op) = 1005; option (gsb.error) = "GameError"; }
 }
 ```
+
+(q3 düzeltmesi: rpc'nin adı istek mesajının adıyla **aynı olamaz** —
+protoc `rpc TransferGold(TransferGold)`'un argümanını rpc'nin kendisine
+çözer ve "is not a message type" der. İlk taslaktaki örnek bu yüzden
+derlenmiyordu.)
 
 Kod üretici (prost-build + küçük bir eklenti) her `rpc` için şunu yazar:
 
@@ -888,6 +896,11 @@ enum Status { STATUS_OK = 0; STATUS_GAME_ERROR = 1; STATUS_ENGINE_REJECTED = 2;
               STATUS_LOCAL_TIMEOUT = 3; STATUS_SESSION_ENDED = 4; }
 ```
 
+Rust tarafı (tur q3): FFI çekirdeğinin istek yarısı
+`gsb_client::requests::Requests`'tir (sans-IO; `forget` = `Forget`,
+`RequestError`'ın ilk beş kolu = `Status`'ün beş değeri); bugün
+`RequestClient` onu doğrudan bir `Conn` üstünde koşar.
+
 C ABI beş fonksiyon (s0 ile aynı): `gsb_abi_version`, `gsb_new`,
 `gsb_command`, `gsb_poll(buf, cap) -> len` (`< 0` → `-gereken`; olay
 çekirdekte bekler), `gsb_free`. `unsafe` yalnız `gsb-ffi`'de.
@@ -1261,6 +1274,63 @@ somutlaşanlar:
 **Faz 3 — `.proto` istekleri (s1c)**
 - `gsb/options.proto`, `gsb-build` üretici (S11), `RpcResponse.game_error`
   (+ `wire_contract.rs` kilidi), op çakışma/`reserved` denetimi.
+
+**Faz 3 — uygulanan biçim (tur q3).** Tasarımdan farklar ve
+somutlaşanlar:
+
+- **Sözleşme `gsb-protocol`'de:** `Call`, `Request`, `WireMessage`,
+  `DecodeError` artık `gsb_protocol::request`'te; `gsb_core::calls`
+  aynı trait'leri yeniden dışa verir (yollar değişmedi). Neden: tipli
+  istemci (`gsb-client`) `R::OP`/`R::Response`/`R::Error`'a sunucu
+  motorunu bağlamadan erişmeli.
+- **`gsb/options.proto`** `gsb-protocol/proto/gsb/` altında (aynı
+  `links` dizini, `DEP_GSB_BASE_PROTO_DIR`): `(gsb.op)` (50001, rpc),
+  `(gsb.error)` (50002, rpc; aynı paketten ad ya da `.` ile tam ad),
+  `(gsb.reserved_op)` (50003, servis, tekrarlanabilir — op uzayının
+  `reserved`'ı). gsb-protocol'ün build'i dosyayı derleyerek denetler; Rust
+  kodu üretilmez.
+- **`gsb-build`** (yeni crate; prost-build üstünde saf Rust, protoc eklenti
+  ikilisi yok, yeni sistem gereksinimi yok — vendored protoc): protoc'un
+  tanımlayıcı kümesini kırpılmış `descriptor.proto` aynalarıyla okur
+  (prost-types uzantıları düşürüyor), denetler, kodu prost-build'in
+  `ServiceGenerator` kancasıyla isteğin kendi paket modülüne yazar:
+  `impl Call` + `impl Request` (`OP`, `Response`, `Error`). Reddedilen
+  build (hepsi listelenir): yinelenen op, motor aralığında op
+  (`< GAME_BAND_START` = 1000), 16 biti aşan op, `reserved_op`'u alan rpc,
+  `(gsb.error)`'suz ya da hiçbir mesajı adlandırmayan rpc, akışlı rpc, iki
+  rpc'nin arkasında tek istek mesajı (tipin tek `OP`'u olur). Hiçbir rpc'si
+  gsb seçeneği taşımayan servis sıradan protobuf servisidir, dokunulmaz;
+  gsb servisinde her rpc'nin `(gsb.op)`'u olmalı.
+- **Demo:** `game.proto`'daki `DemoRequests` `AbilityUse`'u (1005)
+  `DemoError` ile bildirir; gsb-demo'nun build'i `gsb_build::Builder`'a
+  geçti. Tel aynı (mevcut kilitler değişmeden geçti). `BuyItem` (1006)
+  ekonomi göçüyle (q2) gelecek.
+- **Tel:** `RpcResponse.game_error = 6` (eklemeli, §16). Tipli hata:
+  `ok=false`, `game_error=true`, BOŞ `reason`, yük = hata (sıfır bayt
+  olabilir). Motor cevabı: `game_error=false`, `reason` dolu. q1'in boş
+  `reason` biçimi korundu: eski istemci aynı baytları görür (+ `30 01`).
+  `PROTOCOL_VERSION` artmadı (DESIGN §5.5 kuralı: yeni alan eklemelidir,
+  eski okuyucu yanlış AYRIŞTIRMAZ). Kilit:
+  `wire_contract.rs::rpc_response_game_error_is_field_six_and_additive`.
+  Eski `External`/`Reject` yolu değişmedi (`game_error=false`).
+- **Tipli Rust istemcisi** (`gsb_client::requests`): sans-IO `Requests`
+  (id'yi istemci verir — 1'den; `start`/`start_within` → zarf karesi,
+  `answer`, `sweep(now)`, `end_session`, `forget(id)`, `take::<R>`) ve
+  onu bir `Conn` üstünde koşan `RequestClient`
+  (`client.request::<R>(&body).await`, `send`/`send_within` + `wait`).
+  Sonuç `Result<R::Response, RequestError<R::Error>>`:
+  `Game(E)` / `Engine(reason)` / `TimedOut` (istemcinin kendi saati, istek
+  başına) / `SessionEnded` (S16: oturum bitince uçuştaki her istek kapanır)
+  / `Undecodable` / `Forgotten`. Cevaplar oyunun seçtiği karede gelir
+  (demo/kit: `Private.responses`); istemci bir çıkarıcı
+  (`FnMut(&FrameBody) -> Option<Vec<RpcResponse>>`) alır; cevap olmayan
+  kareler sınırlı bir kuyrukta bekler (taşan en eski düşer, sayılır).
+  `wait` turda tek sınırlı `recv` (select yok). Sayaçlar istemci tarafı
+  (`RequestCounters`: `sent`, `ok`, `game_errors`, `engine_errors`,
+  `timed_out`, `session_ended`, `forgotten`, `answers_forgotten`,
+  `answers_late`, `undecodable`) — metrik tablolarına/loadgen teline
+  girmez; sunucuda yeni sayaç yok.
+- Ertelenenler BACKLOG'da `q3:` satırları.
 
 **Faz 4 — determinizm (s1d)**
 - `TickCtx::{time, dt, rng}`, deterministik anahtar kökeni, durum hash

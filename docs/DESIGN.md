@@ -514,6 +514,23 @@ olarak dependent'a taşınır. `gsb_core::rpc::RpcReply` →
 alan eşlemesini ve proto3'ün dayattığı `u16 → u32` genişletmesini elle
 yazmaz.
 
+**`game_error` (alan 6, tur q3 — `docs/SERVICES.md` §16).** `RpcResponse`'a
+eklenen tek alan: `ok=false` iken `true` → `payload` isteğin TİPLİ oyun
+hatasıdır (`.proto`'daki `(gsb.error)` mesajı; varsayılan değerli bir
+proto3 mesajı sıfır bayta kodlandığı için "yük boşsa motor reddi" kuralı
+onu yanlış okurdu), `reason` boştur; `false` → motor cevabı, metin
+`reason`'da. Kural §5.5'inki: **eklemeli değişiklik sürüm artırmaz** —
+alan 6'yı bilmeyen okuyucu onu atlar ve bugüne kadar gördüğünü görür
+(`ok=false`, boş `reason`, yükte hata baytları); bayrak `false` iken alan
+hiç kodlanmaz, mevcut her bayt aynı kalır. `PROTOCOL_VERSION` 1'de.
+Kilit: `wire_contract.rs::rpc_response_game_error_is_field_six_and_additive`
+(alan numarası, `30 01` sonek, eski okuyucunun çözmesi; mutasyon: `= 6` →
+`= 7` testi kırdı) ve yukarıdaki iki kilit değişmeden geçti.
+
+İstek op'larının `.proto`'da bildirimi (`gsb/options.proto`, aynı `links`
+dizininde `gsb/` altında) ve `gsb-build` kod üreticisi: SERVICES §20
+"Faz 3 — uygulanan biçim", GAME-MODULE §4.6.
+
 **Elenen alternatifler:**
 
 1. **Bayt-birebir duplikasyon + uygunluk testi** (zarfı iki dosyada da

@@ -196,6 +196,12 @@ Tetikleyici yazılmamışsa "—". Kaynaklar dosya:satır (2026-09-25).
 | B155 `call_share`/`call_completions` sunucu yapılandırmasına (`config.example.toml`) açılmadı; `completions ≥ 2×Σpay` doğrulaması yok (S7) | q2 | SERVICES §19 S7 |
 | B156 Açık `calls.bind` oturuma bağlı: devamda (`on_resume`'da tablo yok) yeni oturum varsayılan sahibe döner | bir oyun açık bağ + devam kullanırsa | SERVICES §5.6 |
 | B157 Loadgen `RESULT` satırı `CallCounts`'u yazmıyor (tel taşıyor, katlama topluyor) | bir ölçüm turu isterse | OPS §3 |
+| q3: `.proto`'dan yalnız Rust kodu üretiliyor (`gsb-build`); C#/TS/GDScript üretilmiş istemcileri ve FFI `Command`/`Status` (B28) yok | istemci çekirdeği + FFI turu | SERVICES §14, §20 Faz 6 |
+| q3: Motor aralığı (`op < 1000`) yalnız build'de reddediliyor; el yazımı bir `impl Request` `calls.accept`'te motor aralığından op talep edebilir (`BootError`'da kolu yok) | B153 ile (q2) | SERVICES §11 |
+| q3: Demo `BuyItem` (1006) `DemoRequests`'te bildirilmedi — hâlâ `handle_request`'in `External` yolunda | q2 ekonomi göçü | SERVICES §20 Faz 3 |
+| q3: Loadgen RPC kipi hâlâ elle zarf + kendi defteri; `gsb_client::requests` ve `RequestCounters` loadgen'e bağlanmadı | bir ölçüm turu isterse | SERVICES §20 Faz 3 |
+| q3: `(gsb.error)` başka paketteyse yol prost kuralıyla (`super::`) ya da `Builder::extern_path` ile çözülüyor; extern önekinin altındaki iç içe mesajlar paket kökü varsayımıyla adlandırılıyor | bir oyun paylaşılan hata paketini extern'den alırsa | `gsb-build` |
+| q3: Eski `RequestDecision::Reject("")` (boş gerekçe) `ok=false, game_error=false, reason=""` verir — anlamsız bir motor cevabı; `Reject` boş gerekçeyi reddetmeli ya da varsayılan metin koymalı | küçük paket | `gsb_core::rpc` |
 | F71 Toplayıcı odanın shard sayısını bilmiyor: ilk örneğini göndermemiş shard'ın eksik satırı (B45) beklenmiyor; `RoomSample`'a shard sayısı (tel değişikliği) eklenirse eksik satır da beklenebilir | ölçüm ihtiyacı doğarsa | DESIGN §12 "tutarlı kesit" |
 | F73 `loadgen_smoke`, `loadgen_games` ve `loadgen_ws` de süreç içi idle penceresine açık — F72'den beri tek takılma pencereyi kapatmıyor (bir kez yeniden başlar); art arda iki takılma hâlâ kapatabilir; iddiaları pencere değilse `--idle-timeout-secs 0` | düşerse | CHANGELOG "t1", "c2" |
 | F74 `loadgen_rate`'in "medyan istemci ≥ 1 snapshot" iddiası her koşuda okunur; F35 aç bırakmasında son tarihten hemen önce katılan istemciler sınırda (p50 = 1,0) — kanıtlı koşuya bağlanabilir | düşerse | CHANGELOG "t1" |

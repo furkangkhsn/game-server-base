@@ -343,6 +343,49 @@ sonuna eklenen yeni bir `game=<ad>` anahtarı. *(Sonraki isteğe bağlı segment
 `logic_*=`, B23'ün `rpc_*=`'i — yalnız ilgili oyun ya da modda ve
 `game=`'den hemen önce eklenir; demo'nun varsayılan satırı değişmez.)*
 
+### 4.6 İstekleri `.proto`'da bildirmek (tur q3)
+
+Bir oyunun istemci-tel istekleri (`docs/SERVICES.md` §4.2) `.proto`'sunda
+`gsb/options.proto` seçenekleriyle bir `service` bloğunda bildirilir;
+oyun crate'inin build script'i `prost_build::Config` yerine
+`gsb_build::Builder`'ı kullanır, her rpc için `impl Call` + `impl Request`
+isteğin kendi Rust modülüne yazılır:
+
+```proto
+import "gsb/options.proto";        // gsb-protocol'ün proto dizininden
+
+message Transfer { string to = 1; uint64 amount = 2; }
+message TransferDone { uint64 balance = 1; }
+message GameError { uint32 code = 1; }
+
+service Game {
+  option (gsb.reserved_op) = 1002;                 // emekli: asla yeniden kullanılmaz
+  rpc Send(Transfer) returns (TransferDone) {      // rpc adı ≠ istek mesajının adı
+    option (gsb.op) = 1001;                        // iç op (oyun bandı, ≥ 1000)
+    option (gsb.error) = "GameError";              // tipli hata mesajı
+  }
+}
+```
+
+```rust
+// build.rs  ([build-dependencies] gsb-build; [dependencies] gsb-protocol)
+let mut b = gsb_build::Builder::new();             // vendored protoc + gsb-protocol'ün dizini
+b.extern_path(".gsb.base", "::gsb_protocol::base");
+b.compile(&["proto/game.proto"], &["proto"]).unwrap_or_else(|e| panic!("{e}"));
+```
+
+Build şunları **reddeder** (hepsini listeleyerek): yinelenen op, motor
+aralığında (`< 1000`) ya da 16 biti aşan op, bir `(gsb.reserved_op)`'u
+alan rpc, `(gsb.error)`'suz ya da bilinmeyen bir mesajı adlandıran rpc,
+akışlı rpc, iki rpc'de aynı istek mesajı. Sunucuda oyun isteği tabloya
+`calls.accept::<Transfer>()` ile alır (`GameLogic::boot_calls`),
+`take_incoming`/`reply` ile cevaplar; `Err(GameError{..})` istemciye
+`RpcResponse.game_error` ile gider. Rust istemcisi aynı tiplerle
+`gsb_client::requests::RequestClient::request::<Transfer>(&body)` çağırır
+ve `Result<TransferDone, RequestError<GameError>>` alır. Örnek: gsb-demo'nun
+`DemoRequests` servisi (`AbilityUse`, 1005) ve
+`gsb-server/tests/typed_requests.rs`.
+
 ## 5. Fazlar
 
 | Faz | Kapsam | Kapı |
