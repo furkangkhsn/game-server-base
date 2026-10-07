@@ -51,6 +51,8 @@ where
                 None => self.config.period(),
             }
         };
+        // The room clock (`TickCtx::time`): the sum of the steps' dt.
+        self.clock += dt;
 
         // -- Phase 0 — CONTROL (before actions: a fresh join's action
         //    channel is only registered once its Join has been processed).
@@ -80,12 +82,17 @@ where
         //    too (E8): a local, empty and allocation-free unless a hook
         //    kicks.
         let kicks = KickQueue::default();
+        // The generator is lent like the clock (the phases below take
+        // `&mut self`); it comes back with it at the end of the step.
+        let rng = std::mem::take(&mut self.rng);
         let idle = std::mem::take(&mut self.idle);
         let paths = std::mem::take(&mut self.paths);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
+            time: self.clock,
+            rng: rng.view(),
             idle: crate::room::IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
             paths: paths.view(self.config.period()),
@@ -133,6 +140,8 @@ where
             room: self.config.id,
             tick: t.tick,
             dt,
+            time: self.clock,
+            rng: rng.view(),
             idle: crate::room::IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
             paths: paths.view(self.config.period()),
@@ -150,6 +159,7 @@ where
         // hand the clock back to the actor, then apply what the
         // broadcast-phase hooks kicked.
         self.idle = idle;
+        self.rng = rng;
         self.paths = paths;
         self.apply_kicks(kicks.take());
         true

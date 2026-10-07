@@ -604,6 +604,23 @@ pub trait GameLogic<W>: Send {
     /// generator. Default: nothing — the room's output is exactly what
     /// it was without the seam.
     fn logic_counters(&self, _world: &W, _out: &mut crate::metrics::LogicCounters) {}
+
+    /// The tick's state hash (`docs/SERVICES.md` §10.1): fold the state a
+    /// replay must reproduce — what the input hooks and SYSTEMS wrote —
+    /// into one value (a [`StateHasher`](crate::determinism::StateHasher)
+    /// is the stable choice; never std's keyed `DefaultHasher`, never a
+    /// `HashMap`'s iteration order). The engine folds in the room's
+    /// generator state and clock. Asked once per step, at its end, ONLY
+    /// when the room records its input (feature `record`), replays a log,
+    /// or runs in TEST mode ([`SimRoom`](crate::determinism::SimRoom)) —
+    /// a live room that records nothing never calls it. `&mut` because an
+    /// ECS query needs the world mutably.
+    ///
+    /// Default: `None` (nothing hashed: the log carries no hash, a replay
+    /// compares none).
+    fn state_hash(&mut self, _world: &mut W) -> Option<u64> {
+        None
+    }
 }
 
 /// Game-side behaviour of a SINGLE-ROOM actor. Faz 3 promoted the two

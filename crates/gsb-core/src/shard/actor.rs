@@ -147,6 +147,11 @@ pub struct ShardActor<W, G, St, Sp> {
     pub(in crate::shard) deferred: VecDeque<ShardMsg<St, Sp>>,
     pub(in crate::shard) run_every: u64,
     pub(in crate::shard) last_at: Option<Instant>,
+    /// The shard's generator (seeded from the room's seed and the shard
+    /// index), lent to the hooks as `TickCtx::rng` (SERVICES §10.1).
+    pub(in crate::shard) rng: crate::determinism::RoomRng,
+    /// The shard clock: the sum of the steps' `dt` (`TickCtx::time`).
+    pub(in crate::shard) clock: std::time::Duration,
     pub(in crate::shard) steps: u64,
     pub(in crate::shard) keepalive_every: Option<u64>,
     pub(in crate::shard) metrics_every: u64,

@@ -50,6 +50,7 @@ pub mod auth;
 pub mod calls;
 pub mod channel;
 pub mod conn;
+pub mod determinism;
 pub mod error;
 pub mod id;
 pub mod metrics;

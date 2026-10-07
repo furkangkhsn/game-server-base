@@ -59,6 +59,8 @@ where
                 None => self.config.period(),
             }
         };
+        // The room clock (`TickCtx::time`): the sum of the steps' dt.
+        self.clock += dt;
 
         // -- Tombstone TTL sweep (lazy, CONTROL). Bounded cost: the
         //    tombstone table only ever holds leaves of the last TTL
@@ -234,12 +236,17 @@ where
         //    context lends the tick's kick queue too (E8): a local, empty
         //    and allocation-free unless a hook kicks.
         let kicks = KickQueue::default();
+        // The generator is lent like the clock (the phases below take
+        // `&mut self`); it comes back with it at the end of the step.
+        let rng = std::mem::take(&mut self.rng);
         let idle = std::mem::take(&mut self.idle);
         let paths = std::mem::take(&mut self.paths);
         let ctx = TickCtx {
             room: self.config.id,
             tick: t.tick,
             dt,
+            time: self.clock,
+            rng: rng.view(),
             idle: IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
             paths: paths.view(self.config.period()),
@@ -290,6 +297,8 @@ where
             room: self.config.id,
             tick: t.tick,
             dt,
+            time: self.clock,
+            rng: rng.view(),
             idle: IdleView::new(&idle, t.at),
             kicks: kicks.kicks(),
             paths: paths.view(self.config.period()),
@@ -309,6 +318,7 @@ where
         // and BROADCAST hooks kicked (a member that crossed in this
         // tick's MIGRATE is no longer this shard's: its kick is a no-op).
         self.idle = idle;
+        self.rng = rng;
         self.paths = paths;
         self.apply_kicks(kicks.take());
         true

@@ -88,6 +88,8 @@ impl<G: Key, St: Mig> Room<G, St> {
             idle: Default::default(),
             kicks: Default::default(),
             paths: Default::default(),
+            time: std::time::Duration::ZERO,
+            rng: Default::default(),
         };
         self.migrated.clear();
         for (from, to, m) in std::mem::take(&mut self.crossings) {

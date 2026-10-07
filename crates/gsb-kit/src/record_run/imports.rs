@@ -40,6 +40,8 @@ fn ctx(tick: u64) -> TickCtx<'static> {
         idle: Default::default(),
         kicks: Default::default(),
         paths: Default::default(),
+        time: std::time::Duration::ZERO,
+        rng: Default::default(),
     }
 }
 

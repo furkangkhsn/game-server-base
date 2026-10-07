@@ -105,6 +105,13 @@ pub struct RoomActor<W, G, Sp> {
     pub(in crate::room) run_every: u64,
     /// Wall-clock instant of the last step (for dt).
     pub(in crate::room) last_at: Option<Instant>,
+    /// The room's seed (`RoomConfig::seed`, or a fresh one): its
+    /// generator and its call-key origin derive from it (SERVICES §10.1).
+    pub(in crate::room) seed: u64,
+    /// The room's generator, lent to the hooks as `TickCtx::rng`.
+    pub(in crate::room) rng: crate::determinism::RoomRng,
+    /// The room clock: the sum of the steps' `dt` (`TickCtx::time`).
+    pub(in crate::room) clock: std::time::Duration,
     /// Room's own step counter (keep-alive cadence is in *room* steps, so a
     /// slower room keeps the same keep-alive rate in real time).
     pub(in crate::room) steps: u64,

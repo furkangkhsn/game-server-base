@@ -75,11 +75,11 @@ where
         let border_every = (config.tick_hz.round() as u64).max(1);
         // The call table (the room actor's, keyed per shard).
         let mut logic = logic;
-        let (calls, boot_error) = crate::room::call_table(
-            &config,
-            config.id.0.wrapping_shl(16) ^ index as u64,
-            &mut *logic,
-        );
+        let actor = config.id.0.wrapping_shl(16) ^ index as u64;
+        let seed = config
+            .seed
+            .unwrap_or_else(|| crate::determinism::fresh_seed(actor));
+        let (calls, boot_error) = crate::room::call_table(&config, actor, seed, &mut *logic);
         let effects = EffectBook::new(index, logic.shard_count());
         Self {
             config,
@@ -112,6 +112,8 @@ where
             deferred: VecDeque::new(),
             run_every: run_every.max(1),
             last_at: None,
+            rng: crate::determinism::RoomRng::new(crate::calls::mix(seed ^ index as u64)),
+            clock: std::time::Duration::ZERO,
             steps: 0,
             keepalive_every,
             metrics_every,

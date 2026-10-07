@@ -18,6 +18,11 @@ prometheus = []
 # collector, on its own task. No new dependency: the messages are
 # `prost` derives, the request a plain tokio `TcpStream`.
 otlp = []
+# The room's input log (`determinism`, docs/SERVICES.md §10): a room
+# that is given a recorder writes, per tick, what entered its logic; a
+# log replays (`determinism::Replay`) without calling any service. Off:
+# none of the recording code exists (the idle cost is unchanged).
+record = []
 
 [dependencies]
 tokio = { workspace = true }

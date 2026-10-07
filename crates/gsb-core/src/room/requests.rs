@@ -41,14 +41,18 @@ pub(crate) use parts;
 
 /// The call table of an actor whose actor id is `actor` (a room id, a
 /// shard's sample id), sized by `config`, with the logic's boot
-/// registrations (`GameLogic::boot_calls`). A registration error is
-/// logged and handed back (the first claim of an op stays): the actor is
-/// built anyway — its construction is infallible — and keeps the error
-/// (`boot_error`) for the registry, which refuses to install a room
+/// registrations (`GameLogic::boot_calls`). Its key origin derives from
+/// the actor's `seed` (`mix(seed ^ mix(actor))`, `docs/SERVICES.md`
+/// §10.1): a replay of the same seed issues the same keys; a fresh seed
+/// per incarnation keeps them unique across rebirths. A registration
+/// error is logged and handed back (the first claim of an op stays): the
+/// actor is built anyway — its construction is infallible — and keeps the
+/// error (`boot_error`) for the registry, which refuses to install a room
 /// whose table did not boot (B153).
 pub(crate) fn table<W, G, Sp>(
     config: &RoomConfig,
     actor: u64,
+    seed: u64,
     logic: &mut dyn GameLogic<W, GroupKey = G, Strip = Sp>,
 ) -> (Calls, Option<crate::calls::BootError>)
 where
@@ -57,7 +61,7 @@ where
 {
     let mut calls = Calls::new(crate::calls::CallsConfig {
         actor: crate::calls::ActorId(actor),
-        origin: crate::calls::mix(actor),
+        origin: crate::calls::mix(seed ^ crate::calls::mix(actor)),
         share: config.call_share,
         completions: config
             .call_completions

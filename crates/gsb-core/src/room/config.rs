@@ -192,6 +192,15 @@ pub struct RoomConfig {
     ///
     /// Default 60 s ([`crate::calls::DEFAULT_CALL_TIMEOUT`]).
     pub call_timeout: Option<Duration>,
+    /// The room's seed (`docs/SERVICES.md` §10.1): the generator its
+    /// logic draws from ([`TickCtx::rng`](crate::room::TickCtx::rng)) and
+    /// its call-key origin (`mix(seed ^ mix(room))`) both derive from it,
+    /// and an input log records it. `None` = a fresh seed per incarnation
+    /// ([`crate::determinism::fresh_seed`]: keys stay unique across a
+    /// room's rebirths); a fixed seed is for TEST mode and replay.
+    ///
+    /// Default `None`.
+    pub seed: Option<u64>,
     /// Whether the registry should REBUILD the room from the same factory +
     /// config when its actor task dies unexpectedly (a panic in the game
     /// logic kills the room's task; without the death watch the registry's
@@ -342,6 +351,7 @@ impl Default for RoomConfig {
             call_share: 64,
             call_completions: 1024,
             call_timeout: Some(crate::calls::DEFAULT_CALL_TIMEOUT),
+            seed: None,
             restart_on_panic: false,
             persistent: false,
             // OFF: the feature is invisible until an operator asks for it.

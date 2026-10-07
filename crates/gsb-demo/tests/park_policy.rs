@@ -556,6 +556,8 @@ mod sharded_park {
             idle: Default::default(),
             kicks: Default::default(),
             paths: Default::default(),
+            time: std::time::Duration::ZERO,
+            rng: Default::default(),
         };
 
         // Off-cadence tick: the gate synthesizes nothing.

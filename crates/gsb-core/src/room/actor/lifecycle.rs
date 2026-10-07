@@ -73,7 +73,10 @@ where
         };
         let budget_us = config.period().as_micros() as u64;
         let mut logic = logic;
-        let (calls, boot_error) = call_table(&config, config.id.0, &mut *logic);
+        let seed = config
+            .seed
+            .unwrap_or_else(|| crate::determinism::fresh_seed(config.id.0));
+        let (calls, boot_error) = call_table(&config, config.id.0, seed, &mut *logic);
         Self {
             config,
             world,
@@ -92,6 +95,9 @@ where
             groups: HashMap::new(),
             run_every: run_every.max(1),
             last_at: None,
+            seed,
+            rng: crate::determinism::RoomRng::new(seed),
+            clock: std::time::Duration::ZERO,
             steps: 0,
             keepalive_every,
             metrics_every,

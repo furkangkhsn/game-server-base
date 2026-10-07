@@ -173,7 +173,18 @@ pub struct TickCtx<'a> {
     /// Global tick index (from the ticker; all rooms share one clock).
     pub tick: u64,
     /// Time since the previous step (covers any ticks missed in between).
+    /// The only step length logic may use (no wall clock in logic —
+    /// `docs/SERVICES.md` §10.4): recorded, so a replay steps the same.
     pub dt: Duration,
+    /// The room clock: the sum of the steps' `dt`, this one included
+    /// (zero before the first step). A hand-built context sets what it
+    /// likes (`Duration::ZERO`).
+    pub time: Duration,
+    /// The room's seeded generator ([`crate::determinism::Rng`]) — the
+    /// only randomness logic may draw: its seed is recorded, so a replay
+    /// draws the same. A hand-built context defaults to the INERT handle
+    /// (a thread-local stream seeded with 0).
+    pub rng: crate::determinism::Rng<'a>,
     /// Per-player input idleness — the AFK signal (see [`IdleView`] for
     /// what counts as input). A hand-built context defaults to the EMPTY
     /// view, whose every answer is `None`.
