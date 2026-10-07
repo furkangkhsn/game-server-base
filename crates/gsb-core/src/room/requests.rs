@@ -380,7 +380,7 @@ impl<G> Parts<'_, G> {
                     // by the RESPONSES sweep; the worker's own timeout
                     // only bounds the task).
                     let timeout = self.config.request_timeout;
-                    let due = crate::ticker::now() + timeout;
+                    let due = self.calls.now() + timeout;
                     self.calls
                         .external(req.conn, req.id, req.op, fut, due, timeout);
                     self.m.requests_external += 1;

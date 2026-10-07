@@ -362,6 +362,9 @@ pub struct Calls {
     /// Game calls' deadlines (`CallsConfig::timeout`), in send order =
     /// deadline order.
     pub(crate) call_deadlines: VecDeque<(Instant, CallKey)>,
+    /// The deadline clock's pinned reading (TEST mode: the step's stamp,
+    /// [`Self::pin_clock`]); `None` reads the tick clock.
+    pub(crate) clock: Option<Instant>,
     // Out.
     pub(crate) outbox: Vec<(ConnectionId, RpcReply)>,
     pub(crate) counts: CallCounts,
@@ -419,6 +422,7 @@ impl Calls {
             legacy_total: 0,
             deadlines: VecDeque::new(),
             call_deadlines: VecDeque::new(),
+            clock: None,
             outbox: Vec::new(),
             counts: CallCounts::default(),
             #[cfg(feature = "record")]
@@ -435,6 +439,21 @@ impl Calls {
                 c
             },
         }
+    }
+
+    /// The deadline clock (the table's call deadlines, the room's
+    /// External deadlines and detach holds): the tick clock
+    /// ([`crate::ticker::now`]), or the instant TEST mode pinned for the
+    /// step ([`Self::pin_clock`]) — so a sim's deadlines run on its own
+    /// fixed-`dt` stamps, not on the wall clock (BACKLOG B174).
+    pub(crate) fn now(&self) -> Instant {
+        self.clock.unwrap_or_else(crate::ticker::now)
+    }
+
+    /// Pin the deadline clock to `at` until the next pin (TEST mode pins
+    /// each step's stamp before the step).
+    pub(crate) fn pin_clock(&mut self, at: Instant) {
+        self.clock = Some(at);
     }
 
     /// The table's knobs.

@@ -306,6 +306,8 @@ fn input(e: &mut Enc, i: &Input, codecs: &Codecs, stats: &mut WriterStats) {
             conn,
             identity,
             claims,
+            player,
+            entity,
         } => {
             e.u8(JOIN);
             e.u64(conn.0);
@@ -317,6 +319,8 @@ fn input(e: &mut Enc, i: &Input, codecs: &Codecs, stats: &mut WriterStats) {
                 }
                 None => e.u8(0),
             }
+            e.u64(player.0);
+            e.u64(*entity);
         }
         Input::Resume {
             identity,
@@ -354,9 +358,10 @@ fn input(e: &mut Enc, i: &Input, codecs: &Codecs, stats: &mut WriterStats) {
                 _ => e.u8(0),
             }
         }
-        Input::Release { player } => {
+        Input::Release { player, released } => {
             e.u8(RELEASE);
             e.u64(player.0);
+            e.bool(*released);
         }
         Input::Expire { player, to } => {
             e.u8(EXPIRE);
@@ -494,6 +499,8 @@ fn read_input(d: &mut Dec<'_>) -> Option<Input> {
                 0 => None,
                 _ => Some(d.bytes()?),
             },
+            player: PlayerId(d.u64()?),
+            entity: d.u64()?,
         },
         RESUME => Input::Resume {
             identity: d.str()?,
@@ -519,6 +526,7 @@ fn read_input(d: &mut Dec<'_>) -> Option<Input> {
         },
         RELEASE => Input::Release {
             player: PlayerId(d.u64()?),
+            released: d.bool()?,
         },
         EXPIRE => Input::Expire {
             player: PlayerId(d.u64()?),

@@ -47,6 +47,7 @@ where
         };
         let inputs = self.calls.take_inputs();
         let hash = self.state_hash();
+        self.step_hash = Some(hash);
         let msg = RecordMsg::Tick(TickRecord {
             tick,
             dt,

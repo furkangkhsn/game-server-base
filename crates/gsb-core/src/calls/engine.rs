@@ -488,8 +488,7 @@ impl Calls {
                 *self.per_service.entry(e.service).or_insert(0) += 1;
                 self.counts.calls_sent += 1;
                 if let Some(t) = self.cfg.timeout {
-                    self.call_deadlines
-                        .push_back((crate::ticker::now() + t, key));
+                    self.call_deadlines.push_back((self.now() + t, key));
                 }
             }
             Err((why, sink)) => {

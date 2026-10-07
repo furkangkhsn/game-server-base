@@ -23,12 +23,13 @@ where
     /// (non-blocking — the room never awaits a service or a worker; the
     /// same `try_recv` discipline as the control channel), then the
     /// External deadlines on the tick clock (`ticker::now()` — the
-    /// deadline is set on it too, F16). Exactly one answer per request is
+    /// deadline is set on it too, F16; TEST mode's pinned step stamp,
+    /// [`crate::calls::Calls::now`]). Exactly one answer per request is
     /// structural: a report for a call no longer pending (already
     /// answered, timed out, or its session ended) is dropped and counted.
     /// Cost when quiet: one empty `try_recv` and two `is_empty` probes.
     pub(super) fn phase_completions(&mut self) {
-        let now = crate::ticker::now();
+        let now = self.calls.now();
         let logic = &self.logic;
         let world = &self.world;
         let conns = &self.conns;

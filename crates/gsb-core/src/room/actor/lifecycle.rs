@@ -100,6 +100,8 @@ where
             clock: std::time::Duration::ZERO,
             #[cfg(feature = "record")]
             recorder: None,
+            #[cfg(feature = "record")]
+            step_hash: None,
             steps: 0,
             keepalive_every,
             metrics_every,

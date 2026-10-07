@@ -258,3 +258,58 @@ impl Purse for Fake {
         }
     }
 }
+
+/// B174: TEST mode's deadlines run on the sim's own fixed-`dt` stamps.
+/// A call `Delay::never` holds ends `TimedOut` by the table's own
+/// deadline (`call_timeout` = 5 periods) at exactly the fifth step after
+/// its FLUSH — the steps run back to back, microseconds of wall clock
+/// apart, so a wall-clock deadline would never be reached here.
+#[test]
+fn the_table_deadline_runs_on_the_sim_clock() {
+    let mut sim = Sim::new();
+    let bank = sim.service(
+        "bank",
+        8,
+        Delay::never(|env: Envelope<BankMsg>| async move { bank_answer(env) }),
+    );
+    let inv = sim.service(
+        "inventory",
+        8,
+        Delay::ticks(1, |env: Envelope<InvMsg>| async move { inv_answer(env) }),
+    );
+    let mut room = SimRoom::new(
+        RoomConfig {
+            seed: Some(5),
+            tick_hz: 10.0,
+            keepalive_hz: 0.0,
+            metrics_cadence_hz: 0.0,
+            call_timeout: Some(std::time::Duration::from_millis(500)),
+            ..Default::default()
+        },
+        World::new(),
+        Box::new(Shop {
+            bank,
+            inv,
+            rolls: 0,
+        }),
+    );
+    let mut alice = room.join(1, "alice");
+    room.tick(&mut sim);
+    room.tick(&mut sim);
+    alice.request(1, &Buy { price: 5 });
+    room.tick(&mut sim); // the charge leaves at this step's FLUSH
+    let issued = room.tick_no();
+    let mut at = None;
+    for _ in 0..20 {
+        room.tick(&mut sim);
+        let got = answers(&mut alice);
+        if !got.is_empty() {
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].reason, crate::rpc::TIMEOUT_REASON);
+            at = Some(room.tick_no());
+            break;
+        }
+    }
+    assert_eq!(at, Some(issued + 5), "the deadline is five sim periods");
+    assert_eq!(room.counts().results_timed_out, 1);
+}

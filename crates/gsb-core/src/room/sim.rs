@@ -44,6 +44,19 @@ where
         let game = self.logic.state_hash(&mut self.world);
         crate::determinism::fold(game, self.rng.state(), self.clock)
     }
+
+    /// The hash the step's record already took (feature `record`), if
+    /// any — so TEST mode does not ask the logic twice (B177).
+    fn take_step_hash(&mut self) -> Option<Option<u64>> {
+        #[cfg(feature = "record")]
+        {
+            self.step_hash.take()
+        }
+        #[cfg(not(feature = "record"))]
+        {
+            None
+        }
+    }
 }
 
 /// A room in TEST mode (see the module docs).
@@ -124,10 +137,14 @@ where
         let (_tick_tx, tick_rx) = broadcast::channel(1);
         let (_control, control_rx) = crate::channel::channel(1);
         let (metrics, _gone) = mpsc::channel(1);
-        let actor = RoomActor::new(config, world, logic, tick_rx, control_rx, 1, metrics, None);
+        let mut actor = RoomActor::new(config, world, logic, tick_rx, control_rx, 1, metrics, None);
+        // The deadlines run on the sim's own stamps (B174): pinned to t0
+        // until the first step, then to each step's stamp.
+        let t0 = Instant::now();
+        actor.calls.pin_clock(t0);
         Self {
             actor,
-            t0: Instant::now(),
+            t0,
             tick: 0,
             hashes: Vec::new(),
         }
@@ -195,14 +212,22 @@ where
     }
 
     /// One step stamped `at` (a live-timing run: `dt` is the stamps'
-    /// difference, as in a live room). Its hash is kept.
+    /// difference, as in a live room). Its hash is kept. Every deadline
+    /// the step checks or sets (the table's call timeout, External
+    /// deadlines, detach holds) reads `at`, not the wall clock (B174).
     pub fn tick_at(&mut self, at: Instant) -> bool {
         self.tick += 1;
+        self.actor.calls.pin_clock(at);
         let keep = self.actor.step(&TickInfo {
             tick: self.tick,
             at,
         });
-        let h = self.actor.state_hash();
+        // A recording room hashed this step already (its record carries
+        // the hash): asked once per step (B177).
+        let h = match self.actor.take_step_hash() {
+            Some(h) => h,
+            None => self.actor.state_hash(),
+        };
         self.hashes.push(h);
         keep
     }

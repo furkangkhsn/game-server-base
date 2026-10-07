@@ -118,6 +118,10 @@ pub struct RoomActor<W, G, Sp> {
     /// recording — no input is kept).
     #[cfg(feature = "record")]
     pub(in crate::room) recorder: Option<crate::determinism::Recorder>,
+    /// The last step's hash as its record took it (feature `record`),
+    /// for TEST mode to reuse instead of asking the logic again (B177).
+    #[cfg(feature = "record")]
+    pub(in crate::room) step_hash: Option<Option<u64>>,
     /// Room's own step counter (keep-alive cadence is in *room* steps, so a
     /// slower room keeps the same keep-alive rate in real time).
     pub(in crate::room) steps: u64,

@@ -101,6 +101,11 @@ pub(super) fn inv_answer(env: Envelope<InvMsg>) {
 
 // ---- the game ------------------------------------------------------------------
 
+thread_local! {
+    /// How many times this thread's `Shop`s were asked their hash.
+    pub(super) static HASHED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(super) struct Player {
     pub gold: u64,
@@ -261,6 +266,7 @@ impl GameLogic<World> for Shop {
         }
     }
     fn state_hash(&mut self, w: &mut World) -> Option<u64> {
+        HASHED.with(|n| n.set(n.get() + 1));
         let mut h = StateHasher::new();
         for (id, p) in w.iter() {
             id.0.hash(&mut h);

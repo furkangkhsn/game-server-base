@@ -176,6 +176,12 @@ fn live() -> Live {
     }
 }
 
+/// An ending of one of the game's calls (it changes the world; the
+/// External's answer only goes to its client).
+fn game_ending(r: &crate::determinism::Recorded) -> bool {
+    r.call != "gsb::External" && r.arrival == crate::determinism::Arrival::Ended
+}
+
 fn answers_of(c: &mut crate::determinism::SimClient) -> Vec<gsb_protocol::base::RpcResponse> {
     answers(c)
 }
@@ -236,8 +242,10 @@ fn a_live_run_replays_to_the_same_hashes_and_answers_without_calling_services() 
     );
 
     // Negative control: the hashes see arrival timing. Deliver the first
-    // recorded RESPONSES one tick later: the replay diverges at exactly
-    // that tick.
+    // recorded RESPONSES that ends a game call one tick later: the replay
+    // diverges at exactly that tick. (Not the External's alone: its
+    // answer goes to the client and leaves the world as it was — it can
+    // come first when the loads are slow.)
     let mut log = Arc::try_unwrap(l.log).expect("sole owner");
     let (i, at) = log
         .ticks
@@ -246,7 +254,7 @@ fn a_live_run_replays_to_the_same_hashes_and_answers_without_calling_services() 
         .find_map(|(i, t)| {
             t.inputs
                 .iter()
-                .position(|x| matches!(x, Input::Responses(_)))
+                .position(|x| matches!(x, Input::Responses(list) if list.iter().any(game_ending)))
                 .map(|at| (i, at))
         })
         .expect("a response");
@@ -271,7 +279,7 @@ fn a_recorded_ending_of_another_call_type_is_counted_and_never_applied() {
         .find_map(|t| {
             let tick = t.tick;
             t.inputs.iter_mut().find_map(|x| match x {
-                Input::Responses(list) => list.first_mut().map(|r| {
+                Input::Responses(list) => list.iter_mut().find(|r| game_ending(r)).map(|r| {
                     r.call = Cow::Borrowed("another::Call");
                     (tick, r.key)
                 }),
@@ -357,4 +365,117 @@ fn the_writer_thread_writes_what_the_room_records() {
     assert_eq!(report.hashes, hashes);
     assert_eq!(report.first_divergent, None);
     let _ = std::fs::remove_file(&path);
+}
+
+/// A TEST-mode run (fake services), recorded in memory.
+fn sim_run(ticks: u64) -> (Arc<InputLog>, Vec<Option<u64>>, Codecs) {
+    let mut sim = Sim::new();
+    let bank = sim.service(
+        "bank",
+        64,
+        Delay::ticks(2, |env: Envelope<BankMsg>| async move { bank_answer(env) }),
+    );
+    let inv = sim.service(
+        "inventory",
+        64,
+        Delay::ticks(1, |env: Envelope<InvMsg>| async move { inv_answer(env) }),
+    );
+    let mut room = SimRoom::new(
+        config(11),
+        World::new(),
+        Box::new(Shop {
+            bank,
+            inv,
+            rolls: 0,
+        }),
+    );
+    let (recorder, mut inbox) = Recorder::channel(1 << 10, "shop-1");
+    room.record(recorder);
+    let alice = room.join(1, "alice");
+    let bob = room.join(2, "bob");
+    for t in 1..=ticks {
+        script(t, &alice, &bob);
+        room.tick(&mut sim);
+    }
+    let hashes = room.hashes().to_vec();
+    let codecs = room.calls().codecs().clone();
+    drop(room);
+    let log = InputLog::collect(&mut inbox).expect("the header arrived");
+    (Arc::new(log), hashes, codecs)
+}
+
+/// B175: the CONTROL answers in the log — a join's admission, a hold's
+/// `may_release` — are compared with the replay's own. A different one is
+/// `replay_diverged` and reports its tick, even where the state hash
+/// cannot see it (here: the world is keyed by the replay's own answer,
+/// and `may_release` changes nothing).
+#[test]
+fn a_different_admission_or_release_answer_is_reported_like_a_hash() {
+    let (log, hashes, _) = sim_run(12);
+    let (report, _) = replay(&log);
+    assert_eq!(report.hashes, hashes);
+    assert_eq!(
+        (report.first_divergent, report.counts.replay_diverged),
+        (None, 0)
+    );
+
+    // The admission: the log says bob was admitted as another player.
+    let mut tampered = Arc::try_unwrap(log).expect("sole owner");
+    let join_tick = tampered.ticks[0].tick;
+    let bob = tampered.ticks[0]
+        .inputs
+        .iter_mut()
+        .find_map(|x| match x {
+            Input::Join {
+                identity, player, ..
+            } if identity == "bob" => Some(player),
+            _ => None,
+        })
+        .expect("bob's join is in the first record");
+    *bob = crate::id::PlayerId(99);
+    let tampered = Arc::new(tampered);
+    let (report, _) = replay(&tampered);
+    assert_eq!(report.hashes, hashes, "the hash cannot see it");
+    assert_eq!(report.first_divergent, Some(join_tick));
+    assert_eq!(report.counts.replay_diverged, 1);
+
+    // The release: the log says the logic kept alice parked at tick 6
+    // (`Shop` always releases) — also through a file.
+    let (log, _, codecs) = sim_run(12);
+    let mut tampered = Arc::try_unwrap(log).expect("sole owner");
+    let at = tampered.ticks[5].tick;
+    tampered.ticks[5].inputs.insert(
+        0,
+        Input::Release {
+            player: crate::id::PlayerId(1),
+            released: false,
+        },
+    );
+    let path = std::env::temp_dir().join(format!("gsb-q6-{}-release.log", std::process::id()));
+    write_log(&path, &tampered, &codecs).expect("written");
+    let read = read_log(&path).expect("read");
+    let _ = std::fs::remove_file(&path);
+    assert!(matches!(
+        read.ticks[5].inputs[0],
+        Input::Release {
+            released: false,
+            ..
+        }
+    ));
+    for log in [Arc::new(tampered), Arc::new(read)] {
+        let mut r = Replay::new(log, World::new(), Box::new(nowhere()));
+        let report = r.run();
+        assert_eq!(report.first_divergent, Some(at));
+        assert!(report.counts.replay_diverged >= 1, "{:?}", report.counts);
+    }
+}
+
+/// B177: a recording TEST-mode room asks the logic its hash once per
+/// step (the record's hash is the step's hash).
+#[test]
+fn a_recording_sim_room_hashes_once_per_step() {
+    HASHED.with(|n| n.set(0));
+    let (log, hashes, _) = sim_run(10);
+    assert_eq!(HASHED.with(|n| n.get()), 10);
+    assert_eq!(log.hashes(), hashes, "TEST mode keeps the recorded hash");
 }

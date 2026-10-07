@@ -73,13 +73,17 @@ where
         // The verified claims (B21) ride the join to the logic only;
         // the row keeps the identity alone.
         let joiner = crate::auth::Joiner::new(&identity).with_claims(claims.as_ref());
+        let admission = self.logic.on_join_verified(&mut self.world, conn, &joiner);
+        // Noted with the admission the logic answered (the hook is the
+        // join's only input, so noting it after is the same order).
         #[cfg(feature = "record")]
         self.calls.note(|| crate::determinism::Input::Join {
             conn,
             identity: identity.clone(),
             claims: claims.clone(),
+            player: admission.player,
+            entity: admission.entity,
         });
-        let admission = self.logic.on_join_verified(&mut self.world, conn, &joiner);
         self.m.joins += 1;
         let (act_tx, act_rx) = self.config.action_channel();
         self.binding.insert(conn, admission.player);

@@ -28,7 +28,10 @@ use crate::room::{DisconnectCause, ExpireTo, RoomConfig};
 
 /// The log format's version (the file's header carries it; a reader
 /// refuses another).
-pub const FORMAT_VERSION: u16 = 1;
+///
+/// 2: a join carries its admission, a hold's release ask its answer
+/// (B175).
+pub const FORMAT_VERSION: u16 = 2;
 
 /// What a log was recorded with: the formats and versions (a replay
 /// needs the same binary — `replay_diverged` catches a different one,
@@ -159,7 +162,8 @@ pub struct RecordedAction {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Input {
-    /// `on_join_verified(conn, identity, claims)`.
+    /// `on_join_verified(conn, identity, claims)` and the admission it
+    /// answered (a replay compares its own: B175).
     Join {
         /// The session.
         conn: ConnectionId,
@@ -167,6 +171,10 @@ pub enum Input {
         identity: String,
         /// The verified claims.
         claims: Option<Bytes>,
+        /// The admitted player.
+        player: PlayerId,
+        /// Its entity.
+        entity: EntityId,
     },
     /// `on_resume(identity, conn, player, entity)`.
     Resume {
@@ -193,10 +201,13 @@ pub enum Input {
         /// Why.
         cause: DisconnectCause,
     },
-    /// `may_release(player)`.
+    /// `may_release(player)` and its answer (a replay compares its own:
+    /// B175).
     Release {
         /// The parked player.
         player: PlayerId,
+        /// Whether the logic released it.
+        released: bool,
     },
     /// `on_detach_expired(player, to)`.
     Expire {

@@ -120,8 +120,9 @@ where
                 // and the veto ceiling are written here as absolute
                 // instants and the phase-0c sweep reads them.
                 let ceiling = self.config.max_detach_hold;
+                let now = self.calls.now();
                 let rc = self.conns.get_mut(&player).expect("guarded by caller");
-                rc.park(grace, to, ceiling, crate::ticker::now());
+                rc.park(grace, to, ceiling, now);
                 // OFF the input-idle clock while parked: the row has no
                 // live input source, so counting its silence would
                 // double-count a member the detach machinery already owns

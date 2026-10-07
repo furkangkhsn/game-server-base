@@ -38,7 +38,7 @@ where
         //    alive under a `bot_fed` marker (Tur B synthesizes the input;
         //    this is the documented seam).
         if self.conns.values().any(|rc| rc.detached && !rc.bot_fed) {
-            let now = crate::ticker::now();
+            let now = self.calls.now();
             // Collected first so each logic callback runs against an
             // unborrowed `self`.
             let ask: Vec<PlayerId> = self
@@ -49,10 +49,12 @@ where
                 .collect();
             let mut due: Vec<(PlayerId, ExpireTo)> = Vec::new();
             for pid in ask {
-                #[cfg(feature = "record")]
-                self.calls
-                    .note(|| crate::determinism::Input::Release { player: pid });
                 let released = self.logic.may_release(&mut self.world, pid);
+                #[cfg(feature = "record")]
+                self.calls.note(|| crate::determinism::Input::Release {
+                    player: pid,
+                    released,
+                });
                 let Some(rc) = self.conns.get(&pid) else {
                     continue;
                 };

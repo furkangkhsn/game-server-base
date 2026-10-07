@@ -9,6 +9,11 @@
 //! one: the first tick that differs is reported (the anti-cheat verify:
 //! replay a match, compare).
 //!
+//! The CONTROL answers the log carries — a join's admission, a hold's
+//! `may_release` — are compared with the replay's own: a different one
+//! counts `replay_diverged` and reports its tick like a hash would
+//! (B175); the replay goes on with its own answer.
+//!
 //! No actor, no transport, no runtime: transport-made decisions
 //! (congestion, a malformed envelope, a full room) never reached the
 //! logic and are not in the log. The logic's input-idle and path views
@@ -172,6 +177,8 @@ where
             kicks: kicks.kicks(),
             paths: paths.view(config.period()),
         };
+        // A CONTROL answer that differs from the recorded one (B175).
+        let mut diverged = 0u64;
         for input in &rec.inputs {
             let mut p = Parts {
                 calls,
@@ -185,9 +192,14 @@ where
                     conn,
                     identity,
                     claims,
+                    player,
+                    entity,
                 } => {
                     let joiner = crate::auth::Joiner::new(identity).with_claims(claims.as_ref());
-                    logic.on_join_verified(world, *conn, &joiner);
+                    let a = logic.on_join_verified(world, *conn, &joiner);
+                    if (a.player, a.entity) != (*player, *entity) {
+                        diverged += 1;
+                    }
                 }
                 Input::Resume {
                     identity,
@@ -203,8 +215,10 @@ where
                 } => {
                     logic.on_disconnect_with(world, *player, identity, *cause);
                 }
-                Input::Release { player } => {
-                    logic.may_release(world, *player);
+                Input::Release { player, released } => {
+                    if logic.may_release(world, *player) != *released {
+                        diverged += 1;
+                    }
                 }
                 Input::Expire { player, to } => logic.on_detach_expired(world, *player, *to),
                 Input::BatchDropped { player, snapshot } => {
@@ -272,10 +286,11 @@ where
         for (c, list) in by_conn {
             answers.extend(list.into_iter().map(|r| (c, r)));
         }
+        calls.counts.replay_diverged += diverged;
         let game = logic.state_hash(world);
         let hash = crate::determinism::fold(game, rng.state(), *clock);
         self.hashes.push(hash);
-        if hash != rec.hash && self.first_divergent.is_none() {
+        if (diverged > 0 || hash != rec.hash) && self.first_divergent.is_none() {
             self.first_divergent = Some(rec.tick);
         }
         Some(ReplayTick {
