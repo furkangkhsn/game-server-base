@@ -123,45 +123,29 @@ pub struct RoomActor<W, G, Sp> {
     /// [`crate::metrics`]); the room sends with the synchronous `try_send`,
     /// so it adds no await (drops are counted and harmless).
     pub(in crate::room) metrics: mpsc::Sender<MetricsEvent>,
-    // -- RPC (deferred completion; see `crate::rpc`) ----------------------
-    /// In-flight external requests, per TRANSPORT SESSION (Faz 2 decision,
-    /// documented where the contract left latitude): `pending`/`queued`
-    /// stay conn-keyed BY DESIGN — they are session-scoped RPC state that
-    /// dies with the session. RECONNECT §11 fixes today's leave semantics
-    /// ("pending drops at detach; late reports are silently discarded")
-    /// and detach already clears both tables, so a resumed player never
-    /// inherits the dead session's in-flight work; re-keying them to
-    /// PlayerId would CHANGE that policy (a resume would carry pending
-    /// requests across sessions) for zero gain. Listed in
-    /// `rebind_session`'s enumeration as CHECKED, not missed.
-    /// (FIFO: deadlines are non-decreasing per connection, so only the
-    /// head can expire.) Owner of the pending state: the room is the
-    /// single authority on "is this request still pending" (module docs
-    /// of `crate::rpc`).
-    pub(in crate::room) pending:
-        HashMap<ConnectionId, std::collections::VecDeque<crate::rpc::PendingRequest>>,
-    /// Total in-flight external requests (the room-wide cap).
-    pub(in crate::room) pending_total: usize,
+    // -- Requests and calls (`crate::calls`, `crate::rpc`) -----------------
+    /// The room's call table (`docs/SERVICES.md`): the client requests
+    /// its game takes, the calls it issues and their results, AND the
+    /// built-in path of `RequestDecision::External` — the in-flight
+    /// external requests (session-scoped: they die with their session,
+    /// RECONNECT §11), the completion channel the workers report on
+    /// (drained at RESPONSES, no new await) and their deadlines. The room
+    /// is the single authority on "is this request still pending"
+    /// (module docs of `crate::rpc`).
+    pub(in crate::room) calls: crate::calls::Calls,
     /// This tick's queued RPC answers per transport session; drained in
     /// the broadcast phase (handed to the logic's `private`) and emptied
     /// — except the answers of a dropped batch, which go back here, in
     /// order, for the next tick (F14; `crate::rpc`, "Delivery").
     /// Cleared with the SESSION on leave/rejoin/detach (a stale answer to
     /// a gone session must not be delivered); conn-keyed for the same
-    /// session-scope reason as `pending` above.
+    /// session-scope reason as the table's in-flight requests.
     pub(in crate::room) queued: HashMap<ConnectionId, Vec<crate::rpc::RpcReply>>,
     /// Per-tick scratch for the rare path of the broadcast's RPC-answer
     /// hand-off (a connection's removed `queued` entry, borrowed for the
     /// logic's `private` call). A field so its capacity survives across
     /// ticks; the quiet room never writes it.
     pub(in crate::room) replies_buf: Vec<crate::rpc::RpcReply>,
-    /// Worker reports: the room's inbox for delegated-request outcomes
-    /// (drained non-blockingly in the CONTROL phase — no new await).
-    pub(in crate::room) completions: Inbox<crate::rpc::Completion>,
-    /// The room's sender half of the completion channel, cloned to each
-    /// spawned worker (bounded: a burst of completions cannot exceed the
-    /// room-wide pending cap, which is the channel's capacity).
-    pub(in crate::room) completions_tx: Mailbox<crate::rpc::Completion>,
     /// The room's match-result sink (the control plane's result seam; see
     /// [`RoomLogic::match_result`]): a bounded mailbox, sent to with the
     /// synchronous `try_send` on shutdown (no await, best effort).

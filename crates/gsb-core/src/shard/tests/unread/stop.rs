@@ -3,11 +3,10 @@
 //! requests in flight — counted and handed to the collector in the
 //! shard's final sample, under the shard's own sample id.
 
-use std::collections::VecDeque;
 use std::time::Instant;
 
 use super::*;
-use crate::rpc::{PendingRequest, RpcReply};
+use crate::rpc::RpcReply;
 
 #[tokio::test]
 async fn a_stopping_shard_counts_what_it_holds_in_its_final_sample() {
@@ -39,15 +38,14 @@ async fn a_stopping_shard_counts_what_it_holds_in_its_final_sample() {
             payload: bytes::Bytes::new(),
         }],
     );
-    a.pending.insert(
+    a.calls.external(
         ConnectionId(1),
-        VecDeque::from([PendingRequest {
-            id: 4,
-            op: 1,
-            due: Instant::now(),
-        }]),
+        4,
+        1,
+        Box::pin(std::future::pending()),
+        Instant::now(),
+        std::time::Duration::from_secs(5),
     );
-    a.pending_total = 1;
 
     a.finish();
 

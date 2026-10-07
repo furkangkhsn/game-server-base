@@ -1,9 +1,9 @@
 //! The five-phase tick body. Each phase that carries real weight is a
 //! child module; this file is the order they run in.
 
+use crate::room::parts;
 use crate::room::*;
 use crate::ticker::TickInfo;
-use prost::Message;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tracing::warn;
@@ -15,7 +15,6 @@ mod detach;
 mod idle;
 mod kick;
 mod read;
-mod requests;
 
 impl<W, G, Sp> RoomActor<W, G, Sp>
 where
@@ -92,66 +91,16 @@ where
             paths: paths.view(self.config.period()),
         };
         // -- Phase 2a — split the requests out of the pulled actions (the
-        //    RPC pattern, see `crate::rpc`). A request is an action
-        //    carrying the base-band envelope opcode; the core decodes the
-        //    envelope (a base message) and hands the rest to the logic.
-        //    The split is in-order: both the actions and the requests
-        //    keep their arrival order (the processing order contract:
-        //    all actions, then all requests — module docs of `rpc`).
-        //
-        //    Cost when quiet: one `u16` compare per pulled action — the
-        //    common case (no requests in the tick) touches nothing else.
-        //
-        //    A malformed envelope is a *normal rejection* (a client bug —
-        //    the same class as an undecodable game payload, which the
-        //    logic ignores today), not a protocol violation: the room
-        //    answers with a reject reply and counts it. `id = 0` is
-        //    rejected the same way (it cannot correlate).
-        let mut requests: Vec<crate::rpc::RpcRequest> = Vec::new();
-        actions.retain_mut(|a| {
-            if a.op != crate::rpc::RPC_REQ_OP {
-                return true;
-            }
-            match gsb_protocol::base::RpcRequest::decode(&a.payload[..]) {
-                Ok(env) if env.id != 0 => {
-                    requests.push(crate::rpc::RpcRequest {
-                        conn: a.conn,
-                        // Already translated (phase 1.5): the logic sees
-                        // the stable player key, while pending/replies
-                        // stay session-scoped under `conn`.
-                        player: a.player,
-                        id: env.id,
-                        // The wire type is `u32` (proto3 has no 16-bit
-                        // integers); the op space is `u16` by protocol
-                        // contract — the same range the op registry
-                        // applies to every opcode (a value above the
-                        // space decodes to the `u16` truncation, and the
-                        // logic simply sees an op it does not handle).
-                        op: env.op as u16,
-                        payload: env.payload.into(),
-                    });
-                    false
-                }
-                // Its answer would be owed too: a congested connection at
-                // its cap is refused here, like at 2c (F14).
-                _ if self.refuses_congested(a.conn, a.player) => {
-                    self.m.requests_refused_congested += 1;
-                    false
-                }
-                _ => {
-                    self.m.requests_rejected_malformed += 1;
-                    self.queue_reply(
-                        a.conn,
-                        0,
-                        a.op,
-                        false,
-                        crate::rpc::MALFORMED_REASON.to_string(),
-                        bytes::Bytes::new(),
-                    );
-                    false
-                }
-            }
-        });
+        //    RPC pattern, see `crate::rpc`), then READ: a request whose op
+        //    the call table claims goes into the table now (typed, bound
+        //    to its owner — `docs/SERVICES.md` §5); the rest wait for 2c.
+        //    Both keep their arrival order (`crate::room::Parts::split`).
+        let mut requests = parts!(self).split(&mut actions);
+        {
+            let logic = &self.logic;
+            let world = &self.world;
+            parts!(self).read(&mut requests, &|p| logic.call_owner(world, p));
+        }
 
         // -- Phase 2b — CONVERT: actions → component writes (game logic).
         //    All fire-and-forget actions are processed before the
@@ -159,9 +108,17 @@ where
         //    after this tick's actions were applied).
         self.logic.ingest(&mut self.world, &ctx, &mut actions);
 
-        self.phase_requests(&requests, &ctx);
-        // -- Phase 3 — SYSTEMS: run the ordered game systems.
-        self.logic.update(&mut self.world, &ctx);
+        // -- Phase 2c — the requests no table rule claims: the logic's
+        //    `handle_request` (an `External` decision becomes a built-in
+        //    call of the table).
+        parts!(self).handle(&requests, &mut *self.logic, &mut self.world, &ctx);
+        // -- Phase 3 — SYSTEMS: run the ordered game systems, with the
+        //    call table; then FLUSH: this tick's calls leave, in issue
+        //    order (a refusal is decided here and delivered at the next
+        //    RESPONSES).
+        self.logic
+            .update_with_calls(&mut self.world, &ctx, &mut self.calls);
+        self.calls.flush();
 
         // -- Phase 3b — KICK (E8): the kicks this tick's input and
         //    systems hooks asked for. The clock comes back first (the
@@ -185,6 +142,9 @@ where
         //    shared by reference; per-connection fan-out of
         //    [group snapshot] + [private?].
         //    (the step counter was bumped at the top of `step`)
+        //    First the call table closes what nobody took or answered
+        //    this tick (the engine's answers ride this broadcast).
+        parts!(self).end_tick();
         self.broadcast_phase(&ctx);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
         // hand the clock back to the actor, then apply what the

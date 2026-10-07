@@ -98,12 +98,13 @@ where
             requests_late: self.m.requests_late,
             requests_undelivered: self.m.requests_undelivered,
             requests_abandoned: self.m.requests_abandoned,
-            pending_requests: self.pending_total as u32,
+            pending_requests: self.calls.external_total() as u32,
             groups: self.groups.len() as u32,
             members: self.conns.len() as u32,
             max_group: self.m.step_max_group,
             metrics_dropped: self.m.metrics_dropped,
             stop: self.m.stop,
+            calls: *self.calls.counts(),
             logic: self.logic_counters(),
         }
     }

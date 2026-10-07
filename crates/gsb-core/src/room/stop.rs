@@ -23,7 +23,7 @@
 //! (BACKLOG F35), so only a room still running at the collector's grace
 //! (`crate::metrics::FINAL_REPORT_GRACE`) misses it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use crate::channel::{Mailbox, post};
 use crate::id::{ConnectionId, PlayerId};
@@ -33,10 +33,9 @@ use crate::room::{RoomConn, RoomCounters, drop_unread};
 use crate::rpc::RpcReply;
 
 /// The session state a stopping actor still holds.
-pub(crate) struct Held<'a, G, P> {
+pub(crate) struct Held<'a, G> {
     pub(crate) conns: &'a mut HashMap<PlayerId, RoomConn<G>>,
-    pub(crate) pending: &'a mut HashMap<ConnectionId, VecDeque<P>>,
-    pub(crate) pending_total: &'a mut usize,
+    pub(crate) calls: &'a mut crate::calls::Calls,
     pub(crate) queued: &'a mut HashMap<ConnectionId, Vec<RpcReply>>,
 }
 
@@ -45,18 +44,15 @@ impl RoomCounters {
     /// uses: every row's unread input (`requests_dropped_unread` /
     /// `actions_dropped_unread` — parked rows included, their dead
     /// channels were never pulled), the requests still in flight
-    /// (`requests_abandoned`) and the answers still owed
-    /// (`requests_undelivered`). The rows stay (the actor is about to
-    /// drop them); the request state is emptied, so the final sample's
-    /// `pending_requests` gauge reads 0.
-    pub(crate) fn count_at_stop<G, P>(&mut self, held: Held<'_, G, P>) {
+    /// and every answer the call table still owed (`requests_abandoned`)
+    /// and the answers still queued (`requests_undelivered`). The rows
+    /// stay (the actor is about to drop them); the request state is
+    /// emptied, so the final sample's `pending_requests` gauge reads 0.
+    pub(crate) fn count_at_stop<G>(&mut self, held: Held<'_, G>) {
         for rc in held.conns.values_mut() {
             self.count_unread(drop_unread(&mut rc.actions));
         }
-        for (_, deq) in held.pending.drain() {
-            self.requests_abandoned += deq.len() as u64;
-        }
-        *held.pending_total = 0;
+        held.calls.drop_all_at_stop(self);
         for (_, owed) in held.queued.drain() {
             self.requests_undelivered += owed.len() as u64;
         }

@@ -23,7 +23,7 @@ async fn a_congested_connection_owes_at_most_its_cap_on_the_shard() {
         assert!(a.step(&tinfo(t)));
         let c = ConnectionId(1);
         assert_eq!(a.queued.get(&c).map(Vec::len), Some(1), "step {t}");
-        assert_eq!(a.pending.get(&c).map(|d| d.len()), Some(1), "step {t}");
+        assert_eq!(a.calls.external_in_flight(c), 1, "step {t}");
     }
     assert_eq!(a.m.requests_refused_congested, 4 * 2);
     assert_eq!(

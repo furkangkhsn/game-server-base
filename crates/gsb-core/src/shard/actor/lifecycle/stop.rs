@@ -73,8 +73,7 @@ where
         // collector the final sample.
         self.m.count_at_stop(Held {
             conns: &mut self.conns,
-            pending: &mut self.pending,
-            pending_total: &mut self.pending_total,
+            calls: &mut self.calls,
             queued: &mut self.queued,
         });
         let sample = self.sample();

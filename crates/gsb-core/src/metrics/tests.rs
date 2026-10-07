@@ -111,6 +111,7 @@ fn accumulator_applies_events_and_computes_rates() {
         max_group: 3,
         metrics_dropped: 0,
         stop: StopCounts::default(),
+        calls: CallCounts::default(),
         logic: LogicCounters::new(),
     };
     acc.apply(MetricsEvent::Room(room0));
@@ -351,6 +352,7 @@ pub(in crate::metrics) fn room_sample(room: RoomId, emit_at: Instant, steps: u64
         max_group: 0,
         metrics_dropped: 0,
         stop: StopCounts::default(),
+        calls: CallCounts::default(),
         logic: LogicCounters::new(),
     }
 }

@@ -7,11 +7,11 @@ use std::time::Instant;
 
 use tokio::sync::{broadcast, mpsc};
 
-use crate::channel::{Inbox, Mailbox};
+use crate::channel::Mailbox;
 use crate::id::{ConnectionId, PlayerId};
 use crate::metrics::MetricsEvent;
 use crate::room::{GroupState, IdleClock, RoomConfig, RoomConn, RoomCounters};
-use crate::rpc::{Completion, PendingRequest, RpcReply};
+use crate::rpc::RpcReply;
 use crate::shard::*;
 use crate::ticker::TickInfo;
 
@@ -162,16 +162,15 @@ pub struct ShardActor<W, G, St, Sp> {
     // -- Shard-RPC (the Faz 3 promotion; see `crate::rpc` and the module
     //    docs, "Shard-RPC and match-result"): byte-for-byte the room
     //    actor's state shape. -------------------------------------------
-    /// In-flight external requests, per TRANSPORT SESSION (conn-keyed BY
-    /// DESIGN — see the module docs: a resumed session must not inherit
-    /// its dead session's in-flight work). FIFO per conn: deadlines are
-    /// non-decreasing, so only the head can expire. This shard is the
+    /// This shard's call table (`docs/SERVICES.md`; the room actor's
+    /// field, the same type): the game's requests and calls, and the
+    /// built-in path of `RequestDecision::External` — the in-flight
+    /// external requests (conn-keyed BY DESIGN — see the module docs: a
+    /// resumed session must not inherit its dead session's in-flight
+    /// work), their completion channel and deadlines. This shard is the
     /// single authority on "is this request still pending" for the
     /// sessions it owns.
-    pub(in crate::shard) pending: HashMap<ConnectionId, VecDeque<PendingRequest>>,
-    /// Total in-flight external requests on this shard (the shard-wide
-    /// cap; the config fields are shared with the room actor).
-    pub(in crate::shard) pending_total: usize,
+    pub(in crate::shard) calls: crate::calls::Calls,
     /// This tick's queued RPC answers per transport session; drained in
     /// the broadcast phase (handed to the logic's `private`) and emptied
     /// — except a dropped batch's, which go back here for the next tick
@@ -180,13 +179,6 @@ pub struct ShardActor<W, G, St, Sp> {
     /// Per-tick scratch for the rare path of the broadcast's RPC-answer
     /// hand-off; a field so its capacity survives across ticks.
     pub(in crate::shard) replies_buf: Vec<RpcReply>,
-    /// Worker reports: this shard's inbox for delegated-request outcomes
-    /// (drained non-blockingly in the 0b phase — no new await).
-    pub(in crate::shard) completions: Inbox<Completion>,
-    /// The sender half of the completion channel, cloned to each spawned
-    /// worker (bounded at the shard-wide pending cap — a completion burst
-    /// cannot exceed the number of in-flight workers).
-    pub(in crate::shard) completions_tx: Mailbox<Completion>,
     /// This shard's match-result sink (the control plane's result seam;
     /// see [`GameLogic::match_result`]): a bounded mailbox, sent with the
     /// synchronous `try_send` on teardown (no await, best effort). Every

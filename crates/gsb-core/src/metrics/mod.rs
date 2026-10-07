@@ -101,6 +101,7 @@
 //! samples and current gauges, nothing else.
 
 mod accumulator;
+mod calls;
 mod closes;
 mod collector;
 mod export;
@@ -117,6 +118,7 @@ mod verdicts;
 mod tests;
 
 pub use accumulator::MetricAccumulator;
+pub use calls::{CALL_COUNT, CallCounts};
 pub use closes::ServerCloses;
 pub use collector::{CUT_GRACE, FINAL_REPORT_GRACE, MetricSink, MetricsCollector};
 pub use export::Exporter;

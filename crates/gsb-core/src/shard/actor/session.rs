@@ -10,7 +10,6 @@ use tracing::debug;
 use crate::channel::{FrameBatch, Mailbox};
 use crate::id::{ConnectionId, PlayerId};
 use crate::room::{Action, drop_unread};
-use crate::rpc::RpcReply;
 
 use crate::shard::actor::ShardActor;
 
@@ -138,47 +137,17 @@ where
         }
     }
 
-    /// Queue one RPC answer for a connection's next (or this tick's, if
-    /// broadcast has not run yet) private frame. All request paths —
-    /// same-tick reply/reject, cap/duplicate rejects, the worker-report
-    /// reconciliation, the timeout sweep — funnel through here, so the
-    /// per-tick delivery point is exactly one. (The room actor's helper,
-    /// byte-for-byte.)
-    pub(crate) fn queue_reply(
-        &mut self,
-        conn: ConnectionId,
-        id: u64,
-        op: u16,
-        ok: bool,
-        reason: String,
-        payload: bytes::Bytes,
-    ) {
-        self.queued.entry(conn).or_default().push(RpcReply {
-            id,
-            ok,
-            op,
-            reason,
-            payload,
-        });
-    }
-
-    /// Drop a connection's request state (pending set + queued answers).
-    /// Called on leave, on join (a join supersedes the connection's prior
-    /// state), on detach-park, and at migrate-out. Late worker reports for
-    /// the dropped requests find no pending entry and are dropped by the
-    /// 0b reconciliation; the workers themselves exit on their own (their
-    /// report send fails against the dropped entry, or their timeout
-    /// fires first). (The room actor's helper, byte-for-byte.)
+    /// Drop a connection's request state (the call table's answers owed
+    /// to it + queued answers). Called on leave, on join (a join
+    /// supersedes the connection's prior state), on detach-park, and at
+    /// migrate-out. Late worker reports for the dropped External requests
+    /// find no pending call and are dropped (`requests_late`); a call that
+    /// would have answered the session goes on for its owner. (The room
+    /// actor's helper — one shared implementation, `crate::room::Parts`.)
     /// What the session takes along is counted (B53, the room's rule):
-    /// in-flight requests as `requests_abandoned`, owed answers as
-    /// `requests_undelivered`.
+    /// owed answers in the table as `requests_abandoned`, queued answers
+    /// as `requests_undelivered`.
     pub(crate) fn drop_conn_request_state(&mut self, conn: ConnectionId) {
-        if let Some(deq) = self.pending.remove(&conn) {
-            self.pending_total = self.pending_total.saturating_sub(deq.len());
-            self.m.requests_abandoned += deq.len() as u64;
-        }
-        if let Some(owed) = self.queued.remove(&conn) {
-            self.m.requests_undelivered += owed.len() as u64;
-        }
+        crate::room::parts!(self).drop_session(conn);
     }
 }

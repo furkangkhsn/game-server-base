@@ -126,6 +126,11 @@ pub(in crate::report) fn shard(i: usize) -> RoomReport {
             effects_unsent: [0, 3, 5][i],
             ..Default::default()
         },
+        calls: gsb_core::metrics::CallCounts {
+            calls_issued: [3, 0, 6][i],
+            responses_unhandled: [0, 1, 2][i],
+            ..Default::default()
+        },
         logic: logic(i),
     }
 }

@@ -73,12 +73,13 @@ where
         // measurement scaffolding for CROSS-SHARD §7: the border summary
         // window ≈ one second of ticks.
         let border_every = (config.tick_hz.round() as u64).max(1);
-        // The completion channel: bounded at the shard-wide pending cap
-        // (the room actor's rule — a completion burst cannot exceed the
-        // number of in-flight workers, which the cap bounds); drained
-        // every tick's 0b phase, so a full channel only parks a worker
-        // until the next tick, never the shard.
-        let (completions_tx, completions) = mpsc::channel(config.max_pending_requests.max(1));
+        // The call table (the room actor's, keyed per shard).
+        let mut logic = logic;
+        let calls = crate::room::call_table(
+            &config,
+            config.id.0.wrapping_shl(16) ^ index as u64,
+            &mut *logic,
+        );
         let effects = EffectBook::new(index, logic.shard_count());
         Self {
             config,
@@ -119,12 +120,9 @@ where
             bstats: BorderStats::default(),
             border_every,
             metrics,
-            pending: HashMap::new(),
-            pending_total: 0,
+            calls,
             queued: HashMap::new(),
             replies_buf: Vec::new(),
-            completions,
-            completions_tx,
             result_sink,
             registry: None,
             despawn_reports: Vec::new(),

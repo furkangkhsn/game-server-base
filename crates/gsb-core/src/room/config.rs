@@ -161,6 +161,25 @@ pub struct RoomConfig {
     /// game logic), short enough that a stuck dependency degrades a
     /// client's request within one heartbeat cycle.
     pub request_timeout: Duration,
+    /// The room's share of each service (`docs/SERVICES.md` §5.3): the
+    /// most calls this room's table keeps in flight to ONE service. A
+    /// call past it is refused at FLUSH (`Refusal::Share`,
+    /// `calls_refused_share`) and ends at the next RESPONSES like any
+    /// other. One room cannot fill a service on its own: size the
+    /// service's mailbox ≥ rooms × share (s0's `N·k ≤ C`).
+    ///
+    /// Default 64.
+    pub call_share: u32,
+    /// The call table's completion channel (the services' answers on
+    /// their way back; drained every RESPONSES). An answer a full
+    /// channel refuses is lost and counted at its service
+    /// (`ServiceStats::replies_undeliverable_full`): keep it ≥ 2 × the
+    /// room's total share (SERVICES.md §19 S7). The built-in External
+    /// path adds [`Self::max_pending_requests`] on top (its workers wait
+    /// for a slot instead).
+    ///
+    /// Default 1024.
+    pub call_completions: usize,
     /// Whether the registry should REBUILD the room from the same factory +
     /// config when its actor task dies unexpectedly (a panic in the game
     /// logic kills the room's task; without the death watch the registry's
@@ -308,6 +327,8 @@ impl Default for RoomConfig {
             max_pending_requests_per_conn: 4,
             max_pending_requests: 2000,
             request_timeout: Duration::from_secs(5),
+            call_share: 64,
+            call_completions: 1024,
             restart_on_panic: false,
             persistent: false,
             // OFF: the feature is invisible until an operator asks for it.

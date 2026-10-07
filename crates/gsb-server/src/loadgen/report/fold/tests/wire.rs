@@ -533,3 +533,22 @@ fn the_stop_counts_survive_the_wire_and_fold_as_sums() {
     );
     assert_eq!(folded.stop.effects_unsent, 3 + 75);
 }
+
+/// The call table's counters (q1) cross the wire per room, every counter
+/// in its slot, and fold as a SUM.
+#[test]
+fn the_call_counts_survive_the_wire_and_fold_as_sums() {
+    let mut sent = three_shards();
+    let mut values = [0u64; gsb_core::metrics::CALL_COUNT];
+    for (i, v) in values.iter_mut().enumerate() {
+        *v = 40 + i as u64;
+    }
+    sent.rooms[1].calls = gsb_core::metrics::CallCounts::from_values(values);
+    let got = decode_report(&encode_report(&sent)[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(a.calls, b.calls);
+    }
+    let folded = fold_rooms(&sent).expect("three rows");
+    assert_eq!(folded.calls.calls_issued, 3 + 40 + 6, "summed over rows");
+    assert_eq!(folded.calls.responses_unhandled, 54 + 2);
+}

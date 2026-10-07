@@ -153,6 +153,9 @@ pub struct RoomReport {
     /// What the room/shard still held at its stop beyond its sessions
     /// (B68, [`StopCounts`]), from its final sample.
     pub stop: StopCounts,
+    /// The call table's counters (`docs/SERVICES.md` §9,
+    /// [`CallCounts`]), cumulative.
+    pub calls: CallCounts,
     /// The logic's own named counters (see [`RoomSample::logic`]), as
     /// the latest sample carried them.
     pub logic: LogicCounters,

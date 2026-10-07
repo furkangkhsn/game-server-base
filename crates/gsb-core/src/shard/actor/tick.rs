@@ -4,12 +4,10 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use prost::Message;
 use tracing::{debug, warn};
 
 use crate::id::PlayerId;
 use crate::room::{Action, IdleView, KickQueue, TickCtx};
-use crate::rpc::{RPC_REQ_OP, RpcRequest};
 use crate::ticker::TickInfo;
 
 use crate::shard::actor::ShardActor;
@@ -22,7 +20,6 @@ mod effects;
 mod idle;
 mod kick;
 mod migrate;
-mod requests;
 mod teams;
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
@@ -209,61 +206,19 @@ where
             }
         });
 
-        // -- Phase 2a — SPLIT the requests out of the pulled actions (the
-        //    Faz 3 RPC promotion; byte-for-byte the room actor's split).
-        //    A request is an action carrying the base-band envelope
-        //    opcode; this actor decodes the envelope (a base message) and
-        //    hands the rest to the logic at 2c. The split is in-order:
-        //    both lists keep arrival order, and ALL fire-and-forget
-        //    actions of the tick ingest BEFORE any request is handed to
-        //    `handle_request` (the ordering contract of `crate::rpc`: a
-        //    request sees the world after this tick's actions were
-        //    applied). Cost when quiet: one u16 compare per pulled action.
-        //
-        //    A malformed envelope (or id = 0, which cannot correlate) is a
-        //    NORMAL rejection: answered this tick, counted in the
-        //    malformed bucket — a client bug, not a protocol violation.
-        let mut requests: Vec<RpcRequest> = Vec::new();
-        actions.retain_mut(|a| {
-            if a.op != RPC_REQ_OP {
-                return true;
-            }
-            match gsb_protocol::base::RpcRequest::decode(&a.payload[..]) {
-                Ok(env) if env.id != 0 => {
-                    requests.push(RpcRequest {
-                        conn: a.conn,
-                        // Already translated (phase 1.5): the logic sees
-                        // the stable player key, while pending/replies
-                        // stay session-scoped under `conn`.
-                        player: a.player,
-                        id: env.id,
-                        // The wire type is `u32`; the op space is `u16`
-                        // by protocol contract (same cast as the room).
-                        op: env.op as u16,
-                        payload: env.payload.into(),
-                    });
-                    false
-                }
-                // A congested connection at its cap: refused, like at 2c
-                // (the room's rule, F14).
-                _ if self.refuses_congested(a.conn, a.player) => {
-                    self.m.requests_refused_congested += 1;
-                    false
-                }
-                _ => {
-                    self.m.requests_rejected_malformed += 1;
-                    self.queue_reply(
-                        a.conn,
-                        0,
-                        a.op,
-                        false,
-                        crate::rpc::MALFORMED_REASON.to_string(),
-                        bytes::Bytes::new(),
-                    );
-                    false
-                }
-            }
-        });
+        // -- Phase 2a — SPLIT the requests out of the pulled actions, then
+        //    READ: a request whose op the call table claims goes into the
+        //    table now; the rest wait for 2c (the room actor's phases,
+        //    the same shared code — `crate::room::Parts`). ALL
+        //    fire-and-forget actions of the tick ingest BEFORE any request
+        //    is handed to `handle_request` (the ordering contract of
+        //    `crate::rpc`).
+        let mut requests = crate::room::parts!(self).split(&mut actions);
+        {
+            let logic = &self.logic;
+            let world = &self.world;
+            crate::room::parts!(self).read(&mut requests, &|p| logic.call_owner(world, p));
+        }
 
         // -- The tick context is built HERE, after every phase that
         //    writes the idle clock has run, because it LENDS that clock to
@@ -299,13 +254,18 @@ where
             &mut self.effects.seam(&self.border, &self.lenders),
         );
 
-        self.phase_requests(&requests, &ctx);
-        // -- Phase 3 — SYSTEMS (same view).
-        self.logic.update_seam(
+        // -- Phase 2c — the requests no table rule claims (the room's
+        //    shared phase).
+        crate::room::parts!(self).handle(&requests, &mut *self.logic, &mut self.world, &ctx);
+        // -- Phase 3 — SYSTEMS (same view), with the call table; then
+        //    FLUSH: this tick's calls leave in issue order.
+        self.logic.update_seam_with_calls(
             &mut self.world,
             &ctx,
             &mut self.effects.seam(&self.border, &self.lenders),
+            &mut self.calls,
         );
+        self.calls.flush();
         // -- Phase 3b — EFFECTS OUT: what the hooks emitted (and what
         //    phase 0d forwarded) leaves for its authority.
         self.phase_effects_out(t.tick);
@@ -340,6 +300,9 @@ where
         self.phase_teams(&ctx, &borrowed);
         // -- Phase 6 — BROADCAST (the room's broadcast phase with the
         //    borrowed boundary set folded into every group's snapshot).
+        //    First the call table closes what nobody took or answered
+        //    this tick (the engine's answers ride this broadcast).
+        crate::room::parts!(self).end_tick();
         self.broadcast_phase(&ctx, &borrowed);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
         // hand the clock back to the actor, then apply what the TEAMS

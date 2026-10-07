@@ -60,7 +60,7 @@ async fn a_request_in_flight_at_a_leave_is_counted_abandoned() {
     let (tx, _rx) = join(&mut a, 1, 64);
     request(&tx, 1, 1, OP_EXT);
     step(&mut a, 1);
-    assert_eq!(a.pending_total, 1);
+    assert_eq!(a.calls.external_total(), 1);
     leave(&mut a, 1);
     step(&mut a, 2);
     assert_eq!(a.m.requests_abandoned, 1);

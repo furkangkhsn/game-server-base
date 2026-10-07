@@ -1,11 +1,12 @@
-//! Phase 0b — deferred shard-RPC completions and the timeout sweep.
+//! Phase 1 — RESPONSES (`docs/SERVICES.md` §3): the shard's call table
+//! absorbs what finished since the last tick (the room actor's phase,
+//! through the same shared code).
 
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use crate::id::ConnectionId;
-use crate::rpc::{PendingRequest, RpcReply, TIMEOUT_REASON};
-
+use crate::calls::Owner;
+use crate::id::PlayerId;
 use crate::shard::actor::ShardActor;
 
 impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
@@ -18,74 +19,28 @@ where
     // each neighbor's message, store in the actor's maps).
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
-    /// Tick phase 0b — deferred shard-RPC completions (Faz 3), plus the
-    /// pending-request timeout sweep that owns the client-visible answer.
+    /// Tick phase 1 — RESPONSES: the refusals the last FLUSH decided, the
+    /// completion channel (non-blocking), the External deadline sweep on
+    /// the tick clock. An owner is alive by the logic's word or, by
+    /// default, while this shard holds the player (a migrated-away
+    /// owner's result is `responses_owner_gone` here).
     pub(crate) fn phase_completions(&mut self) {
-        // -- Phase 0b — shard-RPC deferred completions (the Faz 3
-        //    promotion; see `crate::rpc`): drain the worker reports
-        //    (non-blocking — this shard never awaits a worker; the same
-        //    try_recv discipline as the control drain above) and reconcile
-        //    each report against the pending set. Exactly one answer per
-        //    request is structural: a report for an id that is no longer
-        //    pending (already answered, timed out below, its session left,
-        //    OR its session migrated to another shard) is dropped and
-        //    counted (`requests_late`).
-        while let Ok(rep) = self.completions.try_recv() {
-            let Some(deq) = self.pending.get_mut(&rep.conn) else {
-                self.m.requests_late += 1;
-                continue;
-            };
-            match deq.iter().position(|p| p.id == rep.id) {
-                Some(idx) => {
-                    // The inner op comes from the pending entry (the
-                    // worker's report is outcome-only — this actor is the
-                    // authority on the request's shape).
-                    let op = deq[idx].op;
-                    deq.remove(idx);
-                    self.pending_total -= 1;
-                    if deq.is_empty() {
-                        self.pending.remove(&rep.conn);
-                    }
-                    self.queued.entry(rep.conn).or_default().push(RpcReply {
-                        id: rep.id,
-                        ok: rep.ok,
-                        op,
-                        reason: rep.reason,
-                        payload: rep.payload,
-                    });
-                }
-                None => self.m.requests_late += 1,
-            }
-        }
-        // Sweep expired pending requests (the client-visible timeout):
-        // per connection the deadlines are non-decreasing (same timeout,
-        // FIFO arrivals), so only the head of each deque can be due. The
-        // tick body stays synchronous: a wall-clock comparison, no await.
-        // Cost when quiet: one `is_empty` probe (a shard with no pending
-        // requests pays nothing below it).
-        if !self.pending.is_empty() {
-            let now = crate::ticker::now();
-            let mut due: Vec<(ConnectionId, PendingRequest)> = Vec::new();
-            for (conn, deq) in self.pending.iter_mut() {
-                if let Some(front) = deq.front()
-                    && front.due <= now
-                    && let Some(p) = deq.pop_front()
-                {
-                    self.pending_total -= 1;
-                    due.push((*conn, p));
-                }
-            }
-            self.pending.retain(|_, deq| !deq.is_empty());
-            for (conn, p) in due {
-                self.m.requests_timed_out += 1;
-                self.queued.entry(conn).or_default().push(RpcReply {
-                    id: p.id,
-                    ok: false,
-                    op: p.op,
-                    reason: TIMEOUT_REASON.to_string(),
-                    payload: bytes::Bytes::new(),
-                });
-            }
-        }
+        let now = crate::ticker::now();
+        let logic = &self.logic;
+        let world = &self.world;
+        let conns = &self.conns;
+        let alive = |o: Owner| {
+            logic
+                .owner_alive(world, o)
+                .unwrap_or_else(|| conns.contains_key(&PlayerId(o.0)))
+        };
+        let mut p = crate::room::Parts {
+            calls: &mut self.calls,
+            m: &mut self.m,
+            queued: &mut self.queued,
+            conns,
+            config: &self.config,
+        };
+        p.responses(now, &alive);
     }
 }

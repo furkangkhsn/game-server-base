@@ -59,8 +59,7 @@ where
         // sample — the counters since the last periodic one included.
         self.m.count_at_stop(Held {
             conns: &mut self.conns,
-            pending: &mut self.pending,
-            pending_total: &mut self.pending_total,
+            calls: &mut self.calls,
             queued: &mut self.queued,
         });
         let sample = self.sample();

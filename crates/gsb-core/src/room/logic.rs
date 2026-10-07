@@ -487,6 +487,70 @@ pub trait GameLogic<W>: Send {
         None
     }
 
+    /// Boot: register the client requests this logic takes through the
+    /// actor's call table (`calls.accept::<R>()`, `calls.forward(..)` —
+    /// `docs/SERVICES.md` §5). Called once, when the actor is built. An
+    /// op the table claims never reaches [`Self::handle_request`]; an op
+    /// claimed twice is a [`BootError`](crate::calls::BootError), which
+    /// the actor logs as an error (the first claim stays).
+    ///
+    /// Default: nothing claimed — every request goes to
+    /// [`Self::handle_request`], as before the table existed.
+    fn boot_calls(
+        &mut self,
+        _calls: &mut crate::calls::Calls,
+    ) -> Result<(), crate::calls::BootError> {
+        Ok(())
+    }
+
+    /// Phase 3 — [`Self::update`] with the actor's call table
+    /// ([`crate::calls::Calls`]): take this tick's requests
+    /// (`take_incoming`), issue calls (`calls.call(..)`), take their
+    /// results (`take_resolved`). What the systems write leaves at the
+    /// FLUSH right after this hook; what nobody took or answered is
+    /// closed at the end of the tick. The room actor calls THIS (a
+    /// sharded logic overrides
+    /// [`ShardLogic::update_seam_with_calls`](crate::shard::ShardLogic::update_seam_with_calls)
+    /// instead).
+    ///
+    /// Default: [`Self::update`] — a logic that never touches the table
+    /// is unchanged.
+    fn update_with_calls(
+        &mut self,
+        world: &mut W,
+        ctx: &TickCtx,
+        _calls: &mut crate::calls::Calls,
+    ) {
+        self.update(world, ctx);
+    }
+
+    /// The owner a session's table requests are bound to
+    /// ([`Incoming::owner`](crate::calls::Incoming::owner)): asked at
+    /// READ for every request of a claimed op whose session the game did
+    /// not bind explicitly (`calls.bind`). `None` leaves the session
+    /// unbound: its requests are answered by the engine and counted
+    /// (`requests_unbound`), the game never sees them.
+    ///
+    /// Default: the player itself (`Owner::from(player)` — stable across
+    /// resume and migration). A logic whose results hang on something
+    /// else (an ECS entity) returns that here — and answers
+    /// [`Self::owner_alive`] for it.
+    fn call_owner(&self, _world: &W, player: PlayerId) -> Option<crate::calls::Owner> {
+        Some(player.into())
+    }
+
+    /// Does `owner` still exist? Asked at RESPONSES for every result
+    /// whose call has an owner: a gone owner's result is never handed out
+    /// (`responses_owner_gone`; an `.answers` client is still answered).
+    /// `None` = the engine's default test: the owner is alive while it
+    /// is a player this actor holds (members, parked rows included).
+    ///
+    /// Default: `None`. A logic that overrides [`Self::call_owner`] (or
+    /// issues calls owned by things that are not players) answers here.
+    fn owner_alive(&self, _world: &W, _owner: crate::calls::Owner) -> Option<bool> {
+        None
+    }
+
     /// The match result to report through the actor's result sink when it
     /// shuts down (any shutdown: a control-plane destroy, a server stop).
     /// The actor calls this after [`GameLogic::on_shutdown`], right

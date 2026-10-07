@@ -13,7 +13,7 @@ fn malformed(tx: &Mailbox<Action>, conn: u64) {
 /// What `conn` owes: queued (undelivered included) + in flight.
 fn owed(actor: &RoomActor<(), (), ()>, conn: u64) -> usize {
     let c = ConnectionId(conn);
-    actor.queued.get(&c).map_or(0, Vec::len) + actor.pending.get(&c).map_or(0, |d| d.len())
+    actor.queued.get(&c).map_or(0, Vec::len) + actor.calls.owed(c)
 }
 
 /// Cap 2, pull 4. Once a batch carrying an answer dropped, the

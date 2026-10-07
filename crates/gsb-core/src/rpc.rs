@@ -123,7 +123,6 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Instant;
 
 use bytes::Bytes;
 
@@ -218,57 +217,6 @@ impl From<&RpcReply> for gsb_protocol::base::RpcResponse {
     }
 }
 
-/// An in-flight external request: the correlation id, the inner op
-/// (echoed in the answer, so the deferred reply can be shaped like the
-/// same-tick ones without re-reading the original request), and the
-/// deadline after which the room's sweep answers it with a timeout.
-#[derive(Debug)]
-pub struct PendingRequest {
-    pub id: u64,
-    pub op: u16,
-    /// The client-visible deadline, on the tick clock
-    /// (`crate::ticker::now()` + the room's request timeout; the sweep
-    /// reads the same clock — F16).
-    pub due: Instant,
-}
-
-/// A worker report: the outcome of one delegated request, as resolved by
-/// its worker task. The room reconciles it against its pending set (a
-/// report for an id that is no longer pending — already answered,
-/// timed out, or its connection left — is dropped).
-#[derive(Debug)]
-pub struct Completion {
-    pub conn: ConnectionId,
-    pub id: u64,
-    pub ok: bool,
-    /// The rejection reason (empty when `ok`).
-    pub reason: String,
-    /// The response body (empty when `ok` is false).
-    pub payload: Bytes,
-}
-
-impl Completion {
-    pub fn reply(conn: ConnectionId, id: u64, payload: Bytes) -> Self {
-        Self {
-            conn,
-            id,
-            ok: true,
-            reason: String::new(),
-            payload,
-        }
-    }
-
-    pub fn error(conn: ConnectionId, id: u64, reason: String) -> Self {
-        Self {
-            conn,
-            id,
-            ok: false,
-            reason,
-            payload: Bytes::new(),
-        }
-    }
-}
-
 /// The client-visible reason string for the room's timeout sweep. Kept
 /// in one place so the sweep and the tests agree on it.
 pub const TIMEOUT_REASON: &str = "request timed out";
@@ -301,6 +249,37 @@ pub fn no_handler_reason(op: u16) -> String {
     format!("{NO_HANDLER_PREFIX} {op:#04x}")
 }
 
+/// The client-visible reasons of the call table's engine answers
+/// (`crate::calls`, SERVICES.md §5.4): a request of a registered op
+/// whose payload did not decode as its type.
+pub const UNDECODABLE_REASON: &str = "undecodable request payload";
+
+/// A request from a session bound to no owner (the game never sees it).
+pub const NOT_BOUND_REASON: &str = "session not bound to an owner";
+
+/// A request nobody took (`take_incoming`) by the end of its tick.
+pub const UNTAKEN_REASON: &str = "request not handled this tick";
+
+/// A request taken but neither answered nor attached to a call by the end
+/// of its tick.
+pub const UNANSWERED_REASON: &str = "request taken but not answered";
+
+/// An `.answers` call the engine refused: the service's mailbox was full.
+pub const REFUSED_FULL_REASON: &str = "service busy";
+
+/// An `.answers` call the engine refused: the service was gone.
+pub const REFUSED_GONE_REASON: &str = "service unavailable";
+
+/// An `.answers` call the engine refused: the caller's share of the
+/// service was used up.
+pub const REFUSED_SHARE_REASON: &str = "service share exhausted";
+
+/// An `.answers` call the service's load shedding refused.
+pub const REFUSED_SHED_REASON: &str = "service overloaded";
+
+/// An `.answers` call the service dropped unanswered.
+pub const ABANDONED_REASON: &str = "service dropped the request";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +306,14 @@ mod tests {
         );
         assert_eq!(no_handler_reason(0x3ee), "no request handler for op 0x3ee");
         assert_eq!(no_handler_reason(7), "no request handler for op 0x07");
+        assert_eq!(UNDECODABLE_REASON, "undecodable request payload");
+        assert_eq!(NOT_BOUND_REASON, "session not bound to an owner");
+        assert_eq!(UNTAKEN_REASON, "request not handled this tick");
+        assert_eq!(UNANSWERED_REASON, "request taken but not answered");
+        assert_eq!(REFUSED_FULL_REASON, "service busy");
+        assert_eq!(REFUSED_GONE_REASON, "service unavailable");
+        assert_eq!(REFUSED_SHARE_REASON, "service share exhausted");
+        assert_eq!(REFUSED_SHED_REASON, "service overloaded");
+        assert_eq!(ABANDONED_REASON, "service dropped the request");
     }
 }

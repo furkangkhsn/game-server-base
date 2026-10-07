@@ -4,11 +4,10 @@
 //! owed answers, requests in flight — then handed to the collector in
 //! the room's final sample. Before B62 a stopping room sent nothing more.
 
-use std::collections::VecDeque;
 use std::time::Instant;
 
 use super::*;
-use crate::rpc::{PendingRequest, RpcReply};
+use crate::rpc::RpcReply;
 
 fn owed(id: u64) -> RpcReply {
     RpcReply {
@@ -40,14 +39,16 @@ async fn a_stopping_room_counts_what_it_holds_in_its_final_sample() {
     send_two_requests(&live, 2);
     r.queued.insert(ConnectionId(2), vec![owed(7)]);
     let due = Instant::now();
-    r.pending.insert(
-        ConnectionId(2),
-        VecDeque::from([
-            PendingRequest { id: 8, op: 1, due },
-            PendingRequest { id: 9, op: 1, due },
-        ]),
-    );
-    r.pending_total = 2;
+    for id in [8, 9] {
+        r.calls.external(
+            ConnectionId(2),
+            id,
+            1,
+            Box::pin(std::future::pending()),
+            due,
+            Duration::from_secs(5),
+        );
+    }
 
     r.finish();
 

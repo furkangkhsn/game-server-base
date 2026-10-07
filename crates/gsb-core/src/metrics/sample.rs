@@ -257,6 +257,9 @@ pub struct RoomSample {
     /// [`StopCounts`]). Filled on the final sample
     /// ([`MetricsEvent::RoomFinal`]) only; zero on every periodic one.
     pub stop: StopCounts,
+    /// The call table's counters (`docs/SERVICES.md` §9, [`CallCounts`]),
+    /// cumulative.
+    pub calls: CallCounts,
     /// The logic's own named counters (F9, see [`LogicCounters`]),
     /// cumulative as the logic keeps them, read from
     /// `GameLogic::logic_counters` when the sample is built. Empty for a

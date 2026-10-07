@@ -6,8 +6,9 @@ use std::time::Instant;
 use gsb_core::conn::ServerClose;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
-    FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport, RoomReport, STOP_COUNT,
-    ServerCloses, StopCounts, TRANSPORT_COUNT, TransportCounters, VerdictsLost,
+    CALL_COUNT, CallCounts, FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport,
+    RoomReport, STOP_COUNT, ServerCloses, StopCounts, TRANSPORT_COUNT, TransportCounters,
+    VerdictsLost,
 };
 
 mod logic;
@@ -58,6 +59,7 @@ mod logic;
 ///     u32 req_pending
 ///     u64 metrics_dropped
 ///     [u64; STOP_COUNT] stop (StopCounts::fields order)
+///     [u64; CALL_COUNT] calls (CallCounts::fields order)
 ///     u8 n_logic  u32 logic_dropped
 ///     per logic counter: u8 name_len  [u8; name_len] name
 ///                        u8 fold (0 = SUM, 1 = MAX)  u64 value
@@ -294,6 +296,10 @@ mod logic;
 /// .. `udp_stateless_resets_send_failed`).
 /// GSNS = the GSNR layout with one more transport counter at the end of
 /// that section (B142's drain: `udp_game_paced_drains`).
+/// (q1 — the magic is NOT bumped yet, the parent assigns it: the next
+/// layout, GSNT, is the GSNS layout plus each room's call-table counters
+/// — round q1, `docs/SERVICES.md` §9: every `CallCounts` field, in its
+/// declaration order — right after the stop counters.)
 pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E53;
 
 /// Little-endian writer (the encode side of the format above).
@@ -400,6 +406,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u32(room.pending_requests);
         w.u64(room.metrics_dropped);
         for (_, n) in room.stop.fields() {
+            w.u64(n);
+        }
+        for (_, n) in room.calls.fields() {
             w.u64(n);
         }
         logic::encode(&mut w, &room.logic);
@@ -624,6 +633,13 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
                     *v = r.u64()?;
                 }
                 StopCounts::from_values(values)
+            },
+            calls: {
+                let mut values = [0u64; CALL_COUNT];
+                for v in &mut values {
+                    *v = r.u64()?;
+                }
+                CallCounts::from_values(values)
             },
             logic: logic::decode(&mut r)?,
         });

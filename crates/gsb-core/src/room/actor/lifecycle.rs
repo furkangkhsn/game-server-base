@@ -43,12 +43,6 @@ where
         // room reports no result.
         result_sink: Option<Mailbox<crate::registry::MatchResult>>,
     ) -> Self {
-        // The completion channel: bounded at the room-wide pending cap (a
-        // completion burst cannot exceed the number of in-flight workers,
-        // which is the cap) — the usual backpressure rule; the room drains
-        // it every tick's CONTROL phase, so a full channel only parks a
-        // worker until the next tick, never the room.
-        let (completions_tx, completions) = mpsc::channel(config.max_pending_requests.max(1));
         let keepalive_every = if config.keepalive_hz > 0.0 {
             if config.keepalive_hz > config.tick_hz {
                 // The registry rejects this relationship at room creation;
@@ -78,6 +72,8 @@ where
             1
         };
         let budget_us = config.period().as_micros() as u64;
+        let mut logic = logic;
+        let calls = call_table(&config, config.id.0, &mut *logic);
         Self {
             config,
             world,
@@ -102,12 +98,9 @@ where
             budget_us,
             m: RoomCounters::default(),
             metrics,
-            pending: HashMap::new(),
-            pending_total: 0,
+            calls,
             queued: HashMap::new(),
             replies_buf: Vec::new(),
-            completions,
-            completions_tx,
             result_sink,
             registry: None,
             despawn_reports: Vec::new(),

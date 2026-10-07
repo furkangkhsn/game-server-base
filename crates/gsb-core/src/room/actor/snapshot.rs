@@ -348,51 +348,21 @@ where
         failed.settle(&mut self.m);
     }
 
-    /// Queue one RPC answer for a connection's next (or this tick's, if
-    /// broadcast has not run yet) private frame. All request paths —
-    /// same-tick reply/reject, cap/duplicate rejects, the worker-report
-    /// reconciliation, the timeout sweep — funnel through here, so the
-    /// per-tick delivery point is exactly one.
-    pub(super) fn queue_reply(
-        &mut self,
-        conn: ConnectionId,
-        id: u64,
-        op: u16,
-        ok: bool,
-        reason: String,
-        payload: bytes::Bytes,
-    ) {
-        self.queued
-            .entry(conn)
-            .or_default()
-            .push(crate::rpc::RpcReply {
-                id,
-                ok,
-                op,
-                reason,
-                payload,
-            });
-    }
-
-    /// Drop a connection's request state (pending set + queued answers).
-    /// Called on leave and on join (a join supersedes the connection's
-    /// prior state, including a queued leave). Late worker reports for
-    /// the dropped requests find no pending entry and are dropped (the
-    /// exactly-one-answer reconciliation); the workers themselves exit
-    /// on their own (report send against a dropped entry, or their
-    /// timeout).
+    /// Drop a connection's request state (the call table's answers owed
+    /// to it + queued answers). Called on leave, on join (a join
+    /// supersedes the connection's prior state, including a queued
+    /// leave) and on detach. Late worker reports for the dropped External
+    /// requests find no pending call and are dropped (the
+    /// exactly-one-answer reconciliation, `requests_late`); the workers
+    /// exit on their own (their timeout). A call that would have answered
+    /// the session goes on for its owner; only its answer goes. The
+    /// session's explicit owner binding (`Calls::bind`) goes too.
     ///
-    /// What the session takes along is counted (B53): its in-flight
-    /// requests as `requests_abandoned`, its owed answers — the ones put
-    /// back after a failed send included, each exactly once, here — as
-    /// `requests_undelivered`.
+    /// What the session takes along is counted (B53): the answers the
+    /// table owed it as `requests_abandoned`, its queued answers — the
+    /// ones put back after a failed send included, each exactly once,
+    /// here — as `requests_undelivered`.
     pub(super) fn drop_conn_request_state(&mut self, conn: ConnectionId) {
-        if let Some(deq) = self.pending.remove(&conn) {
-            self.pending_total = self.pending_total.saturating_sub(deq.len());
-            self.m.requests_abandoned += deq.len() as u64;
-        }
-        if let Some(owed) = self.queued.remove(&conn) {
-            self.m.requests_undelivered += owed.len() as u64;
-        }
+        crate::room::parts!(self).drop_session(conn);
     }
 }

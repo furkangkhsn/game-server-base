@@ -113,6 +113,7 @@ impl MetricAccumulator {
                 pending_requests: latest.pending_requests,
                 metrics_dropped: latest.metrics_dropped,
                 stop: latest.stop,
+                calls: latest.calls,
                 logic: latest.logic,
             });
             acc.prev = Some(latest);

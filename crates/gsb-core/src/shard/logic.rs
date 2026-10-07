@@ -130,6 +130,23 @@ pub trait ShardLogic<W>: GameLogic<W> {
         self.update(world, ctx);
     }
 
+    /// [`Self::update_seam`] with the shard's call table (the sharded
+    /// counterpart of [`GameLogic::update_with_calls`]). The shard actor
+    /// calls THIS.
+    ///
+    /// Default: [`Self::update_seam`] — a logic that never touches the
+    /// table is unchanged. A sharded logic that does overrides this one
+    /// (overriding `update_with_calls` alone does not reach a shard).
+    fn update_seam_with_calls(
+        &mut self,
+        world: &mut W,
+        ctx: &TickCtx,
+        seam: &mut CrossSeam<'_, Self::Strip>,
+        _calls: &mut crate::calls::Calls,
+    ) {
+        self.update_seam(world, ctx, seam);
+    }
+
     /// Apply one remote effect addressed to an entity of this shard
     /// (CONTROL, after the drain, before any of this tick's input: the
     /// core has already checked the epoch, the age envelope, the
