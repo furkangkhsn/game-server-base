@@ -117,6 +117,16 @@ fn a_missing_error_is_refused() {
 }
 
 #[test]
+fn an_empty_error_name_is_a_missing_error() {
+    assert_eq!(
+        problems("empty_error"),
+        [Problem::MissingError {
+            rpc: "fixture.bad.S.One".into(),
+        }]
+    );
+}
+
+#[test]
 fn an_unknown_error_is_refused() {
     assert_eq!(
         problems("unknown_error"),
