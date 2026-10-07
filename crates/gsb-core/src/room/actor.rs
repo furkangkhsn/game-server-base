@@ -133,6 +133,8 @@ pub struct RoomActor<W, G, Sp> {
     /// is the single authority on "is this request still pending"
     /// (module docs of `crate::rpc`).
     pub(in crate::room) calls: crate::calls::Calls,
+    /// The call table's boot error (`GameLogic::boot_calls`), if any.
+    pub(in crate::room) boot_error: Option<crate::calls::BootError>,
     /// This tick's queued RPC answers per transport session; drained in
     /// the broadcast phase (handed to the logic's `private`) and emptied
     /// — except the answers of a dropped batch, which go back here, in

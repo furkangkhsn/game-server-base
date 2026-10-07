@@ -75,7 +75,7 @@ where
         let border_every = (config.tick_hz.round() as u64).max(1);
         // The call table (the room actor's, keyed per shard).
         let mut logic = logic;
-        let calls = crate::room::call_table(
+        let (calls, boot_error) = crate::room::call_table(
             &config,
             config.id.0.wrapping_shl(16) ^ index as u64,
             &mut *logic,
@@ -121,6 +121,7 @@ where
             border_every,
             metrics,
             calls,
+            boot_error,
             queued: HashMap::new(),
             replies_buf: Vec::new(),
             result_sink,
@@ -141,6 +142,14 @@ where
     /// the same reason the room actor uses one: the direct-drive rigs
     /// construct shards without a registry, and `new` is already at the
     /// argument limit.
+    /// The call table's boot error (`GameLogic::boot_calls` claimed an
+    /// op twice), if any: the registry refuses to install such a room
+    /// (`CoreError::RoomBoot`, B153); a directly built actor runs with
+    /// the first claim kept.
+    pub fn boot_error(&self) -> Option<&crate::calls::BootError> {
+        self.boot_error.as_ref()
+    }
+
     pub fn with_registry(mut self, registry: Mailbox<crate::registry::RegistryMsg>) -> Self {
         self.registry = Some(registry);
         self

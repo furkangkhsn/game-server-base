@@ -84,7 +84,13 @@ where
         // create here and a panic rebuild (see
         // `RegistryMsg::RoomDied`) wire the actors identically
         // through it — one implementation, no drift.
-        self.install_room(config.clone(), built, run_every);
+        if let Err(error) = self.install_room(config.clone(), built, run_every) {
+            // B153: a logic whose call table did not boot is a game bug;
+            // the room is refused, not started half-registered.
+            warn!(room = %id, %error, "room create refused: the call table did not boot");
+            let _ = reply.send(Err(CoreError::RoomBoot { room: id.0, error }));
+            return;
+        }
         self.reg_created += 1;
         self.emit_metrics();
         debug!(room = %id, "room created");
@@ -205,8 +211,16 @@ where
             // construction.
             let run_every = (global / entry.config.tick_hz).round() as u64;
             let built = (self.factory)(id, &entry.config);
-            self.install_room(entry.config.clone(), built, run_every);
-            debug!(room = %id, "room rebuilt after unexpected death");
+            match self.install_room(entry.config.clone(), built, run_every) {
+                Ok(()) => debug!(room = %id, "room rebuilt after unexpected death"),
+                // The same factory booted this room before; a rebuild
+                // that no longer boots stays dead (retired, like an
+                // unrebuilt death).
+                Err(error) => {
+                    tracing::error!(room = %id, %error, "room rebuild refused: the call table did not boot");
+                    self.retire_room(id);
+                }
+            }
         } else {
             // A death left unrebuilt ends the match: retire the
             // id so later joins answer ERROR 12 ("definitively

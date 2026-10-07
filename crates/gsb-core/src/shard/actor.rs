@@ -171,6 +171,8 @@ pub struct ShardActor<W, G, St, Sp> {
     /// single authority on "is this request still pending" for the
     /// sessions it owns.
     pub(in crate::shard) calls: crate::calls::Calls,
+    /// The call table's boot error (`GameLogic::boot_calls`), if any.
+    pub(in crate::shard) boot_error: Option<crate::calls::BootError>,
     /// This tick's queued RPC answers per transport session; drained in
     /// the broadcast phase (handed to the logic's `private`) and emptied
     /// — except a dropped batch's, which go back here for the next tick

@@ -39,6 +39,17 @@ pub enum CoreError {
     #[error("room shut down")]
     RoomGone,
 
+    /// The room's logic failed its call-table boot (`GameLogic::boot_calls`:
+    /// two request types claim one op — `docs/SERVICES.md` §11): the room
+    /// is not installed (B153). A game bug, not a client's.
+    #[error("room {room}: the call table did not boot: {error}")]
+    RoomBoot {
+        /// The room.
+        room: u64,
+        /// What the boot refused.
+        error: crate::calls::BootError,
+    },
+
     /// The room id is RETIRED (§8): an ephemeral match ended, or a
     /// persistent room was decommissioned via `DestroyRoom`. The client
     /// decision differs from [`CoreError::RoomNotFound`] (code 4) on
@@ -104,6 +115,7 @@ impl CoreError {
             | Self::KeepaliveRate { .. }
             | Self::InvalidTickRate { .. }
             | Self::RoomGone
+            | Self::RoomBoot { .. }
             | Self::ResumeStale
             | Self::Protocol(_)
             | Self::Io(_) => ErrorCode::RoomOpFailed,

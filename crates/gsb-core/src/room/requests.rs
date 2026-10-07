@@ -42,13 +42,15 @@ pub(crate) use parts;
 /// The call table of an actor whose actor id is `actor` (a room id, a
 /// shard's sample id), sized by `config`, with the logic's boot
 /// registrations (`GameLogic::boot_calls`). A registration error is
-/// logged (the first claim of an op stays): the actor is built anyway —
-/// its construction is infallible.
+/// logged and handed back (the first claim of an op stays): the actor is
+/// built anyway — its construction is infallible — and keeps the error
+/// (`boot_error`) for the registry, which refuses to install a room
+/// whose table did not boot (B153).
 pub(crate) fn table<W, G, Sp>(
     config: &RoomConfig,
     actor: u64,
     logic: &mut dyn GameLogic<W, GroupKey = G, Strip = Sp>,
-) -> Calls
+) -> (Calls, Option<crate::calls::BootError>)
 where
     G: Eq + std::hash::Hash + Clone + std::fmt::Debug,
     Sp: std::fmt::Debug + Clone + PartialEq + Send + 'static,
@@ -63,10 +65,11 @@ where
             .max(1),
         timeout: config.call_timeout,
     });
-    if let Err(e) = logic.boot_calls(&mut calls) {
+    let boot = logic.boot_calls(&mut calls).err();
+    if let Some(e) = &boot {
         tracing::error!(room = %config.id, error = %e, "call table boot registration failed");
     }
-    calls
+    (calls, boot)
 }
 
 /// The actor state the request phases touch, borrowed field by field (so

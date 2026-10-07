@@ -73,7 +73,7 @@ where
         };
         let budget_us = config.period().as_micros() as u64;
         let mut logic = logic;
-        let calls = call_table(&config, config.id.0, &mut *logic);
+        let (calls, boot_error) = call_table(&config, config.id.0, &mut *logic);
         Self {
             config,
             world,
@@ -99,6 +99,7 @@ where
             m: RoomCounters::default(),
             metrics,
             calls,
+            boot_error,
             queued: HashMap::new(),
             replies_buf: Vec::new(),
             result_sink,
@@ -115,6 +116,14 @@ where
     /// instead of another `new` parameter: every direct-drive harness
     /// constructs rooms without a registry, and `new` is already at the
     /// argument limit.
+    /// The call table's boot error (`GameLogic::boot_calls` claimed an
+    /// op twice), if any: the registry refuses to install such a room
+    /// (`CoreError::RoomBoot`, B153); a directly built actor runs with
+    /// the first claim kept.
+    pub fn boot_error(&self) -> Option<&crate::calls::BootError> {
+        self.boot_error.as_ref()
+    }
+
     pub fn with_registry(mut self, registry: Mailbox<crate::registry::RegistryMsg>) -> Self {
         self.registry = Some(registry);
         self

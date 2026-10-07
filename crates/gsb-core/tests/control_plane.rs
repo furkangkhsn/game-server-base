@@ -31,6 +31,10 @@ use tokio::sync::mpsc;
 #[path = "control_plane/dropped.rs"]
 mod dropped;
 
+// A room whose call table did not boot is refused at create (B153).
+#[path = "control_plane/boot.rs"]
+mod boot;
+
 const WAIT: Duration = Duration::from_secs(5);
 const HZ: f64 = 60.0;
 

@@ -196,6 +196,11 @@ pub(super) async fn open_room(query: &str, ops: &OpsHttp) -> Response {
         Err(CoreError::KeepaliveRate { .. }) | Err(CoreError::InvalidTickRate { .. }) => {
             Response::text(400, "Bad Request", "invalid room parameters\n")
         }
+        // B153: the game's logic did not boot its call table — a game
+        // bug, not the request's.
+        Err(e @ CoreError::RoomBoot { .. }) => {
+            Response::text(500, "Internal Server Error", format!("{e}\n"))
+        }
         Err(e) => Response::text(503, "Service Unavailable", format!("{e}\n")),
     }
 }

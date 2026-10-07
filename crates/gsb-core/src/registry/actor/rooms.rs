@@ -38,12 +38,15 @@ where
     /// it would kill the registry itself, exactly as it does today. The
     /// watch covers the spawned tick-loop tasks, whose panics are contained
     /// by tokio's task boundary.
+    ///
+    /// A room whose call table did not boot (an actor's `boot_error`,
+    /// B153) is not installed: no task is spawned, the error comes back.
     pub(super) fn install_room(
         &mut self,
         config: RoomConfig,
         built: BuiltRoom<W, G, St, Sp>,
         run_every: u64,
-    ) {
+    ) -> Result<(), crate::calls::BootError> {
         let id = config.id;
         // This incarnation's generation (0 = first create for this id,
         // +1 per rebuild/re-create): copied into every death watcher of
@@ -59,25 +62,26 @@ where
         match built {
             BuiltRoom::Single { world, logic } => {
                 let (control_tx, control_rx) = channel(config.control_capacity);
-                let handle = tokio::spawn(
-                    RoomActor::new(
-                        config.clone(),
-                        world,
-                        logic,
-                        self.ticker.subscribe(),
-                        control_rx,
-                        run_every,
-                        self.metrics.clone(),
-                        self.result_sink.clone(),
-                    )
-                    // The detach-despawn report path
-                    // (`DetachDespawned`): the room is the only actor
-                    // that sees a detach reach despawn — whether the
-                    // policy declined to park or a hold ran out — and
-                    // this registry is holding the row it ends.
-                    .with_registry(self.self_mailbox.clone())
-                    .run(),
-                );
+                let actor = RoomActor::new(
+                    config.clone(),
+                    world,
+                    logic,
+                    self.ticker.subscribe(),
+                    control_rx,
+                    run_every,
+                    self.metrics.clone(),
+                    self.result_sink.clone(),
+                )
+                // The detach-despawn report path
+                // (`DetachDespawned`): the room is the only actor
+                // that sees a detach reach despawn — whether the
+                // policy declined to park or a hold ran out — and
+                // this registry is holding the row it ends.
+                .with_registry(self.self_mailbox.clone());
+                if let Some(e) = actor.boot_error() {
+                    return Err(e.clone());
+                }
+                let handle = tokio::spawn(actor.run());
                 Self::spawn_room_watcher(
                     id,
                     None,
@@ -148,38 +152,45 @@ where
                 // logical room (its neighbors hold senders into its closed
                 // mailbox, so cross-shard migration can never complete
                 // again), which is exactly what the watcher will report.
+                let mut actors = Vec::with_capacity(n);
                 for (i, (world, logic)) in shards.into_iter().enumerate() {
                     // `rxs` was built in shard order (pass 1), so popping
                     // the front pairs each shard with its own receiver.
                     let rx = rxs.remove(0);
-                    let handle = tokio::spawn(
-                        ShardActor::new(
-                            config.clone(),
-                            i,
-                            world,
-                            logic,
-                            self.ticker.subscribe(),
-                            rx,
-                            txs[i].clone(),
-                            run_every,
-                            self.metrics.clone(),
-                            // Faz 3: every shard of a logical room shares
-                            // this room's match-result sink; each reports
-                            // its own final state at ITS teardown (one
-                            // payload per shard — see `crate::shard`).
-                            self.result_sink.clone(),
-                        )
-                        // The detach-despawn report path
-                        // (`DetachDespawned`) — as for a single room,
-                        // plus the ShardGroup member slot the detached
-                        // row holds on the grid.
-                        .with_registry(self.self_mailbox.clone())
-                        // Remote effects carry this install's generation:
-                        // a wire id names one entity only within one
-                        // incarnation of the room.
-                        .with_effect_epoch(generation)
-                        .run(),
-                    );
+                    let actor = ShardActor::new(
+                        config.clone(),
+                        i,
+                        world,
+                        logic,
+                        self.ticker.subscribe(),
+                        rx,
+                        txs[i].clone(),
+                        run_every,
+                        self.metrics.clone(),
+                        // Faz 3: every shard of a logical room shares
+                        // this room's match-result sink; each reports
+                        // its own final state at ITS teardown (one
+                        // payload per shard — see `crate::shard`).
+                        self.result_sink.clone(),
+                    )
+                    // The detach-despawn report path
+                    // (`DetachDespawned`) — as for a single room,
+                    // plus the ShardGroup member slot the detached
+                    // row holds on the grid.
+                    .with_registry(self.self_mailbox.clone())
+                    // Remote effects carry this install's generation:
+                    // a wire id names one entity only within one
+                    // incarnation of the room.
+                    .with_effect_epoch(generation);
+                    actors.push(actor);
+                }
+                // Every shard built before any is spawned: a table that
+                // did not boot (B153) refuses the whole room.
+                if let Some(e) = actors.iter().find_map(|a| a.boot_error()) {
+                    return Err(e.clone());
+                }
+                for (i, actor) in actors.into_iter().enumerate() {
+                    let handle = tokio::spawn(actor.run());
                     Self::spawn_room_watcher(
                         id,
                         Some(i),
@@ -209,5 +220,6 @@ where
                 debug!(room = %id, shards = n, "sharded room created");
             }
         }
+        Ok(())
     }
 }
