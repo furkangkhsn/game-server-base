@@ -20,6 +20,12 @@
 //!   functions; an `ERROR` frame comes back as a typed [`ServerError`]
 //!   (`ErrorCode`, the raw number, the message).
 //!
+//! - [`requests`]: typed requests (`gsb_protocol::request::Request`,
+//!   generated from a game's `.proto` by `gsb-build`) — the answer, the
+//!   typed game error, an engine error, a local timeout, the session's
+//!   end; [`requests::Requests`] is the sans-IO core,
+//!   [`requests::RequestClient`] runs it over a [`Conn`].
+//!
 //! What it is not: a game client. Game-band payloads stay opaque
 //! (`Bytes` + opcode) — decoding them, and rebuilding a view from
 //! snapshots (`gsb_kit::client`), is the caller's. No policy either:
@@ -42,6 +48,7 @@ pub mod frame;
 #[cfg(feature = "grant")]
 pub mod grant;
 pub mod quic;
+pub mod requests;
 pub mod session;
 pub mod tls;
 pub mod ws;
