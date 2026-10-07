@@ -134,6 +134,14 @@ fn live() -> Live {
         t += 1;
         assert!(t < 2000, "the services answer");
         script(t, &alice, &bob);
+        match t {
+            // A legacy request (the built-in External call) and tips
+            // (actions through `ingest`): live only (a runtime runs the
+            // External future).
+            3 => alice.raw_request(30, OP_PING, Vec::new()),
+            7 | 8 => alice.action(OP_TIP, bytes::Bytes::new()),
+            _ => {}
+        }
         if t == 22 {
             // Bob leaves with a charge in flight: its result finds no
             // owner (`responses_owner_gone`), live and replayed.
@@ -183,6 +191,12 @@ fn served(l: &Live) -> [u64; 2] {
 fn a_live_run_replays_to_the_same_hashes_and_answers_without_calling_services() {
     let l = live();
     assert_eq!(l.log.hashes(), l.hashes, "the log carries the live hashes");
+    assert!(
+        l.answers
+            .iter()
+            .any(|(_, _, a)| a.ok && a.payload == b"pong"),
+        "the External request was answered live"
+    );
     let before = served(&l);
     for _ in 0..2 {
         let (report, answers) = replay(&l.log);

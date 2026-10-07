@@ -15,6 +15,10 @@ pub(super) const OP_PRIV: u16 = 0x7161;
 pub(super) const NOT_LOADED: u32 = 1;
 pub(super) const BUSY: u32 = 2;
 pub(super) const POOR: u32 = 3;
+/// A tip: an action that adds one gold (`ingest`).
+pub(super) const OP_TIP: u16 = 0x7170;
+/// A legacy request (`handle_request` → `External`): answered `pong`.
+pub(super) const OP_PING: u16 = 0x0003;
 
 // ---- the wire request ----------------------------------------------------------
 
@@ -172,8 +176,24 @@ impl GameLogic<World> for Shop {
     fn on_leave(&mut self, w: &mut World, p: PlayerId) {
         w.remove(&p);
     }
-    fn ingest(&mut self, _w: &mut World, _c: &TickCtx, a: &mut Vec<Action>) {
-        a.clear();
+    fn ingest(&mut self, w: &mut World, _c: &TickCtx, a: &mut Vec<Action>) {
+        for a in a.drain(..) {
+            if let (OP_TIP, Some(p)) = (a.op, w.get_mut(&a.player)) {
+                p.gold += 1;
+            }
+        }
+    }
+    fn handle_request(
+        &mut self,
+        _w: &mut World,
+        _c: &TickCtx,
+        req: &crate::rpc::RpcRequest,
+    ) -> Option<crate::rpc::RequestDecision> {
+        (req.op == OP_PING).then(|| {
+            crate::rpc::RequestDecision::External(Box::pin(async {
+                Ok(bytes::Bytes::from_static(b"pong"))
+            }))
+        })
     }
     fn update(&mut self, _w: &mut World, _c: &TickCtx) {
         unreachable!("the actor calls update_with_calls");
