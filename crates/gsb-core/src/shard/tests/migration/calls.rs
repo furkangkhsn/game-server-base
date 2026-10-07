@@ -114,6 +114,8 @@ struct CLogic {
     ent_player: HashMap<u64, PlayerId>,
     bank: Route<BankMsg>,
     resolved: smpsc::Sender<Resolved>,
+    /// The park ledger: every disconnect parks (identity → player).
+    parked: HashMap<String, PlayerId>,
 }
 
 impl CLogic {
@@ -182,6 +184,25 @@ impl GameLogic<TWorld> for CLogic {
         actions.clear();
     }
     fn update(&mut self, _w: &mut TWorld, _ctx: &TickCtx) {}
+
+    fn on_disconnect(
+        &mut self,
+        _w: &mut TWorld,
+        player: PlayerId,
+        identity: &str,
+    ) -> crate::room::Detach {
+        self.parked.insert(identity.to_owned(), player);
+        crate::room::Detach::Hold {
+            grace: None,
+            to: crate::room::ExpireTo::Despawn,
+        }
+    }
+    fn resume_lookup(&self, _w: &TWorld, identity: &str) -> crate::room::ResumeFound {
+        match self.parked.get(identity) {
+            Some(p) => crate::room::ResumeFound::Held(*p),
+            None => crate::room::ResumeFound::Never,
+        }
+    }
 
     fn boot_calls(&mut self, calls: &mut Calls) -> Result<(), crate::calls::BootError> {
         calls.accept::<Buy>()
@@ -315,6 +336,7 @@ impl Pair {
                     ent_player: HashMap::new(),
                     bank: route.clone(),
                     resolved: tx.clone(),
+                    parked: HashMap::new(),
                 }),
                 tick_rx,
                 rx,
@@ -517,4 +539,39 @@ async fn a_migration_left_at_stop_counts_the_answers_it_carried() {
     pair.s[1].finish();
     assert_eq!(pair.s[1].m.stop.migrations_in_dropped, 1);
     assert_eq!(pair.s[1].m.requests_abandoned, 1);
+}
+
+/// B156 on the shard: an explicit bind stays with the parked row and
+/// moves onto the resumed session.
+#[tokio::test]
+async fn an_explicit_bind_follows_a_resume_on_the_shard() {
+    let mut pair = Pair::new(16);
+    let (wire, _actions, _out) = pair.join();
+    let s0 = &mut pair.s[0];
+    s0.calls.bind(ConnectionId(1), Owner(77));
+    assert!(s0.handle_msg(
+        ShardMsg::Detach {
+            conn: ConnectionId(1),
+            entity: wire,
+            identity: "alice".to_owned(),
+        },
+        1,
+    ));
+    assert_eq!(s0.calls.bound(ConnectionId(1)), Some(Owner(77)), "parked");
+    let (out, _rx) = mpsc::channel::<FrameBatch>(4);
+    let (reply, mut replied) = oneshot::channel();
+    assert!(s0.handle_msg(
+        ShardMsg::Resume {
+            conn: ConnectionId(2),
+            epoch: 2,
+            identity: "alice".to_owned(),
+            out,
+            reply,
+        },
+        1,
+    ));
+    let resumed = replied.try_recv().expect("sync reply").expect("resumed");
+    assert!(resumed.is_some(), "held here");
+    assert_eq!(s0.calls.bound(ConnectionId(1)), None);
+    assert_eq!(s0.calls.bound(ConnectionId(2)), Some(Owner(77)));
 }
