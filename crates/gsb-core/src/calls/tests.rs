@@ -234,3 +234,92 @@ fn typed_outcomes_encode_to_the_flagged_answer_shapes() {
         assert_eq!((r.id, r.op), (9, 1));
     }
 }
+
+/// The table's own deadline (SERVICES.md §19 S6, B154): a sent call the
+/// service has not answered by `CallsConfig::timeout` ends `TimedOut` at
+/// RESPONSES — its client answered with the timeout reason, its result
+/// delivered, counted `results_timed_out` — and the service's later
+/// answer is `results_late`, applied nowhere.
+#[test]
+fn a_call_past_the_tables_deadline_ends_timed_out_and_its_answer_is_late() {
+    let (bank, mut inbox) = Route::<BankMsg>::new("bank", 8);
+    let mut ledger = Ledger::default();
+    let mut m = RoomCounters::default();
+    let mut t = Calls::new(CallsConfig {
+        timeout: Some(std::time::Duration::ZERO),
+        ..CallsConfig::default()
+    });
+    t.accept::<Pay>().expect("boot");
+    let pay = Pay { amount: 1 }.encode_to_vec();
+    t.read(
+        ConnectionId(1),
+        PlayerId(1),
+        &Identity::new("p"),
+        Some(Owner(1)),
+        9,
+        Pay::OP,
+        &pay,
+    );
+    let r = t.take_incoming::<Pay>().pop().expect("taken");
+    t.call(CallSpec::new(&bank, Charge(1), BankMsg::Charge))
+        .owner(r.owner)
+        .with(7u8)
+        .answers(r.reply);
+    t.flush();
+    t.end_tick();
+    t.responses(crate::ticker::now(), &alive, &mut m);
+    let got = t.take_resolved::<Charge, u8>();
+    assert_eq!(got.len(), 1);
+    assert_eq!(
+        (got[0].ctx, &got[0].outcome),
+        (7, &Err(CallError::TimedOut))
+    );
+    let out = t.take_outbox();
+    assert_eq!(out.len(), 1);
+    assert_eq!(
+        (out[0].1.id, out[0].1.ok, out[0].1.reason.as_str()),
+        (9, false, crate::rpc::TIMEOUT_REASON)
+    );
+    assert!(!t.in_flight::<Charge>(Owner(1)));
+    assert_eq!(t.pending_len(), 0);
+    // The service answers after all: late, applied nowhere.
+    ledger.serve(&mut inbox);
+    t.responses(crate::ticker::now(), &alive, &mut m);
+    assert!(t.take_resolved::<Charge, u8>().is_empty());
+    assert!(t.take_outbox().is_empty());
+    let c = *t.counts();
+    assert_eq!(
+        (
+            c.results_timed_out,
+            c.results_ok,
+            c.results_late,
+            c.answers_sent
+        ),
+        (1, 0, 1, 1)
+    );
+}
+
+/// No deadline (`timeout: None`): a call waits for its answer however
+/// long it takes.
+#[test]
+fn without_a_deadline_a_call_waits_for_its_answer() {
+    let (bank, mut inbox) = Route::<BankMsg>::new("bank", 8);
+    let mut ledger = Ledger::default();
+    let mut m = RoomCounters::default();
+    let mut t = Calls::new(CallsConfig {
+        timeout: None,
+        ..CallsConfig::default()
+    });
+    t.call(CallSpec::new(&bank, Charge(1), BankMsg::Charge));
+    t.flush();
+    t.responses(
+        crate::ticker::now() + std::time::Duration::from_secs(3600),
+        &alive,
+        &mut m,
+    );
+    assert_eq!(t.pending_len(), 1);
+    ledger.serve(&mut inbox);
+    t.responses(crate::ticker::now(), &alive, &mut m);
+    assert_eq!(t.take_resolved::<Charge, ()>().len(), 1);
+    assert_eq!(t.counts().results_timed_out, 0);
+}

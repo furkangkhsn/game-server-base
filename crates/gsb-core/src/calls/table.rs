@@ -6,7 +6,7 @@ use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
@@ -121,6 +121,12 @@ impl std::fmt::Display for BootError {
 
 impl std::error::Error for BootError {}
 
+/// The default of [`CallsConfig::timeout`] (and `RoomConfig::call_timeout`):
+/// twice the service host's default deadline
+/// ([`DEFAULT_SERVICE_TIMEOUT`](crate::calls::DEFAULT_SERVICE_TIMEOUT)),
+/// so a service's own timeout normally ends the call first.
+pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Table knobs.
 #[derive(Debug, Clone, Copy)]
 pub struct CallsConfig {
@@ -132,6 +138,12 @@ pub struct CallsConfig {
     pub share: u32,
     /// Completion channel capacity.
     pub completions: usize,
+    /// The table's own deadline for a game call (SERVICES.md §19 S6,
+    /// the backstop behind the service host's timeout): a call sent at
+    /// FLUSH and still unanswered this long after ends `TimedOut` at a
+    /// RESPONSES (`results_timed_out`; a later answer is
+    /// `results_late`). `None`: no sweep.
+    pub timeout: Option<Duration>,
 }
 
 impl Default for CallsConfig {
@@ -141,6 +153,7 @@ impl Default for CallsConfig {
             origin: 1,
             share: 64,
             completions: 1024,
+            timeout: Some(DEFAULT_CALL_TIMEOUT),
         }
     }
 }
@@ -297,6 +310,9 @@ pub struct Calls {
     pub(crate) legacy_by_conn: HashMap<ConnectionId, usize>,
     pub(crate) legacy_total: usize,
     pub(crate) deadlines: VecDeque<(Instant, CallKey)>,
+    /// Game calls' deadlines (`CallsConfig::timeout`), in send order =
+    /// deadline order.
+    pub(crate) call_deadlines: VecDeque<(Instant, CallKey)>,
     // Out.
     pub(crate) outbox: Vec<(ConnectionId, RpcReply)>,
     pub(crate) counts: CallCounts,
@@ -346,6 +362,7 @@ impl Calls {
             legacy_by_conn: HashMap::new(),
             legacy_total: 0,
             deadlines: VecDeque::new(),
+            call_deadlines: VecDeque::new(),
             outbox: Vec::new(),
             counts: CallCounts::default(),
         }

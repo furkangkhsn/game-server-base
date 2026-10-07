@@ -61,6 +61,7 @@ where
             .call_completions
             .saturating_add(config.max_pending_requests)
             .max(1),
+        timeout: config.call_timeout,
     });
     if let Err(e) = logic.boot_calls(&mut calls) {
         tracing::error!(room = %config.id, error = %e, "call table boot registration failed");

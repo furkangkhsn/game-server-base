@@ -4,7 +4,8 @@
 //! ```text
 //! CONTROL    drop_session (a session ended: unbind, abandon what it was owed)
 //! RESPONSES  responses   (last FLUSH's refusals, the completion channel,
-//!                         the built-in External deadline sweep)
+//!                         the game calls' deadline sweep, the built-in
+//!                         External deadline sweep)
 //! READ       read        (a request of a claimed op → the table)
 //! SYSTEMS    the game    (take_incoming / call / take_resolved)
 //! FLUSH      flush       (this tick's calls leave, in issue order)
@@ -74,9 +75,10 @@ impl Calls {
 
     /// RESPONSES: absorb finished calls — the refusals the last FLUSH
     /// decided first, then the completion channel in arrival order, then
-    /// the built-in `External` deadlines on the tick clock (`now`).
+    /// the game calls' own deadline (`CallsConfig::timeout`), then the
+    /// built-in `External` deadlines — both on the tick clock (`now`).
     /// `alive` says whether an owner still exists. Cost when quiet: one
-    /// empty `try_recv` and two `is_empty` probes.
+    /// empty `try_recv` and three `is_empty` probes.
     pub(crate) fn responses(
         &mut self,
         now: Instant,
@@ -90,6 +92,9 @@ impl Calls {
         }
         while let Ok(c) = self.rx.try_recv() {
             self.absorb(c.key, c.outcome, alive, m);
+        }
+        if !self.call_deadlines.is_empty() {
+            self.sweep_calls(now, alive);
         }
         // The built-in deadline (the client-visible timeout of an
         // External request — `crate::rpc`): every one shares the room's
@@ -122,8 +127,8 @@ impl Calls {
     ) {
         let Some(e) = self.pending.remove(&key) else {
             // A key this table no longer holds: an External report after
-            // its deadline or its session's end, or an answer for a call
-            // exported away.
+            // its deadline or its session's end, an answer for a call
+            // exported away, or one the table's own deadline ended.
             if outcome.is::<Outcome<External>>() {
                 m.requests_late += 1;
             } else {
@@ -131,6 +136,12 @@ impl Calls {
             }
             return;
         };
+        self.finish(key, e, outcome, alive);
+    }
+
+    /// A game call ended (`e` already out of `pending`): count its
+    /// ending, answer its client, hand its result to the game.
+    fn finish(&mut self, key: CallKey, e: Entry, outcome: Erased, alive: &dyn Fn(Owner) -> bool) {
         self.untrack(&e);
         if e.legacy {
             if let Some(a) = &e.answer {
@@ -156,6 +167,25 @@ impl Calls {
                 (e.deliver)(&mut self.buckets, key, e.owner, ctx, outcome);
                 self.waiting += 1;
                 self.counts.responses_delivered += 1;
+            }
+        }
+    }
+
+    /// The table's own deadline for game calls (`CallsConfig::timeout`):
+    /// a sent call still pending past it ends `TimedOut` here, like any
+    /// other ending (the service's later answer is `results_late`).
+    /// Every call shares the timeout and FLUSH stamps on the tick clock,
+    /// so the queue is in deadline order; a head whose call already
+    /// ended (or left: export) is skipped.
+    fn sweep_calls(&mut self, now: Instant, alive: &dyn Fn(Owner) -> bool) {
+        while let Some(&(due, key)) = self.call_deadlines.front() {
+            if due > now {
+                break;
+            }
+            self.call_deadlines.pop_front();
+            if let Some(e) = self.pending.remove(&key) {
+                let outcome = (e.fail)(Failure::TimedOut);
+                self.finish(key, e, outcome, alive);
             }
         }
     }
@@ -364,6 +394,7 @@ impl Calls {
                 actor: self.cfg.actor,
                 player: e.player.clone(),
             },
+            parent: None,
         };
         let sink = ReplySink {
             key,
@@ -381,6 +412,10 @@ impl Calls {
                 e.sent = true;
                 *self.per_service.entry(e.service).or_insert(0) += 1;
                 self.counts.calls_sent += 1;
+                if let Some(t) = self.cfg.timeout {
+                    self.call_deadlines
+                        .push_back((crate::ticker::now() + t, key));
+                }
             }
             Err((why, sink)) => {
                 sink.disarm();

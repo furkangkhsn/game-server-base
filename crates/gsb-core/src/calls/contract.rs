@@ -80,6 +80,9 @@ pub struct Caller {
 pub struct CallCx {
     pub(crate) key: CallKey,
     pub(crate) caller: Caller,
+    /// The trace this call joins (a call made from inside another call:
+    /// `…Handle::within(cx)`); `None` = its own, derived from the key.
+    pub(crate) parent: Option<u64>,
 }
 
 impl CallCx {
@@ -95,9 +98,20 @@ impl CallCx {
     pub fn player(&self) -> Option<&Identity> {
         self.caller.player.as_ref()
     }
-    /// The call's trace id.
+    /// The call's trace id: the parent call's when it was made from
+    /// inside one (`…Handle::within(cx)`), else derived from the key.
     pub fn trace_id(&self) -> u64 {
-        self.key.trace_id()
+        self.parent.unwrap_or_else(|| self.key.trace_id())
+    }
+
+    /// A context for calling a service implementation directly (a game's
+    /// unit test of its service): key, caller, no parent trace.
+    pub fn new(key: CallKey, caller: Caller) -> Self {
+        Self {
+            key,
+            caller,
+            parent: None,
+        }
     }
 }
 
@@ -138,12 +152,14 @@ pub(crate) type Erased = Box<dyn Any + Send + Sync>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Failure {
     Refused(Refusal),
+    TimedOut,
     Abandoned,
 }
 
 pub(crate) fn fail_for<C: Call>(f: Failure) -> Erased {
     let e: CallError<C::Error> = match f {
         Failure::Refused(r) => CallError::Refused(r),
+        Failure::TimedOut => CallError::TimedOut,
         Failure::Abandoned => CallError::Abandoned,
     };
     let out: Outcome<C> = Err(e);

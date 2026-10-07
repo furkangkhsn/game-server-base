@@ -31,6 +31,21 @@
 //! - there are no locks; all shared state is owned by exactly one actor and
 //!   exchanged as channel senders.
 
+// The `#[service]` macro's generated code names this crate `::gsb_core`;
+// this makes the path resolve inside the crate too (its own tests).
+extern crate self as gsb_core;
+
+/// `#[gsb_core::service]`: turn a plain async trait into an in-process
+/// service (`docs/SERVICES.md` §4.1; see [`calls`] for the host).
+pub use gsb_macros::service;
+
+#[doc(hidden)]
+pub mod __private {
+    //! What `#[service]`'s generated code needs besides [`crate::calls`].
+    pub use crate::calls::{BoxError, BoxFuture};
+    pub use tower;
+}
+
 pub mod auth;
 pub mod calls;
 pub mod channel;

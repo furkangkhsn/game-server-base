@@ -26,6 +26,10 @@ prost = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# The service side runs on tower (docs/SERVICES.md §4.1): the generated
+# router is a tower::Service, the host stacks the game's layers.
+tower = { workspace = true }
+gsb-macros = { workspace = true }
 
 [dev-dependencies]
 # `test-util`: the paused-clock tests of the ticker and of a room that

@@ -180,6 +180,18 @@ pub struct RoomConfig {
     ///
     /// Default 1024.
     pub call_completions: usize,
+    /// The call table's own deadline for a game call
+    /// (`docs/SERVICES.md` §19 S6, BACKLOG B154): a call sent at FLUSH
+    /// and unanswered this long after ends `TimedOut` at a RESPONSES
+    /// (`results_timed_out`; the service's later answer is
+    /// `results_late`) — so a service that never answers, or a
+    /// hand-written one without a timeout, cannot keep a call in flight
+    /// for ever. A backstop: the live service host's own deadline
+    /// (`calls::DEFAULT_SERVICE_TIMEOUT`, 30 s, or the game's
+    /// `.timeout(d)`) normally ends the call first. `None`: no sweep.
+    ///
+    /// Default 60 s ([`crate::calls::DEFAULT_CALL_TIMEOUT`]).
+    pub call_timeout: Option<Duration>,
     /// Whether the registry should REBUILD the room from the same factory +
     /// config when its actor task dies unexpectedly (a panic in the game
     /// logic kills the room's task; without the death watch the registry's
@@ -329,6 +341,7 @@ impl Default for RoomConfig {
             request_timeout: Duration::from_secs(5),
             call_share: 64,
             call_completions: 1024,
+            call_timeout: Some(crate::calls::DEFAULT_CALL_TIMEOUT),
             restart_on_panic: false,
             persistent: false,
             // OFF: the feature is invisible until an operator asks for it.

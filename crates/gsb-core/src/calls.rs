@@ -26,12 +26,16 @@
 //! not claim still goes to `GameLogic::handle_request`; its
 //! `RequestDecision::External` runs as a built-in call of this table
 //! (`engine.rs`). The service side is a [`Route`] (a bounded mailbox);
-//! [`serve`] is this round's minimal host.
+//! [`serve`] is the minimal host for a hand-written service, and the
+//! live tower host ([`Services`], [`spawn`]) runs a `#[service]` trait's
+//! implementation (`live.rs`, Faz 2 — round q2).
 
 mod builder;
 mod contract;
 mod engine;
 mod host;
+mod live;
+mod macro_checks;
 mod route;
 mod table;
 
@@ -44,7 +48,15 @@ pub use contract::{
     Refusal, Request, WireMessage, mix,
 };
 pub use host::serve;
-pub use route::{Ask, CallSpec, Envelope, Mail, Route, ServiceId, ServiceStats};
+pub use live::{
+    BoxError, BoxFuture, DEFAULT_MAILBOX, DEFAULT_SERVICE_TIMEOUT, Dispatch, Served, ServiceClient,
+    ServiceDef, ServiceKind, Services, Setup, spawn,
+};
+pub use route::{
+    AnyOutcome, Ask, CallSpec, Envelope, Mail, MethodStats, OnBehalf, Reply, Route, ServiceId,
+    ServiceStats,
+};
 pub use table::{
-    AnyIncoming, BootError, Calls, CallsConfig, Exported, Incoming, ReplyTo, Resolved,
+    AnyIncoming, BootError, Calls, CallsConfig, DEFAULT_CALL_TIMEOUT, Exported, Incoming, ReplyTo,
+    Resolved,
 };
