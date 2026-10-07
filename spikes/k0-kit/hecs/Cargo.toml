@@ -1,0 +1,20 @@
+# The hecs binding (engine name: `gsb-kit-hecs`). hecs has no change
+# detection: the binding supplies it (`Tracked<T>`: a flag set by
+# `DerefMut`, the same rule as bevy's `Mut<T>`), or diffs by value.
+[package]
+name = "k0-kit-hecs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+k0-kit-core = { workspace = true }
+hecs = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

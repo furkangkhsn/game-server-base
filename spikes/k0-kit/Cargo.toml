@@ -1,0 +1,32 @@
+# Round k0 design spike (docs/KIT-ECS.md): NOT a member of the gsb
+# workspace (the root Cargo.toml lists it under `exclude`); its own small
+# workspace. It ports ONE hot kit piece — the AOI cell-delta bookkeeping
+# (`gsb-kit`'s `CellBook` dirty pass + removal sweep + roll) — into an
+# ECS-free core, with a bevy_ecs binding and a hecs binding, and changes
+# no engine behaviour.
+[workspace]
+resolver = "2"
+members = ["core", "bevy-ecs", "hecs", "scenario"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+k0-kit-core = { path = "core" }
+k0-kit-bevy-ecs = { path = "bevy-ecs" }
+k0-kit-hecs = { path = "hecs" }
+# The same bevy_ecs line the engine pins (root Cargo.toml).
+bevy_ecs = "0.19"
+# The same hecs line the s0 spike's adapter uses.
+hecs = "0.10"
+gsb-lint = { path = "../../crates/gsb-lint" }
+
+# The engine's release profile (root Cargo.toml), so the benchmark
+# measures what a release server would run.
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,20 @@
+# The bevy_ecs binding (engine name: `gsb-kit-bevy-ecs`): gathers the
+# core's inputs from a bevy `World` (`Changed<T>`, removed-component
+# buffers) and owns the bevy-only state (the kept `QueryState`).
+[package]
+name = "k0-kit-bevy-ecs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+k0-kit-core = { workspace = true }
+bevy_ecs = { workspace = true }
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
