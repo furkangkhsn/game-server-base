@@ -1121,6 +1121,7 @@ maliyet.
 | A10 | Bağlamı servise gönder, servis geri yollasın | Zaman aşımı/ölümde bağlam kaybolur, rezerv kilitli kalır; servis oyun tipini bilir. |
 | A11 | `async-trait` crate'i | Her çağrıda kutulanmış future + `Send` belirsizliği; RPITIT 1.75'ten beri kararlı. |
 | A12 | İstek tipi ile süreç içi çağrı tipini tek trait'te birleştirmek | Süreç içi tipler protobuf olmak zorunda kalırdı; `Call`/`Request` ayrımı `InventoryData` gibi düz tipleri serbest bırakır. |
+| A13 | `Calls`'ı ayrı bir aktör yapmak (kullananlar kanalla erişir) — kullanıcı kararı 2026-10-07: tablo | Tick senkron: `in_flight`/`take_*` bir kanal turu bekleyemez, cevap bir tick sonra gelirdi; çift harcama koruması aynı tick'te senkron cevap ister (tablo yine yerelde tutulurdu → iki kopya); odanın sınırına ikinci bir zamanlama belirsizliği girerdi (determinizm); her çağrıya fazladan aktör atlaması; paylaşılacak durum yok (her çağıranın kendi tablosu), tek aktör tüm odaların darboğazı olurdu. Kanallar zaten aktörlerin arasında: servis posta kutusu ve tamamlanma kanalı. Tablo, bağlantı tablosu gibi aktörün kendi durumudur. |
 
 ## 19. Açık sorular (her biri öneriyle)
 
