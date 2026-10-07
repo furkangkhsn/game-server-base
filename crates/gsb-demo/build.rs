@@ -21,40 +21,26 @@ fn main() {
          dependency and must declare `links = \"gsb-kit-proto\"`",
     );
 
-    let mut cfg = prost_build::Config::new();
-    if let Some(protoc) = vendored_protoc() {
-        cfg.protoc_executable(protoc);
-    }
+    // gsb-build: prost-build on the vendored protoc, plus the request
+    // codegen of `gsb/options.proto` (`DemoRequests` → `impl Call` +
+    // `impl Request for AbilityUse`, op checks at build time). It adds
+    // gsb-protocol's proto directory (`gsb/options.proto`) itself.
+    let mut b = gsb_build::Builder::new();
     // Do NOT generate a second copy of the `gsb.base` types here: point
     // prost at the ones `gsb-protocol` already generated. Two copies
     // would encode identically but be distinct Rust types, which is the
     // duplication this move exists to remove.
-    cfg.extern_path(".gsb.base", "::gsb_protocol::base");
+    b.extern_path(".gsb.base", "::gsb_protocol::base");
     // Likewise the kit's envelope types: generated once, by gsb-kit.
-    cfg.extern_path(".gsb.kit", "::gsb_kit::proto");
-    cfg.compile_protos(
+    b.extern_path(".gsb.kit", "::gsb_kit::proto");
+    if let Err(e) = b.compile(
         &[format!("{proto_dir}/game.proto")],
         &[proto_dir, &kit_dir, &base_dir],
-    )
-    .expect("prost codegen failed (using vendored protoc)");
+    ) {
+        panic!("{e}");
+    }
     println!("cargo:rerun-if-changed=proto/game.proto");
     println!("cargo:rerun-if-changed={kit_dir}/kit.proto");
     println!("cargo:rerun-if-changed={base_dir}/base.proto");
-}
-
-/// The vendored `protoc` — same contract as `gsb-protocol`'s build script
-/// (see its `vendored_protoc` docs): explicit path beats `PROTOC`/`PATH`,
-/// `None` falls back to prost-build's own lookup on a target the crate
-/// ships no binary for.
-fn vendored_protoc() -> Option<std::path::PathBuf> {
-    match protoc_bin_vendored::protoc_bin_path() {
-        Ok(path) => Some(path),
-        Err(e) => {
-            println!(
-                "cargo:warning=no vendored protoc for this target ({e}); \
-                 falling back to PROTOC/PATH"
-            );
-            None
-        }
-    }
+    println!("cargo:rerun-if-changed={base_dir}/gsb/options.proto");
 }

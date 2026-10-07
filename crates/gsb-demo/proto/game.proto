@@ -44,6 +44,13 @@ import "base.proto";
 // generated from this file must generate `kit.proto` alongside it.
 import "kit.proto";
 
+// gsb's request options (`(gsb.op)`, `(gsb.error)`, `(gsb.reserved_op)`;
+// gsb-protocol's `gsb/options.proto`, round q3): the `DemoRequests`
+// service below declares the demo's room-local request so `gsb-build`
+// writes its `impl Call` + `impl Request`. Options only — nothing on the
+// wire changes.
+import "gsb/options.proto";
+
 // Client → server: "move my entity toward (x, y)".
 message MoveTo {
   // Zig-zag varint: 1 byte for |v| <= 63, 2 for |v| <= 8191, and never
@@ -133,6 +140,33 @@ message AbilityResult {
   bool ok = 1;
   // Human-readable reason when ok = false (e.g. "out of range").
   string reason = 2;
+}
+
+// The typed error of the demo's declared requests (`(gsb.error)` of
+// `DemoRequests`, round q3). The ability's room-local path still answers
+// with `AbilityResult { ok = false, reason }`; this is the type a
+// call-table path (`calls.reply(r.reply, Err(..))`) answers with — and
+// what a typed client decodes when `RpcResponse.game_error` is set.
+message DemoError {
+  uint32 code = 1;
+}
+
+// The demo's client-wire requests as `gsb-build` reads them
+// (docs/GAME-MODULE.md "Requests from .proto"): one rpc per request,
+// its inner op, its typed error. The rpc's name must not be its request
+// message's own name (protoc resolves `rpc AbilityUse(AbilityUse)`'s
+// argument to the rpc itself). 1001/1002 are the retired frame opcodes
+// (`gsb_demo::op::RETIRED`): the demo's ops share one numbering, so
+// they stay out of the request ops too. `ECONOMY` (1006, `BuyItem`) is
+// not declared here yet: it still answers through `handle_request`'s
+// External path and moves with the economy service's migration.
+service DemoRequests {
+  option (gsb.reserved_op) = 1001;
+  option (gsb.reserved_op) = 1002;
+  rpc Ability(AbilityUse) returns (AbilityResult) {
+    option (gsb.op) = 1005;
+    option (gsb.error) = "DemoError";
+  }
 }
 
 // Client → server (RPC inner op ECONOMY = 1006): "buy item `kind`". The

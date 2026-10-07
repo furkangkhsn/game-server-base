@@ -899,14 +899,13 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "bytes",
+ "gsb-build",
  "gsb-core",
  "gsb-ecs",
  "gsb-kit",
  "gsb-lint",
  "gsb-protocol",
  "prost",
- "prost-build",
- "protoc-bin-vendored",
  "tokio",
  "tracing",
 ]
