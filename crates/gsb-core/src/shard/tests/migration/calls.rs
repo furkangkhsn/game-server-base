@@ -502,3 +502,19 @@ async fn a_dead_joins_migration_counts_the_answers_it_carried() {
     assert_eq!(pair.s[0].calls.counts().results_late, 1);
     assert_eq!(pair.bank.charges, 1);
 }
+
+/// A migration a stopping shard never installs (B68's leftovers): the
+/// answers its calls owed are counted abandoned, as a session end counts
+/// them.
+#[tokio::test]
+async fn a_migration_left_at_stop_counts_the_answers_it_carried() {
+    let mut pair = Pair::new(16);
+    let (_wire, actions, _out) = pair.join();
+    buy(&actions, 7, 100);
+    pair.tick += 1;
+    assert!(pair.s[0].step(&tinfo(pair.tick)));
+    assert_eq!(pair.s[0].calls.counts().calls_exported, 1);
+    pair.s[1].finish();
+    assert_eq!(pair.s[1].m.stop.migrations_in_dropped, 1);
+    assert_eq!(pair.s[1].m.requests_abandoned, 1);
+}
