@@ -126,6 +126,11 @@
 //! `gsb_net_tickets_accepted_total`, `gsb_net_tickets_rejected_total`
 //! (one `reason` per refusal, zeros included) and
 //! `gsb_net_ticket_game_rejects_total` (one `check` per game name).
+//! Round q1's call-table counters (`docs/SERVICES.md` §9, `CallCounts`):
+//! one `<field>=` per counter at the end of each room line (after the
+//! stop counters, before the logic's), and one `gsb_room_<field>_total`
+//! family per counter after the stop families (the report carries a few
+//! non-zero on room 7).
 
 use super::*;
 use crate::conn::ServerClose;
@@ -250,6 +255,18 @@ pub(super) fn golden_report() -> MetricReport {
     // What a stop left (B68; a final sample's, here on a plain one).
     b.stop.joins_unprocessed = 1;
     b.stop.effects_unsent = 2;
+    // The call table's counters (round q1, SERVICES.md §9).
+    b.calls.calls_issued = 7;
+    b.calls.calls_sent = 5;
+    b.calls.calls_refused_full = 1;
+    b.calls.calls_refused_share = 1;
+    b.calls.results_ok = 4;
+    b.calls.results_refused = 2;
+    b.calls.responses_delivered = 3;
+    b.calls.responses_owner_gone = 1;
+    b.calls.answers_sent = 2;
+    b.calls.requests_unbound = 1;
+    b.calls.requests_untaken = 1;
     acc.apply(MetricsEvent::Room(b));
     acc.apply(MetricsEvent::Conn(ConnSample {
         conn: ConnectionId(1),

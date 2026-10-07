@@ -1,6 +1,6 @@
 gsb-metric scope=registry rooms=2 conns=3 opens=4 closes=1 joins=3 leaves=1 rooms_created=2 rooms_destroyed=0 rooms_died=0 join_ops_dropped=1 close_ops_dropped=0 match_results_dropped_full=2 match_results_dropped_closed=1 rooms_ended_uncounted=1 team_relays_dropped_full=4 team_relays_dropped_closed=5 joins_refused_closed=2 joins_unread=6 team_exports_unread=7 joins_unsent=8 close_verdicts_lost=5 close_verdict_lost_idle_timeout=0 close_verdict_lost_write_stall=0 close_verdict_lost_rel_dead=0 close_verdict_lost_violation_budget=0 close_verdict_lost_preauth_budget=0 close_verdict_lost_stream_rejected=0 close_verdict_lost_conn_cap=0 close_verdict_lost_unauth_cap=0 close_verdict_lost_superseded=0 close_verdict_lost_room_gone=0 close_verdict_lost_outbound_dead=0 close_verdict_lost_idle_input=2 close_verdict_lost_kicked=3 close_verdict_lost_unauth_source_cap=0 leave_verdicts_lost=1 detach_despawns_lost=5 unauth_source_moves_kept=9
-gsb-metric scope=room id=r1 steps=60 hz=30.00 step_budget_us=33333 step_min_us=40 step_mean_us=100.0 step_max_us=900 step_hist=[60,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=5 late_mean_us=20.0 late_max_us=70 lagged_events=0 lagged_ticks=0 dropped=2 dropped_s=2.0 sends_closed=1 keepalive_resends=0 snapshots=29 snapshots_withheld=4 snap_bytes_s=3000 snap_bytes_max=120 snap_overflows=0 snap_records=58 shipped_bytes=17700 shipped_s=9000 shipped_frames=87 private_frames=3 groups=1 members=2 max_group=2 joins=3 leaves=1 detached=0 resumes=0 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=0 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=0 migrations_in=0 migrations_failed=0 team_exports=0 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=0 team_imports=0 team_import_records=0 team_expired=0 actions_unread=3 actions_unbound=0 req_local=4 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=3 req_unread=2 req_unbound=0 req_to=0 req_late=0 req_undelivered=1 req_abandoned=0 req_pending=0 metrics_dropped=0 joins_unprocessed=0 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=0 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0
-gsb-metric scope=room id=r7 steps=15 hz=0.00 step_budget_us=33333 step_min_us=0 step_mean_us=0.0 step_max_us=0 step_hist=[0,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=0 late_mean_us=0.0 late_max_us=0 lagged_events=0 lagged_ticks=0 dropped=0 dropped_s=0.0 sends_closed=0 keepalive_resends=0 snapshots=0 snapshots_withheld=0 snap_bytes_s=0 snap_bytes_max=0 snap_overflows=0 snap_records=0 shipped_bytes=0 shipped_s=0 shipped_frames=0 private_frames=0 groups=0 members=0 max_group=0 joins=0 leaves=0 detached=1 resumes=2 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=6 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=2 migrations_in=0 migrations_failed=0 team_exports=9 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=1 team_imports=0 team_import_records=0 team_expired=0 actions_unread=0 actions_unbound=1 req_local=0 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=0 req_unread=0 req_unbound=1 req_to=0 req_late=0 req_undelivered=0 req_abandoned=1 req_pending=1 metrics_dropped=0 joins_unprocessed=1 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=2 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0
+gsb-metric scope=room id=r1 steps=60 hz=30.00 step_budget_us=33333 step_min_us=40 step_mean_us=100.0 step_max_us=900 step_hist=[60,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=5 late_mean_us=20.0 late_max_us=70 lagged_events=0 lagged_ticks=0 dropped=2 dropped_s=2.0 sends_closed=1 keepalive_resends=0 snapshots=29 snapshots_withheld=4 snap_bytes_s=3000 snap_bytes_max=120 snap_overflows=0 snap_records=58 shipped_bytes=17700 shipped_s=9000 shipped_frames=87 private_frames=3 groups=1 members=2 max_group=2 joins=3 leaves=1 detached=0 resumes=0 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=0 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=0 migrations_in=0 migrations_failed=0 team_exports=0 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=0 team_imports=0 team_import_records=0 team_expired=0 actions_unread=3 actions_unbound=0 req_local=4 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=3 req_unread=2 req_unbound=0 req_to=0 req_late=0 req_undelivered=1 req_abandoned=0 req_pending=0 metrics_dropped=0 joins_unprocessed=0 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=0 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0 calls_issued=0 calls_sent=0 calls_refused_full=0 calls_refused_gone=0 calls_refused_share=0 calls_exported=0 calls_imported=0 results_ok=0 results_service_error=0 results_refused=0 results_timed_out=0 results_abandoned=0 results_late=0 responses_delivered=0 responses_unhandled=0 responses_owner_gone=0 answers_sent=0 requests_undecodable=0 requests_unbound=0 requests_forwarded=0 requests_answered=0 requests_untaken=0 requests_unanswered=0 requests_replied_late=0
+gsb-metric scope=room id=r7 steps=15 hz=0.00 step_budget_us=33333 step_min_us=0 step_mean_us=0.0 step_max_us=0 step_hist=[0,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=0 late_mean_us=0.0 late_max_us=0 lagged_events=0 lagged_ticks=0 dropped=0 dropped_s=0.0 sends_closed=0 keepalive_resends=0 snapshots=0 snapshots_withheld=0 snap_bytes_s=0 snap_bytes_max=0 snap_overflows=0 snap_records=0 shipped_bytes=0 shipped_s=0 shipped_frames=0 private_frames=0 groups=0 members=0 max_group=0 joins=0 leaves=0 detached=1 resumes=2 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=6 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=2 migrations_in=0 migrations_failed=0 team_exports=9 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=1 team_imports=0 team_import_records=0 team_expired=0 actions_unread=0 actions_unbound=1 req_local=0 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=0 req_unread=0 req_unbound=1 req_to=0 req_late=0 req_undelivered=0 req_abandoned=1 req_pending=1 metrics_dropped=0 joins_unprocessed=1 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=2 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0 calls_issued=7 calls_sent=5 calls_refused_full=1 calls_refused_gone=0 calls_refused_share=1 calls_exported=0 calls_imported=0 results_ok=4 results_service_error=0 results_refused=2 results_timed_out=0 results_abandoned=0 results_late=0 responses_delivered=3 responses_unhandled=0 responses_owner_gone=1 answers_sent=2 requests_undecodable=0 requests_unbound=1 requests_forwarded=0 requests_answered=0 requests_untaken=1 requests_unanswered=0 requests_replied_late=0
 gsb-metric scope=net bytes_in=410 bytes_out_room=17700 bytes_out_control=60 bytes_out_total=17760 frames_in=21 frames_out=3 actions_dropped=5 violations=1 input_rate_limited=9 actions_dropped_closed=2 requests_dropped_closed=1 requests_dropped_full=2 requests_no_room=1 hb_throttled_preauth=4 hb_throttled_authed=6 frames_out_closed=1 close_notices_dropped=1 requests_unprocessed=1 actions_unprocessed=2 control_frames_unprocessed=3 metrics_dropped=18 reports_torn_at_cut_grace=2 server_closes=1 server_close_idle_timeout=1 server_close_write_stall=0 server_close_rel_dead=0 server_close_violation_budget=0 server_close_preauth_budget=0 server_close_stream_rejected=0 server_close_conn_cap=0 server_close_unauth_cap=0 server_close_superseded=0 server_close_room_gone=0 server_close_outbound_dead=0 server_close_idle_input=0 server_close_kicked=0 server_close_unauth_source_cap=0
 gsb-metric scope=tickets accepted=2 rejected=2 reject_missing=0 reject_malformed=0 reject_unknown_key=0 reject_signature=0 reject_claims=0 reject_expired=1 reject_not_yet_valid=0 reject_lifetime=0 reject_audience=0 reject_replayed=0 reject_replay_unavailable=0 reject_game=1 reject_other=0 reject_timed_out=0 reject_validator_lost=0 game_season_pass=1
 gsb-metric scope=net actions_dropped_top=c1:5
@@ -885,3 +885,99 @@ gsb_room_team_imports_unapplied_total{room="r7"} 0
 # TYPE gsb_room_border_updates_unapplied_total counter
 gsb_room_border_updates_unapplied_total{room="r1"} 0
 gsb_room_border_updates_unapplied_total{room="r7"} 0
+# HELP gsb_room_calls_issued_total Calls written into the room's call table (a game call, a forward rule, an import), cumulative.
+# TYPE gsb_room_calls_issued_total counter
+gsb_room_calls_issued_total{room="r1"} 0
+gsb_room_calls_issued_total{room="r7"} 7
+# HELP gsb_room_calls_sent_total Calls a service's mailbox took at the room's FLUSH, cumulative.
+# TYPE gsb_room_calls_sent_total counter
+gsb_room_calls_sent_total{room="r1"} 0
+gsb_room_calls_sent_total{room="r7"} 5
+# HELP gsb_room_calls_refused_full_total Calls refused at FLUSH because the service's mailbox was full (they end refused at the next tick), cumulative.
+# TYPE gsb_room_calls_refused_full_total counter
+gsb_room_calls_refused_full_total{room="r1"} 0
+gsb_room_calls_refused_full_total{room="r7"} 1
+# HELP gsb_room_calls_refused_gone_total Calls refused at FLUSH because the service was gone, cumulative.
+# TYPE gsb_room_calls_refused_gone_total counter
+gsb_room_calls_refused_gone_total{room="r1"} 0
+gsb_room_calls_refused_gone_total{room="r7"} 0
+# HELP gsb_room_calls_refused_share_total Calls refused at FLUSH because the room's share of the service (its in-flight cap) was used up, cumulative.
+# TYPE gsb_room_calls_refused_share_total counter
+gsb_room_calls_refused_share_total{room="r1"} 0
+gsb_room_calls_refused_share_total{room="r7"} 1
+# HELP gsb_room_calls_exported_total Calls carried out of the room's call table by a migration export, cumulative.
+# TYPE gsb_room_calls_exported_total counter
+gsb_room_calls_exported_total{room="r1"} 0
+gsb_room_calls_exported_total{room="r7"} 0
+# HELP gsb_room_calls_imported_total Calls taken into the room's call table by a migration import (re-issued under their key), cumulative.
+# TYPE gsb_room_calls_imported_total counter
+gsb_room_calls_imported_total{room="r1"} 0
+gsb_room_calls_imported_total{room="r7"} 0
+# HELP gsb_room_results_ok_total Calls that ended with the service's answer, cumulative.
+# TYPE gsb_room_results_ok_total counter
+gsb_room_results_ok_total{room="r1"} 0
+gsb_room_results_ok_total{room="r7"} 4
+# HELP gsb_room_results_service_error_total Calls that ended with the service's typed error, cumulative.
+# TYPE gsb_room_results_service_error_total counter
+gsb_room_results_service_error_total{room="r1"} 0
+gsb_room_results_service_error_total{room="r7"} 0
+# HELP gsb_room_results_refused_total Calls that ended refused (a FLUSH refusal, or the service host shed them), cumulative.
+# TYPE gsb_room_results_refused_total counter
+gsb_room_results_refused_total{room="r1"} 0
+gsb_room_results_refused_total{room="r7"} 2
+# HELP gsb_room_results_timed_out_total Calls that ended timed out, cumulative.
+# TYPE gsb_room_results_timed_out_total counter
+gsb_room_results_timed_out_total{room="r1"} 0
+gsb_room_results_timed_out_total{room="r7"} 0
+# HELP gsb_room_results_abandoned_total Calls the service dropped unanswered (a panic, a stop), cumulative.
+# TYPE gsb_room_results_abandoned_total counter
+gsb_room_results_abandoned_total{room="r1"} 0
+gsb_room_results_abandoned_total{room="r7"} 0
+# HELP gsb_room_results_late_total Answers for a call the room's table no longer holds (exported away), applied nowhere, cumulative.
+# TYPE gsb_room_results_late_total counter
+gsb_room_results_late_total{room="r1"} 0
+gsb_room_results_late_total{room="r7"} 0
+# HELP gsb_room_responses_delivered_total Call results handed to the game (take_resolved), cumulative.
+# TYPE gsb_room_responses_delivered_total counter
+gsb_room_responses_delivered_total{room="r1"} 0
+gsb_room_responses_delivered_total{room="r7"} 3
+# HELP gsb_room_responses_unhandled_total Call results handed to the game and never taken by the end of their tick, dropped, cumulative.
+# TYPE gsb_room_responses_unhandled_total counter
+gsb_room_responses_unhandled_total{room="r1"} 0
+gsb_room_responses_unhandled_total{room="r7"} 0
+# HELP gsb_room_responses_owner_gone_total Call results whose owner no longer existed, never handed out (an answers-bound client was still answered), cumulative.
+# TYPE gsb_room_responses_owner_gone_total counter
+gsb_room_responses_owner_gone_total{room="r1"} 0
+gsb_room_responses_owner_gone_total{room="r7"} 1
+# HELP gsb_room_answers_sent_total Client answers a call's answers binding or a forward rule sent, cumulative.
+# TYPE gsb_room_answers_sent_total counter
+gsb_room_answers_sent_total{room="r1"} 0
+gsb_room_answers_sent_total{room="r7"} 2
+# HELP gsb_room_requests_undecodable_total Requests of a registered op whose payload did not decode as its type, answered by the engine, cumulative.
+# TYPE gsb_room_requests_undecodable_total counter
+gsb_room_requests_undecodable_total{room="r1"} 0
+gsb_room_requests_undecodable_total{room="r7"} 0
+# HELP gsb_room_requests_unbound_total Requests from a session bound to no owner, answered by the engine and never shown to the game, cumulative.
+# TYPE gsb_room_requests_unbound_total counter
+gsb_room_requests_unbound_total{room="r1"} 0
+gsb_room_requests_unbound_total{room="r7"} 1
+# HELP gsb_room_requests_forwarded_total Requests a forward rule sent straight to a service, cumulative.
+# TYPE gsb_room_requests_forwarded_total counter
+gsb_room_requests_forwarded_total{room="r1"} 0
+gsb_room_requests_forwarded_total{room="r7"} 0
+# HELP gsb_room_requests_answered_total Requests the game answered itself through the call table, cumulative.
+# TYPE gsb_room_requests_answered_total counter
+gsb_room_requests_answered_total{room="r1"} 0
+gsb_room_requests_answered_total{room="r7"} 0
+# HELP gsb_room_requests_untaken_total Requests nobody took from the call table by the end of their tick, answered by the engine, cumulative.
+# TYPE gsb_room_requests_untaken_total counter
+gsb_room_requests_untaken_total{room="r1"} 0
+gsb_room_requests_untaken_total{room="r7"} 1
+# HELP gsb_room_requests_unanswered_total Requests taken from the call table but neither answered nor attached to a call by the end of their tick, answered by the engine, cumulative.
+# TYPE gsb_room_requests_unanswered_total counter
+gsb_room_requests_unanswered_total{room="r1"} 0
+gsb_room_requests_unanswered_total{room="r7"} 0
+# HELP gsb_room_requests_replied_late_total Replies to a request the engine had already closed, ignored, cumulative.
+# TYPE gsb_room_requests_replied_late_total counter
+gsb_room_requests_replied_late_total{room="r1"} 0
+gsb_room_requests_replied_late_total{room="r7"} 0

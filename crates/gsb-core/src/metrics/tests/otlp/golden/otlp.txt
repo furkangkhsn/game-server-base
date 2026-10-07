@@ -607,6 +607,78 @@ gsb_room_team_imports_unapplied sum t=2 mono=true unit="" n=2 | Team imports (re
 gsb_room_border_updates_unapplied sum t=2 mono=true unit="" n=2 | Border updates (a neighbour's strip exchange or resync request, view copies) still in a shard's inbox when it stopped, cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
+gsb_room_calls_issued sum t=2 mono=true unit="" n=2 | Calls written into the room's call table (a game call, a forward rule, an import), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 7
+gsb_room_calls_sent sum t=2 mono=true unit="" n=2 | Calls a service's mailbox took at the room's FLUSH, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 5
+gsb_room_calls_refused_full sum t=2 mono=true unit="" n=2 | Calls refused at FLUSH because the service's mailbox was full (they end refused at the next tick), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_calls_refused_gone sum t=2 mono=true unit="" n=2 | Calls refused at FLUSH because the service was gone, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_calls_refused_share sum t=2 mono=true unit="" n=2 | Calls refused at FLUSH because the room's share of the service (its in-flight cap) was used up, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_calls_exported sum t=2 mono=true unit="" n=2 | Calls carried out of the room's call table by a migration export, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_calls_imported sum t=2 mono=true unit="" n=2 | Calls taken into the room's call table by a migration import (re-issued under their key), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_results_ok sum t=2 mono=true unit="" n=2 | Calls that ended with the service's answer, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 4
+gsb_room_results_service_error sum t=2 mono=true unit="" n=2 | Calls that ended with the service's typed error, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_results_refused sum t=2 mono=true unit="" n=2 | Calls that ended refused (a FLUSH refusal, or the service host shed them), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 2
+gsb_room_results_timed_out sum t=2 mono=true unit="" n=2 | Calls that ended timed out, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_results_abandoned sum t=2 mono=true unit="" n=2 | Calls the service dropped unanswered (a panic, a stop), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_results_late sum t=2 mono=true unit="" n=2 | Answers for a call the room's table no longer holds (exported away), applied nowhere, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_responses_delivered sum t=2 mono=true unit="" n=2 | Call results handed to the game (take_resolved), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 3
+gsb_room_responses_unhandled sum t=2 mono=true unit="" n=2 | Call results handed to the game and never taken by the end of their tick, dropped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_responses_owner_gone sum t=2 mono=true unit="" n=2 | Call results whose owner no longer existed, never handed out (an answers-bound client was still answered), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_answers_sent sum t=2 mono=true unit="" n=2 | Client answers a call's answers binding or a forward rule sent, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 2
+gsb_room_requests_undecodable sum t=2 mono=true unit="" n=2 | Requests of a registered op whose payload did not decode as its type, answered by the engine, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_unbound sum t=2 mono=true unit="" n=2 | Requests from a session bound to no owner, answered by the engine and never shown to the game, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_requests_forwarded sum t=2 mono=true unit="" n=2 | Requests a forward rule sent straight to a service, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_answered sum t=2 mono=true unit="" n=2 | Requests the game answered itself through the call table, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_untaken sum t=2 mono=true unit="" n=2 | Requests nobody took from the call table by the end of their tick, answered by the engine, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_requests_unanswered sum t=2 mono=true unit="" n=2 | Requests taken from the call table but neither answered nor attached to a call by the end of their tick, answered by the engine, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_requests_replied_late sum t=2 mono=true unit="" n=2 | Replies to a request the engine had already closed, ignored, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
 gsb_room_logic_kills sum t=2 mono=true unit="" n=1 | Players felled, cumulative.
   [room=r1] 1000..2000 int 3
 gsb_room_logic_fights_peak gauge unit="" n=1 | The logic's own high-water mark.

@@ -168,6 +168,11 @@ impl MetricReport {
             for (k, v) in r.stop.fields() {
                 let _ = write!(line, " {k}={v}");
             }
+            // The call table's counters (SERVICES.md §9): one stable key
+            // per counter, zeros included.
+            for (k, v) in r.calls.fields() {
+                let _ = write!(line, " {k}={v}");
+            }
             // The logic's own counters (F9), after every core key: one
             // `logic_<name>=<value>` each, in the order the logic put
             // them. Nothing at all for a logic that declares none.

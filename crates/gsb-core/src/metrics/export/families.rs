@@ -16,6 +16,7 @@
 
 use crate::metrics::{MetricReport, RoomReport};
 
+mod calls;
 mod registry;
 mod room;
 mod server;
@@ -105,6 +106,7 @@ pub(super) fn room() -> impl Iterator<Item = &'static RoomFamily> {
         .iter()
         .chain(session::SESSION.iter())
         .chain(stop::STOP.iter())
+        .chain(calls::CALLS.iter())
 }
 
 /// The metrics channel's health (top of every exposition).
