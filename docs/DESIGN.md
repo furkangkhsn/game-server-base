@@ -5171,7 +5171,10 @@ yapı taşı bunun için.
    alıcı yoksa hiçbir şey). Bant içi `Stop`, aktörlerin `Shutdown`
    deyimiyle aynıdır: FIFO sayesinde kuyruktaki her şey ondan önce işlenir.
 3. *Kayıt* — modül `spawn_registry` içinde, registry'yi başlatmadan önce
-   `parts.service(s)`; `RegistryTask` servisleri taşır, `ServerHandle`
+   `parts.service(s)` (q2'den beri `parts.add_service(s)`; tower
+   üstünde barındırılan `#[gsb_core::service]` uygulamaları
+   `parts.service(X::serve(..), |s| ..)` — aynı listeye, aynı sırayla
+   girer); `RegistryTask` servisleri taşır, `ServerHandle`
    tutar. **İsteğe bağlı:** kaydedilmeyen (ya da `Service`'i düşürülen)
    bir servis eski hayatını sürer; `ServerHandle` `stop()`'suz
    düşürülürse `Service`'ler düşer, istek gönderilmez.

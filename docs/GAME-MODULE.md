@@ -93,6 +93,8 @@ impl RegistryParts {
     pub fn spawn<W, G, St, Sp>(self, factory: RoomFactory<W, G, St, Sp>) -> JoinHandle<()>;
     /// (F5'te eklendi) Oyunun bir servisini açık durdurma için kaydeder:
     /// `stop()` onu odalardan SONRA durdurur (§6 karar 7, DESIGN §9.2).
+    /// (q2: adı `add_service`; `service` artık bir `#[gsb_core::service]`
+    /// uygulamasını tower üstünde barındırır — SERVICES.md §4.1.)
     pub fn service(&mut self, service: Service);
 }
 ```
@@ -1607,7 +1609,10 @@ one-shot full'larını da sayıyor.
    kayda geçirilir. *F5 turunda kapandı (DESIGN §9.2):* servisin sonu
    artık açık ve sıralı olabilir — isteğe bağlı. Modül servisini
    `spawn_registry` içinde, registry'yi başlatmadan önce
-   `RegistryParts::service(Service)` ile kaydeder
+   `RegistryParts::add_service(Service)` ile kaydeder (q2'ye kadar adı
+   `service`'ti; bir `#[gsb_core::service]` uygulaması
+   `RegistryParts::service(Inventory::serve(..), |s| ..)` ile barındırılır,
+   istemcileri `parts.client()`'tan — durdurma sırası aynı)
    (`gsb_core::service::Service` = görev + senkron durdurma isteği,
    tipik olarak `gsb_core::channel::post(&tx, Stop)`). `ServerHandle::stop`
    önce odaların bitmesini bekler (registry + her oda/shard görevi;

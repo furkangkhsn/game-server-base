@@ -50,6 +50,37 @@ registry her `CreateRoom`'da — başlangıç ya da admin — aynı fabrikayı
 aynı sunucunun runtime odası başka bir tavanla, başka kapasitelerle
 çalışıyordu.
 
+**Çağrı tablosu anahtarları (q2, BACKLOG B155).** `call_share`,
+`call_completions`, `call_timeout_secs` (docs/SERVICES.md §5.3, §19
+S6/S7) her odanın (shard'ın) çağrı tablosuna gider — başlangıç odaları da
+`/rooms/open`'ın açtığı da şablondan alır — ama **yalnız düz anahtardır**,
+`[rooms.<id>]`'de yazılamaz (servis payı sunucunun kapasite kararı).
+Başlatma doğrulaması: `call_share >= 1`, `call_completions >= 2 ×
+call_share` (tek servis çağıran odanın alt sınırı; `n` servis çağıran oda
+`2 × n × pay` ister), `call_timeout_secs` sonlu ve `>= 0` (`0` = tablonun
+son tarihi kapalı); aksi `invalid call-table config: …` ile başlamaz.
+Tablonun son tarihi dolan çağrı mevcut `results_timed_out` sayacında
+sayılır (yeni sayaç yok); servisin sonradan gelen cevabı
+`results_late`.
+
+**Çağrı tablosu kurulamayan oda (q2, B153).** Oyun mantığının
+`boot_calls`'ı bir op'u iki kez talep ederse (ya da motor aralığından,
+`< 1000`, bir op isterse — B159) registry odayı KURMAZ:
+`CreateRoom` `CoreError::RoomBoot` döner, `/rooms/open` **500**
+(`r<id>: the call table did not boot: …`; oyun hatası, isteğin değil),
+başlangıç odası günlüğe `room create refused` yazar. Panik sonrası
+yeniden kurulumda aynı hata odayı emekli eder.
+
+**Servis tarafı sayaçları (q2).** Tower hostu (`gsb_core::calls::Services`,
+`RegistryParts::service`) servis başına `ServiceStats` tutar:
+`calls_received`, `calls_timed_out` (hostun süresi), `calls_shed`
+(load-shed), `calls_failed` (başka bir katman hatası), `calls_abandoned`
+(serviste panik), `replies_undeliverable_{full,gone}` ve metot başına
+`calls`/`latency_us_total`/`latency_us_max`. Bu sürümde dışa
+açılmıyorlar (Prometheus/OTLP ailesi yok — BACKLOG `q2:` satırı);
+her çağrı `gsb.call` span'inde (`service`, `method`, `trace`) koşar ve
+gecikmesini DEBUG düzeyinde yazar.
+
 - **İstek başına tek geçersiz kılma `tick_hz`** (verilmezse odanın
   hızı: id'nin `[rooms.<id>]`'inde yazılıysa o, değilse sunucununki;
   doğrulama aynı: sonlu pozitif sayı değilse 400, registry'ye gitmez;

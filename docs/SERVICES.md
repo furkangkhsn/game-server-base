@@ -8,6 +8,19 @@
 > (gsb-metric, Prometheus, OTLP, loadgen teli). Tasarımdan sapmalar §20
 > "Faz 1 — uygulanan biçim"de.
 >
+> **Faz 2 uygulandı (tur q2):** `gsb-macros` + `#[gsb_core::service]`
+> (çağrı tipleri, posta kutusu ve çıplak mesaj, tower yönlendiricisi,
+> `…Client`, `…Handle` — `within`/`on_behalf_of` —, `X::serve`),
+> `gsb_core::calls::{spawn, Services, Setup}` tower hostu (katman hataları
+> tipli sona, varsayılan 30 sn süre, `gsb.call` span'i + metot başına
+> gecikme), `RegistryParts::service(X::serve(..), |s| ..)` /
+> `parts.client()` (F5: odalardan sonra durur), tablonun kendi süre
+> süpürmesi (`RoomConfig::call_timeout`), kit kancaları, `BootError`'da
+> oda kurulmaz (`CoreError::RoomBoot`), motor aralığı op'u
+> (`BootError::EngineOp`), `call_share`/`call_completions`/`call_timeout_secs`
+> sunucu config'i, demo ekonomisi `trait Economy`. Sapmalar §20 "Faz 2 —
+> uygulanan biçim"de.
+>
 > **Durum:** TASARIM — kullanıcı incelemesi bekliyor. Uygulama YOK; bu
 > turun çıktısı bu doküman ve `spikes/s0-calls` (gsb çalışma alanının
 > üyesi olmayan, motoru değiştirmeyen bir kanıt crate'i + `#[service]`
@@ -1270,6 +1283,93 @@ somutlaşanlar:
   (F5 `Service` durdurma sırasıyla birleşik), tower bağımlılığı,
   varsayılan timeout (S6), span + gecikme katmanı (OTLP).
 - Demo ekonomisinin `#[gsb::service] trait Economy`'ye geçişi.
+
+**Faz 2 — uygulanan biçim (tur q2).** Tasarımdan farklar ve
+somutlaşanlar:
+
+- **Motor yolu `::gsb_core`, öznitelik `#[gsb_core::service]`.** Çalışma
+  alanında `gsb` adlı şemsiye crate yok; makro (`crates/gsb-macros`)
+  üretilen kodda `::gsb_core::calls::…` ve `::gsb_core::__private::tower`
+  yazar, `gsb_core` `service`'i yeniden dışa açar (ve kendi testleri için
+  `extern crate self as gsb_core`). Motora başka yoldan ulaşan bir crate
+  `#[gsb_core::service(crate = benim::yolum)]` der (serde'nin `crate =`
+  deyimi). Bir oyun `use gsb_core as gsb;` ile `#[gsb::service]` de
+  yazabilir — gsb_core doğrudan bağımlılıksa.
+- **İki mesaj: `Msg` ve `Bare`.** q1'in dikişinde (`CallSpec::new(&route,
+  call, wrap)`) posta kutusu mesajının kolları `Ask<C>` taşır; tower
+  katmanı (timeout, load_shed) çağrının future'ını düşürünce `Ask`'ın
+  düşmesi `Abandoned` olurdu. Bu yüzden host, mesajı katmanlara girmeden
+  `ServiceKind::split` ile ikiye ayırır: çıplak çağrı (`inventory::Bare`,
+  tower'ın gördüğü `Dispatch<Bare>`) ve cevap hakkı (`Reply`, hostta
+  kalır). Katman hatası hakkı tipli sonla kapatır: timeout →
+  `TimedOut`, shed → `Refused(Shed)`, başka bir katman hatası →
+  `Abandoned`. Elle yazılan servis (`calls::serve`) aynı `Msg`/`Ask`
+  biçimini kullanmaya devam eder.
+- **Kayıt.** `RegistryParts::service(X::serve(impl), |s| ..)` tower hostunu
+  kurar ve `Service`'ini F5 listesine (kayıt sırasıyla) ekler; istemciler
+  `parts.client::<XClient>()` / `parts.client::<XHandle>()`
+  (`try_client` `Option` döner). Eski el yazımı kayıt
+  `RegistryParts::service(Service)` → **`add_service(Service)`** oldu
+  (iki argümanlı `service` ile aynı adı taşıyamazdı). Sunucusuz kullanım:
+  `gsb_core::calls::Services` (aynı API, `into_stops`) ya da tek servis
+  için `calls::spawn(served, setup) -> (Route, Service)`. Aynı tür iki
+  kez kaydedilirse panik (kompozisyon kökü hatası).
+- **`Setup`:** `.timeout(d)` (tower; varsayılan süreyi değiştirir),
+  `.concurrency_limit(n)`, `.load_shed()`, `.layer(l)`, `.mailbox(n)`
+  (varsayılan 1024), `.no_timeout()`. **S6:** her servisin varsayılan
+  süresi `DEFAULT_SERVICE_TIMEOUT` = 30 sn (hostun kendi
+  `tokio::time::timeout`'u, `.timeout(d)` yoksa); **tablonun kendi son
+  tarihi** `CallsConfig::timeout` / `RoomConfig::call_timeout` (varsayılan
+  60 sn = 2 × servis süresi, `None` kapalı): FLUSH'ta gönderilen çağrı
+  RESPONSES'ta tick saatiyle süpürülür → `TimedOut`, mevcut
+  `results_timed_out`; servisin geç cevabı `results_late`. Yeni oda
+  sayacı yok; loadgen teli değişmedi.
+- **Durdurma:** `Stop` mesajı kuyruktakilerin arkasına girer; host onları
+  sunar, posta kutusunu kapatır (sonraki çağrı `Refused(Gone)`) ve
+  başlattığı her çağrı cevaplanınca biter (düşme bariyeri). Sunucuda
+  odalardan sonra (F5).
+- **`Handle`:** `Route::ask` — dolu/yok kutu hemen `Refused(Full/Gone)`,
+  tek await cevabın oneshot'ı; `CallCx.caller.actor = ActorId::HANDLE`.
+  **S10 kapandı:** `CallCx` bir üst iz taşır; `within(cx)` hem oyuncuyu
+  hem izi (`cx.trace_id()`) aktarır, `on_behalf_of(&id)` yeni iz.
+  `CallCx::new(key, caller)` servis uygulamasını doğrudan test etmek için.
+- **Gözlemlenebilirlik:** her çağrı `gsb.call` span'inde (`service`,
+  `method`, `trace`); `ServiceStats`'a `calls_timed_out`, `calls_shed`,
+  `calls_failed`, `calls_abandoned` (serviste panik) ve metot başına
+  `MethodStats` (`calls`, `latency_us_total`, `latency_us_max`) eklendi.
+  Dışa açılmıyorlar (BACKLOG `q2:`); OTLP ihracatçısı yalnız metrik
+  taşıdığı için span'ler `tracing` olarak kalır.
+- **Makro sertleştirmesi:** async olmayan, gövdeli, generic'li, `&self`
+  ya da `cx: &CallCx` parametresi eksik, ödünç argümanlı (`&str`), `impl
+  Trait` argümanlı, `Result` döndürmeyen metot, supertrait/generic'li
+  trait, metotsuz servis ve üretilen adlarla çakışan metot (`serve`,
+  `within`, `on_behalf_of`, …; çağrı tipi `Msg`/`Bare`/`Kind`/`Router`)
+  derleme hatasıdır. `compile_fail` doc-testleri
+  `gsb-core/src/calls/macro_checks.rs`'de (yanlış dönüş tipi, servis
+  olmayan tipin `serve`'ü, bilinmeyen metot, yanlış argüman tipi, Clone
+  olmayan argüman dahil).
+- **Kit (B151):** `Game::{boot_calls, systems_with_calls, call_owner(world,
+  player, entity), owner_alive}` + `ShardGame::systems_seam_with_calls`;
+  her kit odası `GameLogic`/`ShardLogic` kancalarını iletir (ince
+  iletim — kit'in ECS'ten bağımsızlaştırılması KIT-ECS'te ayrı iş).
+- **`BootError` (B153, B159):** registry, tablosu kurulamayan odayı
+  kurmaz — `CreateRoom` `CoreError::RoomBoot` (tel kodu `RoomOpFailed`),
+  `/rooms/open` 500; panik sonrası yeniden kurulumda aynı hata odayı
+  emekli eder. Yapıcılar hatasız kaldı (`boot_error()` erişimcisi).
+  Motor aralığında (`< 1000`) op isteyen el yazımı istek
+  `BootError::EngineOp`.
+- **Config (B155):** `call_share`, `call_completions`, `call_timeout_secs`
+  (yalnız düz anahtar); başlatma `call_completions ≥ 2 × call_share`'i
+  denetler (tek servisli alt sınır; OPS §2).
+- **Demo ekonomisi:** `#[gsb_core::service] trait Economy { buy }` +
+  `PriceList`; sunucu modülü `parts.service(Economy::serve(..), |s|
+  s.mailbox(64))` ile barındırır. **Odalar `External` yolunda kaldı:**
+  `.answers` yolu reddi `game_error + DemoError` olarak taşır, demo telinin
+  kilidi (`ok=false`, `reason` metni) değişirdi; oda future'ı
+  `EconomyHandle`'ı bekler ve her sonu eski gerekçe metnine çevirir
+  (`economy service gone/busy/timed out/dropped the reply`). `Buy`
+  (`BuyItem`, 1006) `DemoRequests`'te bildirildi (B160).
+- Ertelenenler BACKLOG'da `q2:` satırları.
 
 **Faz 3 — `.proto` istekleri (s1c)**
 - `gsb/options.proto`, `gsb-build` üretici (S11), `RpcResponse.game_error`
