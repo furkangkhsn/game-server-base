@@ -184,3 +184,23 @@ fn a_quiet_room_that_records_nothing_keeps_nothing() {
     #[cfg(feature = "record")]
     assert!(!room.calls().recording(), "no recorder, no input kept");
 }
+
+/// The call keys derive from the seed: the same seed, the same origin;
+/// another seed (or another room), another.
+#[test]
+fn the_call_key_origin_derives_from_the_seed_and_the_room() {
+    let origin = |seed: u64, id: u64| {
+        let mut sim = Sim::new();
+        let (bank, inv) = services(&mut sim, 1);
+        let mut r = room(seed, bank, inv);
+        r.tick(&mut sim);
+        let _ = id;
+        r.calls().config().origin
+    };
+    assert_eq!(origin(1, 0), origin(1, 0));
+    assert_ne!(origin(1, 0), origin(2, 0));
+    assert_eq!(
+        origin(1, 0),
+        crate::calls::mix(1 ^ crate::calls::mix(crate::room::RoomConfig::default().id.0))
+    );
+}

@@ -50,10 +50,10 @@ fn script(t: u64, alice: &crate::determinism::SimClient, bob: &crate::determinis
             bob.request(10, &Buy { price: 30 });
         }
         6 => alice.request(11, &Buy { price: 1 }),
-        9..=20 => {
+        9..=21 => {
             bob.request(100 + t, &Buy { price: 7 });
         }
-        24 => bob.request(200, &Buy { price: 900 }),
+        24 => alice.request(200, &Buy { price: 900 }),
         _ => {}
     }
 }
@@ -75,6 +75,7 @@ struct Live {
     hashes: Vec<Option<u64>>,
     answers: Answers,
     codecs: Codecs,
+    counts: crate::metrics::CallCounts,
     /// Calls each service received.
     served: Arc<[AtomicU64; 2]>,
 }
@@ -133,6 +134,11 @@ fn live() -> Live {
         t += 1;
         assert!(t < 2000, "the services answer");
         script(t, &alice, &bob);
+        if t == 22 {
+            // Bob leaves with a charge in flight: its result finds no
+            // owner (`responses_owner_gone`), live and replayed.
+            room.leave(&bob);
+        }
         std::thread::sleep(Duration::from_millis(2));
         assert!(room.tick_at(Instant::now()));
         for (who, c) in [(1u64, &mut alice), (2, &mut bob)] {
@@ -157,6 +163,7 @@ fn live() -> Live {
         hashes: room.hashes().to_vec(),
         answers,
         codecs: room.calls().codecs().clone(),
+        counts: c,
         served,
     }
 }
@@ -187,7 +194,27 @@ fn a_live_run_replays_to_the_same_hashes_and_answers_without_calling_services() 
         assert_eq!(answers, l.answers, "the same answers, at the same ticks");
         assert_eq!(report.counts.replay_diverged, 0);
         assert_eq!(report.counts.replay_undecodable, 0);
+        // The table never sent (nor refused) anything: every ending came
+        // from the log, and the endings went where they went live.
+        let c = report.counts;
+        assert_eq!(
+            c.calls_sent + c.calls_refused_full + c.calls_refused_gone + c.calls_refused_share,
+            0
+        );
+        let fields = |c: &crate::metrics::CallCounts| {
+            [
+                c.calls_issued,
+                c.results_ok,
+                c.results_service_error,
+                c.responses_delivered,
+                c.responses_owner_gone,
+                c.answers_sent,
+                c.requests_answered,
+            ]
+        };
+        assert_eq!(fields(&c), fields(&l.counts));
     }
+    assert_eq!(l.counts.responses_owner_gone, 1, "bob's last charge");
     assert_eq!(
         served(&l),
         before,
