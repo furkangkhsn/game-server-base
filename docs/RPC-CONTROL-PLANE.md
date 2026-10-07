@@ -17,6 +17,8 @@ mekanizma, sonra her tasarım sorusunun cevabı.
 
 Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
+> **Tur q1 (SERVICES Faz 1 uygulandı):** bekleyen durum, tamamlanma kanalı ve süre süpürmesi artık aktörün `Calls` tablosundadır (`gsb_core::calls`); `External` tablonun yerleşik çağrısıdır, sözleşme (caps, id kuralları, sebep metinleri, sayaçlar) aynıdır. "0b fazı" artık RESPONSES fazıdır (CONTROL'den hemen sonra, READ'den önce); oda ile shard'ın iki kopyası tek koda (`room::requests::Parts`) indi.
+>
 > Sonraki tasarım (s0b, inceleme bekliyor): `#[gsb::service]` servisleri, ECS'ten bağımsız `Calls` tablosu, `External`'ın yerleşik bir `forward` kuralı olması, kayıt/tekrar determinizmi — `docs/SERVICES.md` (itilen olaylar sonraki turda).
 
 ---

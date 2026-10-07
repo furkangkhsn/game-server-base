@@ -1,5 +1,13 @@
 # gsb: Servis Çağrıları ve İstekler — Tasarım (tur s0b)
 
+> **Faz 1 uygulandı (tur q1):** `gsb-core::calls` (sözleşme, `Calls`,
+> çağrı oluşturucu, motor fazları, asgari süreç içi host `calls::serve`),
+> oda ve shard aktörlerinde tek ortak istek kodu (`room::requests::Parts`),
+> `GameLogic::{boot_calls, update_with_calls, call_owner, owner_alive}` +
+> `ShardLogic::update_seam_with_calls`, `CallCounts` sayaçları
+> (gsb-metric, Prometheus, OTLP, loadgen teli). Tasarımdan sapmalar §20
+> "Faz 1 — uygulanan biçim"de.
+>
 > **Durum:** TASARIM — kullanıcı incelemesi bekliyor. Uygulama YOK; bu
 > turun çıktısı bu doküman ve `spikes/s0-calls` (gsb çalışma alanının
 > üyesi olmayan, motoru değiştirmeyen bir kanıt crate'i + `#[service]`
@@ -1206,6 +1214,42 @@ maliyet.
   deseni, §5.5).
 - `External` → yerleşik forward; `handle_request` geçiş yolu.
 - Kapılar: hedefli testler ajanda, tam set ebeveynde.
+
+**Faz 1 — uygulanan biçim (tur q1).** Tasarımdan farklar ve
+somutlaşanlar:
+
+- **Tablo aktörün durumudur** (A13): oda/shard `Calls`'ı kendisi tutar,
+  oyuna `GameLogic::update_with_calls(world, ctx, &mut Calls)` ile ödünç
+  verir (varsayılanı `update`; mevcut oyunlar değişmeden derlenir).
+  Boot kaydı `GameLogic::boot_calls`; çakışma `BootError` olarak
+  günlüğe yazılır (aktörün kurulumu hatasızdır; ilk kayıt kalır).
+  Shard'da `ShardLogic::update_seam_with_calls` (varsayılanı
+  `update_seam`).
+- **Bağlama:** motor her oturumu varsayılan olarak oyuncusuna bağlar
+  (`GameLogic::call_owner` → `Owner::from(PlayerId)`, devam ve göçte
+  sabit); `None` oturumu bağsız bırakır (`requests_unbound`).
+  `calls.bind` açık bağdır, oturum bitince (ayrılış/park/göç/üstüne
+  katılım — CONTROL) çözülür. "Sahip yaşıyor mu":
+  `GameLogic::owner_alive` (varsayılan: aktörün tuttuğu oyuncu).
+  `Owner` artık `gsb_core::owner` (kit ile ortak; `from_bits/to_bits`).
+- **`Incoming`** ayrıca `player: PlayerId` taşır.
+- **Tel değişmedi:** tipli servis hatası `ok=false`, BOŞ `reason`,
+  `payload` = hata (motor cevaplarında `reason` hep dolu); `game_error`
+  bayrağı Faz 3'te.
+- **`External`** tablonun yerleşik çağrısıdır: tek bekleyen tablosu, tek
+  tamamlanma kanalı, son tarih RESPONSES'ta tick saatiyle; eski sayaçlar
+  (`requests_external/timed_out/late/abandoned`, caps) aynen. Eski
+  `rpc::PendingRequest`/`rpc::Completion` kalktı.
+- **Sayaçlar:** `requests_malformed/duplicate/no_handler` için mevcut
+  `requests_rejected_*` sayaçları iki yola da hizmet eder; oturumu biten
+  isteklerin cevapları `requests_abandoned`/`requests_undelivered`.
+  `requests_received`, `replay_diverged` yok (Faz 4).
+- **Servis tarafı:** `Route<M>` (sınırlı posta kutusu), `Mail<M>`,
+  `Envelope<M>`, tipli `Ask<C>` (`answer`/`fail`; düşerse `Abandoned`),
+  `CallSpec::new(&route, call, Variant)`; `calls::serve(name, cap,
+  handler) -> (Route, Service)` (F5 durdurma). q2'nin makrosu/tower hostu
+  aynı dikişe oturur.
+- Ertelenenler BACKLOG'da `q1:` satırları.
 
 **Faz 2 — servis tarafı (s1b)**
 - `gsb-macros`: `#[gsb::service]` (spike makrosu, motor yolu `::gsb`).
