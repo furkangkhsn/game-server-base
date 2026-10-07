@@ -264,4 +264,13 @@ message RpcResponse {
   uint32 op = 3;
   string reason = 4;
   bytes payload = 5;
+  // Added in round q3 (docs/SERVICES.md §16), additive — no
+  // PROTOCOL_VERSION bump (docs/DESIGN.md §5.2). Meaningful only when
+  // `ok` is false: true → `payload` is the request's TYPED game error
+  // (the `(gsb.error)` message of its rpc — possibly zero bytes, since a
+  // default-valued proto3 message encodes to nothing) and `reason` is
+  // empty; false → an engine answer (no handler, timed out, refused,
+  // the logic's own `Reject` …) whose text is in `reason`. An old client
+  // never reads the field and sees what it always saw: `ok = false`.
+  bool game_error = 6;
 }

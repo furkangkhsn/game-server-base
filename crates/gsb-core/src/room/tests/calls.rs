@@ -599,6 +599,7 @@ pub(super) struct Answer {
     pub op: u32,
     pub reason: String,
     pub payload: Vec<u8>,
+    pub game_error: bool,
 }
 
 impl Joined {
@@ -638,6 +639,7 @@ impl Joined {
                         op: r.op,
                         reason: r.reason,
                         payload: r.payload,
+                        game_error: r.game_error,
                     });
                 }
             }
@@ -661,7 +663,10 @@ pub(super) fn balance(a: &Answer) -> u64 {
 }
 
 pub(super) fn game_error(a: &Answer) -> u32 {
-    assert!(!a.ok && a.reason.is_empty(), "a typed game error: {a:?}");
+    assert!(
+        !a.ok && a.game_error && a.reason.is_empty(),
+        "a typed game error: {a:?}"
+    );
     GameError::decode(&a.payload[..]).expect("GameError").code
 }
 

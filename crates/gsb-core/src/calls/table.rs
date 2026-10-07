@@ -202,7 +202,7 @@ pub(crate) struct Answer {
     pub(crate) conn: ConnectionId,
     pub(crate) wire_id: u64,
     pub(crate) op: u16,
-    pub(crate) encode: fn(&Erased) -> (bool, String, Bytes),
+    pub(crate) encode: Encode,
 }
 
 /// A call as the table keeps it (before and after it is sent). Also what
@@ -675,20 +675,10 @@ impl Calls {
         conn: ConnectionId,
         wire_id: u64,
         op: u16,
-        encode: fn(&Erased) -> (bool, String, Bytes),
+        encode: Encode,
         outcome: &Erased,
     ) {
-        let (ok, reason, payload) = encode(outcome);
-        self.outbox.push((
-            conn,
-            RpcReply {
-                id: wire_id,
-                ok,
-                op,
-                reason,
-                payload,
-            },
-        ));
+        self.outbox.push((conn, encode(outcome, wire_id, op)));
         self.live_remove(conn, wire_id);
     }
 }
@@ -764,17 +754,22 @@ fn decode_incoming<R: Request>(
     }))
 }
 
-/// A typed outcome as a client answer. Faz 1 has no wire change: a
-/// typed service error rides `ok = false` with an EMPTY `reason` and the
-/// error in `payload`; every engine answer carries a non-empty `reason`
-/// (SERVICES.md §16 adds the explicit `game_error` flag in Faz 3).
-pub(crate) fn encode_answer<R: Request>(o: &Erased) -> (bool, String, Bytes) {
+/// How an outcome becomes the client's answer (`id`, `op` echoed).
+pub(crate) type Encode = fn(&Erased, u64, u16) -> RpcReply;
+
+/// A typed outcome as a client answer. A typed service error rides
+/// `ok = false`, `game_error = true`, an EMPTY `reason` and the error in
+/// `payload` (round q3, `docs/SERVICES.md` §16 — the flag is what tells a
+/// default-valued error, which encodes to zero bytes, from an engine
+/// answer); every engine answer has `game_error = false` and a non-empty
+/// `reason`.
+pub(crate) fn encode_answer<R: Request>(o: &Erased, id: u64, op: u16) -> RpcReply {
     use crate::calls::contract::{Refusal, WireMessage};
     use crate::rpc;
-    let engine = |why: &str| (false, why.to_owned(), Bytes::new());
+    let engine = |why: &str| RpcReply::rejected(id, op, why);
     match o.downcast_ref::<Outcome<R>>() {
-        Some(Ok(resp)) => (true, String::new(), Bytes::from(resp.to_wire())),
-        Some(Err(CallError::Service(e))) => (false, String::new(), Bytes::from(e.to_wire())),
+        Some(Ok(resp)) => RpcReply::ok(id, op, Bytes::from(resp.to_wire())),
+        Some(Err(CallError::Service(e))) => RpcReply::game_error(id, op, Bytes::from(e.to_wire())),
         Some(Err(CallError::Refused(r))) => engine(match r {
             Refusal::Full => rpc::REFUSED_FULL_REASON,
             Refusal::Gone => rpc::REFUSED_GONE_REASON,

@@ -34,6 +34,7 @@ fn private_with_ack_and_responses_is_byte_stable() {
                 op: 1005,
                 reason: String::new(),
                 payload: vec![0x08, 0x01],
+                game_error: false,
             },
             RpcResponse {
                 id: 8,
@@ -41,6 +42,7 @@ fn private_with_ack_and_responses_is_byte_stable() {
                 op: 1006,
                 reason: "unknown item".into(),
                 payload: Vec::new(),
+                game_error: false,
             },
         ],
     };
@@ -71,6 +73,7 @@ fn rpc_response_field_numbers_are_frozen() {
         op: 2,
         reason: "r".into(),
         payload: vec![0xFF],
+        game_error: false,
     };
     assert_eq!(
         msg.encode_to_vec(),
@@ -138,4 +141,68 @@ fn retired_opcodes_stay_out_of_the_message_table() {
              message is registered under it"
         );
     }
+}
+
+/// `RpcResponse.game_error` (round q3, `docs/SERVICES.md` §16) is field
+/// 6, a varint — ADDITIVE: an answer without it (`false`, every engine
+/// answer) encodes exactly as before (the locks above are unchanged), and
+/// a typed game error adds only the two trailing bytes `30 01`. A typed
+/// error whose message is default-valued has an EMPTY payload and an
+/// empty reason: the flag is the only thing that says "game error".
+#[test]
+fn rpc_response_game_error_is_field_six_and_additive() {
+    let typed = RpcResponse {
+        id: 1,
+        ok: false,
+        op: 2,
+        reason: String::new(),
+        payload: vec![0x08, 0x07],
+        game_error: true,
+    };
+    assert_eq!(
+        typed.encode_to_vec(),
+        &[
+            0x08, 0x01, // 1: id         = 1
+            0x18, 0x02, // 3: op         = 2   (ok = false: not encoded)
+            0x2A, 0x02, 0x08, 0x07, // 5: payload    = the typed error
+            0x30, 0x01, // 6: game_error = true (varint)
+        ]
+    );
+    let empty = RpcResponse {
+        id: 1,
+        op: 2,
+        game_error: true,
+        ..Default::default()
+    };
+    assert_eq!(empty.encode_to_vec(), &[0x08, 0x01, 0x18, 0x02, 0x30, 0x01]);
+    // An old reader (no field 6) still decodes it: ok = false.
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct Old {
+        #[prost(uint64, tag = "1")]
+        id: u64,
+        #[prost(bool, tag = "2")]
+        ok: bool,
+        #[prost(uint32, tag = "3")]
+        op: u32,
+        #[prost(string, tag = "4")]
+        reason: String,
+        #[prost(bytes = "vec", tag = "5")]
+        payload: Vec<u8>,
+    }
+    let old = Old::decode(&typed.encode_to_vec()[..]).expect("an old reader decodes it");
+    assert_eq!((old.id, old.ok, old.op), (1, false, 2));
+    assert!(old.reason.is_empty() && old.payload == [0x08, 0x07]);
+}
+
+/// The core's typed-error answer maps onto the flag (`RpcReply` →
+/// `RpcResponse`), and an engine answer never sets it.
+#[test]
+fn the_core_reply_carries_the_game_error_flag() {
+    use gsb_core::rpc::RpcReply;
+    let g = RpcResponse::from(&RpcReply::game_error(4, 1005, bytes::Bytes::new()));
+    assert!(!g.ok && g.game_error && g.reason.is_empty() && g.payload.is_empty());
+    let e = RpcResponse::from(&RpcReply::rejected(4, 1005, "request timed out"));
+    assert!(!e.ok && !e.game_error && e.reason == "request timed out");
+    let o = RpcResponse::from(&RpcReply::ok(4, 1005, bytes::Bytes::from_static(&[1])));
+    assert!(o.ok && !o.game_error);
 }

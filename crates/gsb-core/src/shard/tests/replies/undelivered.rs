@@ -68,6 +68,7 @@ async fn an_answer_for_a_row_gone_this_tick_is_counted_on_the_shard() {
             op: OP_LOCAL,
             reason: String::new(),
             payload: bytes::Bytes::new(),
+            game_error: false,
         }],
     );
     assert!(a.step(&tinfo(1)));

@@ -36,6 +36,7 @@ async fn a_stopping_shard_counts_what_it_holds_in_its_final_sample() {
             op: 1,
             reason: String::new(),
             payload: bytes::Bytes::new(),
+            game_error: false,
         }],
     );
     a.calls.external(

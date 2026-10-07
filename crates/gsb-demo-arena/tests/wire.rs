@@ -81,6 +81,7 @@ fn kit_envelope_and_arena_mirror_encode_identically() {
         op: 1100,
         reason: "no".into(),
         payload: vec![1],
+        game_error: false,
     }];
     let ack = Some(InputAck {
         processed_up_to: 300,

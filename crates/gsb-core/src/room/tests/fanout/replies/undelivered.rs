@@ -103,6 +103,7 @@ fn an_answer_for_a_row_gone_this_tick_is_counted_undelivered() {
             op: OP_LOCAL,
             reason: String::new(),
             payload: bytes::Bytes::new(),
+            game_error: false,
         }],
     );
     step(&mut a, 1);

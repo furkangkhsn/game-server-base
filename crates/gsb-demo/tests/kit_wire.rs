@@ -53,6 +53,7 @@ fn responses() -> Vec<RpcResponse> {
             op: 1005,
             reason: String::new(),
             payload: vec![0x08, 0x01],
+            game_error: false,
         },
         RpcResponse {
             id: 8,
@@ -60,6 +61,7 @@ fn responses() -> Vec<RpcResponse> {
             op: 1006,
             reason: "unknown item".into(),
             payload: Vec::new(),
+            game_error: false,
         },
     ]
 }
@@ -234,6 +236,7 @@ fn room_frames_decode_identically_through_both_definitions() {
             op: 1005,
             reason: String::new(),
             payload: Bytes::from_static(&[0x08, 0x01]),
+            game_error: false,
         },
         RpcReply {
             id: 8,
@@ -241,6 +244,7 @@ fn room_frames_decode_identically_through_both_definitions() {
             op: 1006,
             reason: "unknown item".into(),
             payload: Bytes::new(),
+            game_error: false,
         },
     ];
     let mut out = BytesMut::new();

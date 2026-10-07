@@ -77,6 +77,7 @@ fn answers_are_read_from_the_private_frame() {
         op: u32::from(gsb_demo::op::ECONOMY),
         reason: reason.into(),
         payload: Vec::new(),
+        game_error: false,
     };
     let with_ack = gsb_kit::proto::Private {
         payload: Some(gsb_kit::proto::private::Payload::Ack(

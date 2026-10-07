@@ -56,6 +56,7 @@ fn private_field_numbers_are_frozen() {
             op: 1005,
             reason: String::new(),
             payload: vec![0x08, 0x01],
+            game_error: false,
         }],
         game: vec![0xAB],
     };

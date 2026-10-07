@@ -206,3 +206,31 @@ fn an_answers_only_call_answers_the_client_and_nobody_else() {
     t.end_tick();
     assert_eq!(t.counts().responses_unhandled, 0);
 }
+
+/// The answer shapes (`docs/SERVICES.md` §16): ok; a typed game error —
+/// even a default-valued one that encodes to ZERO bytes — flagged
+/// `game_error` with an empty reason; every engine ending unflagged with
+/// its reason.
+#[test]
+fn typed_outcomes_encode_to_the_flagged_answer_shapes() {
+    use crate::calls::table::encode_answer;
+    let enc = |o: Outcome<Pay>| encode_answer::<Pay>(&(Box::new(o) as contract::Erased), 9, 1);
+    let ok = enc(Ok(Paid { balance: 3 }));
+    assert!(ok.ok && !ok.game_error && ok.payload[..] == Paid { balance: 3 }.encode_to_vec()[..]);
+    let zero = enc(Err(CallError::Service(Nope::default())));
+    assert!(!zero.ok && zero.game_error && zero.payload.is_empty() && zero.reason.is_empty());
+    let coded = enc(Err(CallError::Service(Nope { code: 4 })));
+    assert!(coded.game_error && Nope::decode(&coded.payload[..]).unwrap().code == 4);
+    for (o, why) in [
+        (Err(CallError::TimedOut), crate::rpc::TIMEOUT_REASON),
+        (Err(CallError::Abandoned), crate::rpc::ABANDONED_REASON),
+        (
+            Err(CallError::Refused(Refusal::Gone)),
+            crate::rpc::REFUSED_GONE_REASON,
+        ),
+    ] {
+        let r = enc(o);
+        assert!(!r.ok && !r.game_error && r.reason == why && r.payload.is_empty());
+        assert_eq!((r.id, r.op), (9, 1));
+    }
+}

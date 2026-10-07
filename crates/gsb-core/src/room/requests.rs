@@ -84,16 +84,7 @@ impl<G> Parts<'_, G> {
     }
 
     fn reject(&mut self, conn: ConnectionId, id: u64, op: u16, reason: String) {
-        self.queue(
-            conn,
-            RpcReply {
-                id,
-                ok: false,
-                op,
-                reason,
-                payload: bytes::Bytes::new(),
-            },
-        );
+        self.queue(conn, RpcReply::rejected(id, op, reason));
     }
 
     /// Queue the table's answers (engine answers, replies, `.answers`,
@@ -315,16 +306,7 @@ impl<G> Parts<'_, G> {
                 }
                 Some(RequestDecision::Reply(payload)) => {
                     self.m.requests_local += 1;
-                    self.queue(
-                        req.conn,
-                        RpcReply {
-                            id: req.id,
-                            ok: true,
-                            op: req.op,
-                            reason: String::new(),
-                            payload,
-                        },
-                    );
+                    self.queue(req.conn, RpcReply::ok(req.id, req.op, payload));
                 }
                 Some(RequestDecision::Reject(reason)) => {
                     self.m.requests_rejected_logic += 1;

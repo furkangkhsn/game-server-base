@@ -48,12 +48,15 @@ impl Call for External {
 /// The future an `External` decision hands over.
 pub(crate) type ExternalFuture = Pin<Box<dyn Future<Output = Result<Bytes, String>> + Send>>;
 
-fn encode_external(o: &Erased) -> (bool, String, Bytes) {
+/// The legacy `External` decision's answer: its `Err(reason)` is a
+/// text rejection (an engine-shaped answer, `game_error = false`), as it
+/// always was.
+fn encode_external(o: &Erased, id: u64, op: u16) -> RpcReply {
     match o.downcast_ref::<Outcome<External>>() {
-        Some(Ok(b)) => (true, String::new(), b.clone()),
-        Some(Err(CallError::Service(reason))) => (false, reason.clone(), Bytes::new()),
-        Some(Err(CallError::TimedOut)) => (false, rpc::TIMEOUT_REASON.to_owned(), Bytes::new()),
-        _ => (false, rpc::ABANDONED_REASON.to_owned(), Bytes::new()),
+        Some(Ok(b)) => RpcReply::ok(id, op, b.clone()),
+        Some(Err(CallError::Service(reason))) => RpcReply::rejected(id, op, reason.clone()),
+        Some(Err(CallError::TimedOut)) => RpcReply::rejected(id, op, rpc::TIMEOUT_REASON),
+        _ => RpcReply::rejected(id, op, rpc::ABANDONED_REASON),
     }
 }
 
@@ -239,16 +242,7 @@ impl Calls {
     }
 
     fn reject(&mut self, conn: ConnectionId, id: u64, op: u16, why: &str) {
-        self.outbox.push((
-            conn,
-            RpcReply {
-                id,
-                ok: false,
-                op,
-                reason: why.to_owned(),
-                payload: Bytes::new(),
-            },
-        ));
+        self.outbox.push((conn, RpcReply::rejected(id, op, why)));
     }
 
     // ---- the built-in External path ---------------------------------------------

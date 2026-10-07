@@ -16,6 +16,7 @@ fn owed(id: u64) -> RpcReply {
         op: 1,
         reason: String::new(),
         payload: bytes::Bytes::new(),
+        game_error: false,
     }
 }
 

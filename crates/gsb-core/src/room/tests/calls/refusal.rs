@@ -50,7 +50,7 @@ fn a_full_mailbox_refuses_at_flush_and_resolves_next_tick() {
     );
     let got = b.answers();
     assert_eq!(got.len(), 1);
-    assert!(!got[0].ok);
+    assert!(!got[0].ok && !got[0].game_error, "an engine answer");
     assert_eq!(got[0].reason, crate::rpc::REFUSED_FULL_REASON);
     assert!(a.answers().is_empty(), "the first call is still in flight");
     let c = rig.counts();

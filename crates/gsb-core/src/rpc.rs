@@ -186,10 +186,55 @@ pub struct RpcReply {
     pub ok: bool,
     /// The inner op the reply answers (echoes the request's inner op).
     pub op: u16,
-    /// The rejection reason (empty when `ok`).
+    /// The rejection reason (empty when `ok`, and for a typed game
+    /// error).
     pub reason: String,
-    /// The response body (empty when `ok` is false).
+    /// The response body when `ok`; the typed game error when
+    /// `game_error`; empty otherwise.
     pub payload: Bytes,
+    /// `ok == false` and `payload` is the request's TYPED game error
+    /// (`Request::Error`, `RpcResponse.game_error` — round q3,
+    /// `docs/SERVICES.md` §16). `false` on every engine answer.
+    pub game_error: bool,
+}
+
+impl RpcReply {
+    /// A successful answer: `payload` is the response body.
+    pub fn ok(id: u64, op: u16, payload: Bytes) -> Self {
+        Self {
+            id,
+            ok: true,
+            op,
+            reason: String::new(),
+            payload,
+            game_error: false,
+        }
+    }
+
+    /// An engine (or legacy `Reject`) answer: the text is in `reason`.
+    pub fn rejected(id: u64, op: u16, reason: impl Into<String>) -> Self {
+        Self {
+            id,
+            ok: false,
+            op,
+            reason: reason.into(),
+            payload: Bytes::new(),
+            game_error: false,
+        }
+    }
+
+    /// The request's typed game error: `payload` is the encoded
+    /// `Request::Error` (possibly zero bytes), `reason` stays empty.
+    pub fn game_error(id: u64, op: u16, payload: Bytes) -> Self {
+        Self {
+            id,
+            ok: false,
+            op,
+            reason: String::new(),
+            payload,
+            game_error: true,
+        }
+    }
 }
 
 impl From<&RpcReply> for gsb_protocol::base::RpcResponse {
@@ -213,6 +258,7 @@ impl From<&RpcReply> for gsb_protocol::base::RpcResponse {
             op: u32::from(r.op),
             reason: r.reason.clone(),
             payload: r.payload.to_vec(),
+            game_error: r.game_error,
         }
     }
 }
