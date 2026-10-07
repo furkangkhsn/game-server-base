@@ -189,3 +189,23 @@ fn a_late_reply_is_ignored_and_counted() {
     );
     calls.drop_all_at_stop(&mut m);
 }
+
+/// An explicit bind wins over the engine's default owner (the player).
+#[test]
+fn an_explicit_bind_wins_over_the_default_owner() {
+    let mut rig = Rig::new(RigCfg {
+        mode: Mode {
+            answer: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let a = rig.join(1, "alice");
+    rig.room.calls.bind(ConnectionId(1), Owner(42));
+    a.request(3, 1001, &transfer("x", 1));
+    rig.step();
+    assert!(
+        rig.seen()
+            .contains(&Seen::Request(1001, "alice".into(), Owner(42)))
+    );
+}
