@@ -16,6 +16,7 @@
 //! | 2 | `Err(DemoError { code: 7 })` | `Game(DemoError { code: 7 })` |
 //! | 3 | takes it, never answers | `Engine("request taken but not answered")` |
 //! | 4 | hands it to a service that never answers | `TimedOut` (client clock), then `SessionEnded` at the stop |
+//! | 5, 6 | `.answers` a call to a `#[gsb_core::service]` hosted on tower (`RegistryParts::service`) | its `Ok` / its typed error (round q2) |
 //!
 //! and a request of an op nobody claims gets the engine's "no handler".
 
@@ -66,7 +67,31 @@ enum HoldMsg {
     Hold(Ask<Hold>),
 }
 
+/// A hosted service (round q2): the room calls it through its
+/// non-blocking client; the outcome answers the client (`.answers`).
+#[gsb_core::service]
+pub trait Judge {
+    async fn rule(&self, cx: &gsb_core::calls::CallCx, x: i32) -> Result<AbilityResult, DemoError>;
+}
+
+struct Referee;
+
+impl Judge for Referee {
+    async fn rule(&self, cx: &gsb_core::calls::CallCx, x: i32) -> Result<AbilityResult, DemoError> {
+        // The verified player rides along (`.answers` sets it).
+        assert!(cx.player().is_some_and(|p| p.as_str() == "typed-1"));
+        match x {
+            5 => Ok(AbilityResult {
+                ok: true,
+                reason: "ruled".into(),
+            }),
+            _ => Err(DemoError { code: 55 }),
+        }
+    }
+}
+
 struct Game {
+    judge: JudgeClient,
     hold: Route<HoldMsg>,
     /// Kept so the service's mailbox stays open (and never drained).
     _inbox: gsb_core::channel::Inbox<Mail<HoldMsg>>,
@@ -141,6 +166,9 @@ impl GameLogic<()> for Game {
                 1 => calls.reply(r.reply, Err(DemoError::default())),
                 2 => calls.reply(r.reply, Err(DemoError { code: 7 })),
                 3 => {} // taken, the ReplyTo dropped unanswered
+                5 | 6 => {
+                    calls.call(self.judge.rule(r.body.x)).answers(r.reply);
+                }
                 _ => {
                     calls
                         .call(CallSpec::new(&self.hold, Hold, HoldMsg::Hold))
@@ -163,12 +191,15 @@ impl GameModule for Module {
         Ok(())
     }
     fn register(&self, _table: &mut MessageTable) {}
-    fn spawn_registry(&self, parts: RegistryParts) -> RegistryTask {
-        let factory: RoomFactory<(), (), (), ()> = Arc::new(|_id, _config| {
+    fn spawn_registry(&self, mut parts: RegistryParts) -> RegistryTask {
+        parts.service(Judge::serve(Referee), |s| s.timeout(Duration::from_secs(5)));
+        let judge: JudgeClient = parts.client();
+        let factory: RoomFactory<(), (), (), ()> = Arc::new(move |_id, _config| {
             let (hold, inbox) = Route::new("hold", 16);
             BuiltRoom::Single {
                 world: (),
                 logic: Box::new(Game {
+                    judge: judge.clone(),
                     hold,
                     _inbox: inbox,
                 }) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
@@ -240,6 +271,18 @@ async fn typed_requests_end_every_way_against_a_live_room() {
         c.request(&ability(2)).await,
         Err(RequestError::Game(DemoError { code: 7 }))
     );
+    // Through a hosted `#[service]` (tower host → RESPONSES → `.answers`).
+    assert_eq!(
+        c.request(&ability(5)).await,
+        Ok(AbilityResult {
+            ok: true,
+            reason: "ruled".into()
+        })
+    );
+    assert_eq!(
+        c.request(&ability(6)).await,
+        Err(RequestError::Game(DemoError { code: 55 }))
+    );
     // Engine answers: unanswered at tick end; no handler for the op.
     assert_eq!(
         c.request(&ability(3)).await,
@@ -272,7 +315,10 @@ async fn typed_requests_end_every_way_against_a_live_room() {
     stopper.await.expect("the server stops");
 
     let n = c.counters();
-    assert_eq!((n.sent, n.ok, n.game_errors, n.engine_errors), (9, 1, 2, 2));
+    assert_eq!(
+        (n.sent, n.ok, n.game_errors, n.engine_errors),
+        (11, 2, 3, 2)
+    );
     assert_eq!(
         (n.timed_out, n.forgotten, n.session_ended),
         (1, 1, 2),
