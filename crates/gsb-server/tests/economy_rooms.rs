@@ -130,3 +130,52 @@ async fn economy_answers_in_the_sharded_spatial_room() {
     )
     .await;
 }
+
+/// B164: the hosted service's own counters reach the server's reports —
+/// the purchase is one call the economy received and one `buy` that
+/// finished, nothing lost on the service's side.
+#[tokio::test]
+async fn the_economy_service_counts_reach_the_reports() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = gsb_server::start_server_metrics(cfg(Visibility::All, None), tx)
+        .await
+        .expect("server starts");
+    let mut s = gsb_client::connect::tcp(handle.addr)
+        .await
+        .expect("connect");
+    auth_and_join(&mut s, "svc-metrics").await;
+    let (ok, reason, _) = buy_potion(&mut s, "svc-metrics").await;
+    assert!(ok, "{reason}");
+    handle.stop().await;
+    let mut last = None;
+    while let Ok(r) = rx.try_recv() {
+        if !r.services.is_empty() {
+            last = Some(r);
+        }
+    }
+    let report = last.expect("a report with the hosted services");
+    let economy = report
+        .services
+        .iter()
+        .find(|s| s.service == "Economy")
+        .unwrap_or_else(|| panic!("the economy service: {:?}", report.services));
+    assert_eq!(economy.counts.calls_received, 1);
+    let lost = economy.counts;
+    assert_eq!(
+        lost.calls_timed_out
+            + lost.calls_shed
+            + lost.calls_failed
+            + lost.calls_abandoned
+            + lost.replies_undeliverable_full
+            + lost.replies_undeliverable_gone,
+        0,
+        "{lost:?}"
+    );
+    let buy = economy
+        .methods
+        .iter()
+        .find(|m| m.method == "buy")
+        .expect("buy");
+    assert_eq!(buy.calls, 1);
+    assert!(buy.latency_us_max >= buy.latency_us_total / buy.calls.max(1));
+}
