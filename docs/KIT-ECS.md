@@ -334,7 +334,9 @@ yapısal denetim olarak eklenebilir). Faz P3'ten sonra oyun modülleri
 İstek tarafının adaptörleri (SERVICES §5.5: `gsb-calls-bevy-ecs`,
 `gsb-calls-hecs`) ile birleştirme: ECS başına **tek** bağlayıcı crate
 (`gsb-bevy-ecs`: `kit` + `calls` modülleri) crate sayısını yarıya indirir
-(K10).
+(K10). **q5'te (b) seçildi:** `gsb-bevy-ecs` ve `gsb-hecs` bugün yalnız
+`calls` modülünü taşır; kit bağlayıcısı aynı crate'lere `kit` modülü
+olarak girer (SERVICES §20 "Faz 5 — uygulanan biçim").
 
 ## 6. Hangi demo hecs'e taşınır
 
