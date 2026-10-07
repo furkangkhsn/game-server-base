@@ -27,6 +27,9 @@ mod hash;
 mod rng;
 mod sim;
 
+#[cfg(test)]
+mod tests;
+
 #[cfg(feature = "record")]
 mod file;
 #[cfg(feature = "record")]

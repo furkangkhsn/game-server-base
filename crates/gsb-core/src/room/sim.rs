@@ -227,6 +227,11 @@ where
         *self.actor.calls.counts()
     }
 
+    /// The room's call table.
+    pub fn calls(&self) -> &crate::calls::Calls {
+        &self.actor.calls
+    }
+
     /// The room's world.
     pub fn world(&self) -> &W {
         &self.actor.world
