@@ -1,0 +1,22 @@
+[package]
+name = "gsb-macros"
+description = "Proc-macros for gsb: #[service] turns a plain async trait into an in-process service (docs/SERVICES.md §4.1)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[build-dependencies]
+gsb-lint = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
