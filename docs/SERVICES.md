@@ -6,6 +6,12 @@
 > proc-macro alt crate'i). s0'ın istek/çağrı kısmı, kullanıcıyla yapılan
 > uzun tasarım tartışmasından sonra baştan yazıldı (§2'deki kararlar
 > yeniden açılmaz); açık kalanlar §19'da numaralı sorular olarak.
+> **Takip (s0b-2):** kullanıcı S1 sapması (`serve(..)`), S2–S5 önerileri,
+> `forward` kapanışı, `.answers(r.reply)` ve "ret bir sonraki tick" kararını
+> onayladı. İki değişiklik: (1) oturum → sahip bağlama (`calls.bind`,
+> `Incoming.owner`; S14 kapandı), (2) **çekirdeğin hiçbir ECS bağımlılığı
+> yok**; ECS entegrasyonu çekirdeğin dışındaki isteğe bağlı adaptör
+> crate'lerinde (S3 kapandı).
 >
 > **Kapsam:** İSTEKLER (servis çağrıları + istemci istekleri). OLAYLAR
 > (sunucunun ittiği) bu turun dışında — s0 metni §15'te duruyor,
@@ -61,7 +67,7 @@ bir oda türü + ikinci bir cevap yolu). s0b bunların üçünü de kaldırır.
 | # | Karar | Gerekçe (özet) |
 |---|---|---|
 | 1 | **İki tanım kaynağı.** Süreç içi servisler: `#[gsb::service]` ile işaretli Rust trait'i (makro: metot başına çağrı tipi + `impl Call`, tower tabanlı yönlendirici, beklemeyen `XClient`, beklenebilir `XHandle`). İstemci-tel istekleri: `.proto` `service` blokları, `option (gsb.op) = N` (+ hata tipi) → üretilmiş `Request` impl'leri (ileride C#/TS/GDScript istemcileri). Trait ayrımı: `Call { Response; Error }` (süreç içi, op yok, tel yok) ve `Request: Call + WireMessage { const OP }`. Arayan kimliği istemci yükünden ASLA gelmez. | Oyun geliştiricinin kullanım temizliği birinci öncelik; makro tekrarı kaldırır. Süreç içi tipler protobuf olmak zorunda değil. |
-| 2 | **Çekirdekte ECS'ten bağımsız `Calls` tablosu** (bileşen değil, kapanış/devam değil, `Done` enum'u değil, bileşende yoklanan handle değil): `take_incoming`, `take_incoming_all`, `call(..).owner().with().answers()`, `take_resolved`, `in_flight`, `forward`, `export`/`import`. Owner opak `u64`; bevy/hecs yalnız minik bir `.entity()` uzantısı alır. bevy'de tablo şema boyunca bir `Resource`; hecs/ECS'siz oyunda `&mut Calls` geçilir. Alınmayan sonuç ve cevaplanmayan istek tick sonunda kapatılır ve sayılır. | Tek kavram, her ECS'te aynı; "her kaybı say". |
+| 2 | **Çekirdekte ECS'ten bağımsız `Calls` tablosu** (bileşen değil, kapanış/devam değil, `Done` enum'u değil, bileşende yoklanan handle değil): `take_incoming`, `take_incoming_all`, `call(..).owner().with().answers()`, `take_resolved`, `in_flight`, `forward`, `export`/`import`. Owner opak `u64`; bevy_ecs/hecs yalnız minik bir `.entity()` uzantısı alır. bevy_ecs'te tablo şema boyunca bir `Resource` (adaptörün `GsbCalls` yeni tipi); hecs/ECS'siz oyunda `&mut Calls` geçilir. **Takip kararı: çekirdeğin hiçbir ECS bağımlılığı yoktur** (isteğe bağlı özellik arkasında bile); adaptörler ayrı, isteğe bağlı crate'lerdir. Söz konusu olan yalnız `bevy_ecs` crate'idir — Bevy oyun motoru asla. Alınmayan sonuç ve cevaplanmayan istek tick sonunda kapatılır ve sayılır. | Tek kavram, her ECS'te aynı; "her kaybı say". |
 | 3 | **Servisler cevaplar; çağıranlar yalnız okur ve temizler.** `Calls` tablosu + boşaltma noktası olan her aktör çağırabilir (oda bir türü; zamanlayıcı/admin görevi bir diğeri). **Hub YOK**: lobi bir odadır; her oyuncu her zaman bir odadadır ("ECS'te her şey birer oda"). | Tek programlama modeli, tek cevap yolu. |
 | 4 | Tick: **CONTROL → RESPONSES → READ → (EVENTS) → CONVERT → SYSTEMS → BROADCAST.** RESPONSES servis tamamlanmalarını READ'den önce tabloya boşaltır. | Girdi, dünyanın en güncel hâline karşı doğrulanır (s0 gerekçesi). |
 | 5 | **Determinizm** gerekli: geçmiş maçın hata ayıklama tekrarı, hile doğrulama (tekrar oynat + karşılaştır), izleme tekrarı, deterministik testler. Canlı zamanlama deterministik değildir; tekrar üretilebilirlik oda sınırında **kayıttan** gelir. `ctx.time()/dt()`, tohumlu `ctx.rng()`, deterministik çağrı anahtarları, opt-in girdi kaydı, REPLAY modu, deterministik TEST modu (`Delay::ticks(n, impl)` / `Delay::never`), tick başına durum hash kancası. Oda determinizm sınırıdır; oda dışı çağıranlar kaydedilmez. | Hata ayıklama ve hile doğrulama aynı makineyi ister. |
@@ -216,19 +222,21 @@ koyar; servisten servise `handle.within(cx)` taşır.
 | `calls.call(spec)` → `.owner(o)` `.with(x)` `.answers(r.reply)` `.on_behalf_of(&id)` | Çağrı. Deyimin sonunda tabloya yazılır; FLUSH'ta gönderilir. |
 | `calls.take_resolved::<C, X>() -> Vec<Resolved<C, X>>` | `C` türünden, `X` bağlamıyla verilmiş çağrıların sonuçları (`key`, `owner`, `ctx: X`, `outcome`). |
 | `calls.in_flight::<C>(owner) -> bool` | Bu sahibin `C` çağrısı yolda (ya da bu tick yazıldı) mı? |
-| `calls.forward(move \|r: R\| svc.method(r))` | Boot'ta, paylaşılan tek satırlık kural (§5.7). |
+| `calls.forward(move \|r: R\| svc.method(r))` | Boot'ta, paylaşılan tek satırlık kural (§5.8). |
 | `calls.export(owner) -> Exported` / `calls.import(exp, owner)` | Göç (§8). |
 | `calls.accept::<R>()` | Boot'ta: oyun `R`'yi kendisi alır (op kaydı; çakışma `BootError`). |
+| `calls.bind(conn, owner)` / `calls.unbind(conn)` / `calls.bound(conn)` | Join kancasında bir kez: oturum → sahip (§5.6). |
 
 ```rust
-pub struct Incoming<R> { pub body: R, pub from: Identity, pub conn: ConnId, pub reply: ReplyTo<R> }
+pub struct Incoming<R> { pub body: R, pub owner: Owner, pub from: Identity, pub conn: ConnId, pub reply: ReplyTo<R> }
 pub struct Resolved<C: Call, X = ()> { pub key: CallKey, pub owner: Owner, pub ctx: X, pub outcome: Outcome<C> }
 pub type Outcome<C> = Result<C::Response, CallError<C::Error>>;
 pub enum CallError<E> { Service(E), Refused(Refusal), TimedOut, Abandoned }
 pub enum Refusal { Full, Gone, Share, Shed }
 ```
 
-`Incoming`'in alanları açıktır: oyun `body`'nin parçalarını çağrıya
+`Incoming`'in alanları açıktır (`owner`: oturumun bağlı olduğu sahip,
+§5.6): oyun `body`'nin parçalarını çağrıya
 taşırken `reply`'ı `.answers(..)`'a verebilir (Rust kısmi taşıma). Bu
 yüzden `.answers` isteğin tamamını değil `r.reply`'ı alır (onaylanan
 `.answers(req)` biçiminden küçük bir sapma). `ReplyTo<R>` `Clone`
@@ -290,44 +298,99 @@ dolduramaz; s0'ın boyutlandırma kuralı (`N·k ≤ C`) aynen geçerli.
 | İstek hiç alınmadı (`take_incoming` çağrılmadı) | istemciye `"request not handled this tick"` | `requests_untaken` |
 | İstek alındı ama cevaplanmadı / çağrıya bağlanmadı (`ReplyTo` düşürüldü ya da saklandı) | istemciye `"request taken but not answered"` | `requests_unanswered` |
 | Kapatılmış isteğe sonradan `reply` | yok sayılır | `requests_replied_late` |
+| Bağlanmamış oturumdan istek (READ'de) | istemciye `"session not bound to an owner"`; oyun görmez | `requests_unbound` |
 | Sonuç geldi, kimse `take_resolved` etmedi | atılır | `responses_unhandled` |
 | Sonuç geldi, sahibi artık yok | oyuna verilmez (istemci `.answers` ile yine cevaplanır) | `responses_owner_gone` |
 
-"Sahibi yaşıyor mu" testini adaptör verir: bevy `world.get_entity`,
+"Sahibi yaşıyor mu" testini adaptör verir: bevy_ecs `world.get_entity`,
 hecs `world.contains`, ECS'siz oyun kendi `alive(owner)`'ını. Sahip,
 **sonucun değiştireceği durumun asıldığı şeydir**: ganimet örneğinde
 (§6.3) sahip ganimet varlığıdır; ganimet süresi dolup yok olduysa
 sonuç atılır (toplayan oyuncu yaşıyor olsa bile) — oyuncunun almasını
 istiyorsanız sahip oyuncu olmalı.
 
-### 5.5 Sahip ve ECS'ler
+### 5.5 Sahip ve ECS'ler: çekirdekte ECS yok, adaptörler isteğe bağlı
+
+**Kural: çekirdeğin (`Calls`, sözleşme trait'leri, hostlar, oda) hiçbir
+ECS bağımlılığı yoktur — isteğe bağlı bir özellik arkasında bile.**
+`Calls` düz bir struct'tır. ECS entegrasyonu çekirdeğin DIŞINDAKİ ince,
+isteğe bağlı adaptör crate'lerindedir; oyun kullandığını seçer, hiçbirini
+kullanmayan oyun `&mut Calls` geçer. Söz konusu olan yalnız ECS
+kütüphaneleridir (`bevy_ecs` crate'i, `hecs`, `shipyard`) — oyun sunucusu
+bir oyun motoruna ihtiyaç duymaz, Bevy motoru hiçbir yerde yoktur
+(çalışma alanı bugün de yalnız `bevy_ecs` crate'ini kullanıyor:
+`gsb-ecs`, `gsb-kit`, demolar).
+
+| Adaptör crate'i (motor adı önerisi) | İçeriği |
+|---|---|
+| `gsb-calls-bevy-ecs` (bağımlılık: yalnız `bevy_ecs`) | `GsbCalls(Calls)` yeni tipi: `Resource` + `Deref`/`DerefMut` (sistemler `ResMut<GsbCalls>` üzerinde `calls.call(..)` yazar, `&mut Calls` gibi); `Svc<T>` istemci kaynağı; `Tick` kaynağı; `owner.entity()` / `e.to_owner()`; tek iş parçacıklı yürütücüyle bir oda biçimi. |
+| `gsb-calls-hecs` (bağımlılık: yalnız `hecs`) | Yalnız `owner.entity() -> Option<Entity>` / `e.to_owner()` (+ küçük bir oda biçimi). Tablo `&mut Calls` geçer. |
+| (shipyard) | Aynı sahip modeli: `EntityId` ⇄ `u64` (`to_inner`/`from_inner`) — birkaç satırlık uzantı, ayrı kod gerekmez. |
+| — (ECS yok) | Hiçbir adaptör: `Owner(oyunun_id'si)`, `&mut Calls`. |
 
 ```rust
-// bevy (adaptör): Calls bir Resource; istemciler Res<Svc<…Client>>
-use gsb::bevy::{EntityExt, OwnerExt};            // e.to_owner(), owner.entity()
-fn sys(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>, q: Query<..>) { .. }
+// bevy_ecs (gsb-calls-bevy-ecs)
+use gsb_calls_bevy_ecs::{EntityExt, GsbCalls, OwnerExt, Svc};
+fn sys(mut calls: ResMut<GsbCalls>, inv: Res<Svc<InventoryClient>>, q: Query<..>) { .. }
 
-// hecs (adaptör): sistemler düz fonksiyon
-use gsb::hecs::{EntityExt, OwnerExt};            // e.to_owner(), owner.entity() -> Option<Entity>
+// hecs (gsb-calls-hecs): sistemler düz fonksiyon
+use gsb_calls_hecs::{EntityExt, OwnerExt};
 fn sys(w: &mut hecs::World, calls: &mut Calls, inv: &InventoryClient) { .. }
 
 // ECS'siz: owner = oyunun kendi id'si
 calls.call(inv.load(who)).owner(Owner(player_id));
 ```
 
-Uzantı trait'i, `From` değil: adaptörler motorda çekirdeğin dışında
-yaşar; `impl From<Owner> for bevy::Entity` orada yetim kuralını çiğner
-(ikisi de yabancı tip). Aynı nedenle `Calls`'a bevy'nin `Resource`'u
-adaptör crate'inde verilemez → çekirdekte bir `bevy` özelliği (§19 S3).
-(`to_owner`, onaylanan metinde yoktu; `as_owner` adı clippy'nin
-`wrong_self_convention` kuralına takıldı.)
+Neden yeni tip ve uzantı trait'i (`From` ya da `impl Resource for Calls`
+değil): adaptör crate'inde `Calls` da `Resource` da `Entity` de yabancı
+tiplerdir; yetim kuralı `impl Resource for Calls` ve
+`impl From<Owner> for Entity`'yi yasaklar. Yeni tip ve yerel uzantı
+trait'leri yasal ve özellik bayrağı istemez. (`to_owner`: `as_owner` adı
+clippy'nin `wrong_self_convention` kuralına takıldı.)
 
-bevy'de tablo kalıcı olarak dünyadadır; motor fazlarında
-`world.resource_scope` ile ödünç alır (tablo + "sahip yaşıyor mu" testi
-aynı anda gerekir). Şema tek iş parçacıklı yürütücüyle koşar
-(determinizm; sistemlerin hepsi zaten `ResMut<Calls>` ister).
+bevy_ecs'te tablo kalıcı olarak dünyadadır (`GsbCalls` kaynağı); adaptör
+motor fazlarında onu `world.resource_scope` ile ödünç alır (tablo +
+"sahip yaşıyor mu" testi aynı anda gerekir). Şema tek iş parçacıklı
+yürütücüyle koşar (determinizm; sistemlerin hepsi zaten
+`ResMut<GsbCalls>` ister).
 
-### 5.6 Sıralama
+### 5.6 Oturum → sahip bağlama
+
+Oyuncu odaya katıldığında oyun, join kancasında **bir kez** bağlar:
+
+```rust
+// bevy_ecs
+Control::Join { conn, identity } => {
+    let e = world.spawn((Player { conn: *conn, who: identity.clone() }, Wallet::default(), Bag::default(), JustJoined)).id();
+    world.resource_mut::<GsbCalls>().bind(*conn, e.to_owner());
+}
+// hecs:   calls.bind(*conn, world.spawn((..)).to_owner());
+// ECS'siz: calls.bind(*conn, Owner(id));
+```
+
+O andan sonra motor her `Incoming<R>`'ye `owner`'ı doldurur (`from` ve
+`conn` da kalır); sistemler arama yazmaz: `q.get_mut(r.owner.entity())`.
+
+- **Ayrılışta** motor CONTROL'de bağı kendisi çözer (`unbind`).
+- **Göçte** `export(owner)` o sahibe bağlı oturumları da taşır, `import`
+  onları yeni sahibe bağlar (spike `migration`).
+- **Neden join kancasında `bind` (kancanın dönüş değeri değil):** her
+  ECS biçiminde aynı tek satır; kanca bugün `Admission` döndürüyor ve
+  sahip, kabul kararından sonra (varlık doğunca) belli olur. Motor
+  entegrasyonunda `Admission::Accept` yanında isteğe bağlı bir sahip
+  taşıyabilir; spike'ta `bind` yeterli. CONTROL READ'den önce koştuğu
+  için katılımla aynı tick'te gelen istek zaten bağlıdır (spike `binding`).
+- **Bağlanmamış oturumdan istek (KARAR):** motor
+  `"session not bound to an owner"` cevaplar, `requests_unbound` sayar,
+  oyun **hiç görmez**. Gerekçe: sahipsiz bir istekle oyunun yapabileceği
+  bir şey yok — görseydi her sistem bir "sahipsiz" dalı yazardı (tam da
+  kaldırmak istediğimiz tören). Bu durum yalnız bir hatada (oyun
+  bağlamayı unuttu) ya da yarışta (ayrılış/göç sonrası gecikmiş istek)
+  olur; ikisi de adıyla sayılmalı. İstisna: `forward` kuralları sahip
+  istemez (meta istekler bağdan bağımsızdır) ve bağsız oturumda da
+  çalışır.
+
+### 5.7 Sıralama
 
 1. **Tip başına FIFO:** `take_incoming::<R>()` isteklerini varış
    sırasıyla verir.
@@ -345,7 +408,7 @@ aynı anda gerekir). Şema tek iş parçacıklı yürütücüyle koşar
    sıra yoktur.
 5. **Çağrılar** servise FLUSH'ta yazıldıkları sırayla gider.
 
-### 5.7 `forward`: paylaşılan tek satırlık kural
+### 5.8 `forward`: paylaşılan tek satırlık kural
 
 ```rust
 // boot'ta, her odanın kurulumunda (aynı satır)
@@ -368,19 +431,21 @@ Ortak sözleşme (`.proto`'dan üretilmiş): `TransferGold → TransferDone`,
 `PickUp → PickedUp`, `CraftReq → Crafted`, `Equip → Equipped`,
 `ListFriends → FriendList`, hepsinin hatası `GameError { code }`.
 Servisler: `Bank::transfer`, `Inventory::{load, grant, craft, save}`,
-`Friends::list`. Tam kodu spike'ta: `tests/common/{bevy_game,hecs_game,plain_game}.rs`
+`Friends::list`. Oturumlar join kancasında bağlıdır (§5.6), bu yüzden
+hiçbir sistem "oyuncuyu bağlantıdan bul" araması yazmaz. Tam kodu
+spike'ta: `scenario/tests/common/{bevy_game,hecs_game,plain_game}.rs`
 — üçü aynı senaryoda **bayt bayt aynı** istemci cevaplarını ve tick
 başına aynı durum hash'lerini üretir (`three_ways`).
 
 ### 6.1 Arkadaşa altın gönderme (rezerv, tek ücret, `.answers`)
 
-**bevy** (fonksiyon sistemi):
+**bevy_ecs** (fonksiyon sistemi):
 
 ```rust
 pub struct Reserve(pub u64);   // çağrının bağlamı: odada kalır, servise gitmez
 
 fn transfers(
-    mut calls: ResMut<Calls>,
+    mut calls: ResMut<GsbCalls>,
     bank: Res<Svc<BankClient>>,
     mut q: Query<(Entity, &Player, &mut Wallet, &Bag)>,
 ) {
@@ -393,18 +458,18 @@ fn transfers(
     }
     // 2) Sonra yeni istekler.
     for r in calls.take_incoming::<TransferGold>() {
-        let Some((e, _, mut w, bag)) = q.iter_mut().find(|(_, p, ..)| p.conn == r.conn) else {
+        let Ok((_, _, mut w, bag)) = q.get_mut(r.owner.entity()) else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
             continue;
         };
-        if calls.in_flight::<bank::Transfer>(e.to_owner()) {
+        if calls.in_flight::<bank::Transfer>(r.owner) {
             calls.reply(r.reply, Err(err(BUSY)));                  // çift tık: hemen
         } else if w.gold - w.reserved < r.body.amount {
             calls.reply(r.reply, Err(err(INSUFFICIENT)));
         } else {
             w.reserved += r.body.amount;                            // SENKRON rezerv
             calls.call(bank.transfer(Identity::new(&r.body.to), r.body.amount))
-                .owner(e.to_owner())
+                .owner(r.owner)
                 .with(Reserve(r.body.amount))
                 .answers(r.reply);                                  // istemciye otomatik
         }
@@ -436,14 +501,16 @@ fn transfers(w: &mut hecs::World, calls: &mut Calls, bank: &BankClient) {
         }
     }
     for r in calls.take_incoming::<TransferGold>() {
-        let Some(e) = player_by_conn(w, r.conn) else { calls.reply(r.reply, Err(err(NOT_LOADED))); continue };
-        let Ok((wallet, bag)) = w.query_one_mut::<(&mut Wallet, &Bag)>(e) else { continue };
-        /* aynı üç dal; çağrı: .owner(e.to_owner()).with(Reserve(..)).answers(r.reply) */
+        let Some(Ok((wallet, bag))) = r.owner.entity().map(|e| w.query_one_mut::<(&mut Wallet, &Bag)>(e)) else {
+            calls.reply(r.reply, Err(err(NOT_LOADED)));
+            continue;
+        };
+        /* aynı üç dal; çağrı: .owner(r.owner).with(Reserve(..)).answers(r.reply) */
     }
 }
 ```
 
-**ECS'siz** — `Owner(player_id)` ve `self.players.get_mut(&r.owner.0)`;
+**ECS'siz** — sahip oyunun kendi id'si: `self.players.get_mut(&r.owner.0)`;
 gerisi aynı (spike `plain_game.rs`):
 
 ```rust
@@ -465,7 +532,7 @@ görmez); t3–t5 arası cüzdan `(500, rezerv 100)`; t6'nın RESPONSES'unda
 ### 6.2 Envanter 1: girişte yükleme
 
 ```rust
-fn load_on_join(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>,
+fn load_on_join(mut calls: ResMut<GsbCalls>, inv: Res<Svc<InventoryClient>>,
                 joined: Query<(Entity, &Player), With<JustJoined>>, mut commands: Commands) {
     for (e, p) in &joined {
         calls.call(inv.load(p.who.clone())).owner(e.to_owner());
@@ -473,7 +540,7 @@ fn load_on_join(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>,
     }
 }
 
-fn apply_loads(mut calls: ResMut<Calls>, mut q: Query<(&mut Wallet, &mut Bag)>) {
+fn apply_loads(mut calls: ResMut<GsbCalls>, mut q: Query<(&mut Wallet, &mut Bag)>) {
     for r in calls.take_resolved::<inventory::Load, ()>() {
         let Ok((mut wallet, mut bag)) = q.get_mut(r.owner.entity()) else { continue };
         if let Ok(data) = r.outcome { wallet.gold = data.gold; bag.fill(&data.items); }
@@ -492,7 +559,7 @@ bitmeden dünya değiştirilemez); ECS'siz oyunda `p.joined` bayrağı.
 ```rust
 pub struct Picker(pub Owner);
 
-fn loot(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>,
+fn loot(mut calls: ResMut<GsbCalls>, inv: Res<Svc<InventoryClient>>,
         mut bags: Query<(Entity, &Player, &mut Bag)>, mut piles: Query<(Entity, &mut Loot)>,
         mut commands: Commands) {
     for r in calls.take_resolved::<inventory::Grant, Picker>() {
@@ -507,13 +574,13 @@ fn loot(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>,
         }
     }
     for r in calls.take_incoming::<PickUp>() {
-        let Some((pe, p, _)) = bags.iter().find(|(_, p, _)| p.conn == r.conn) else { /* NOT_LOADED */ continue };
+        let Ok((_, p, _)) = bags.get(r.owner.entity()) else { /* NOT_LOADED */ continue };
         let Some((le, mut l)) = piles.iter_mut().find(|(_, l)| l.id == r.body.loot) else { /* NO_SUCH_LOOT */ continue };
         if l.claimed { calls.reply(r.reply, Err(err(CLAIMED))); continue }      // kaybeden hemen duyar
         l.claimed = true;                                                       // bekleyen durum ganimette
         calls.call(inv.grant(p.who.clone(), l.item))
             .owner(le.to_owner())                                               // sahip = ganimet
-            .with(Picker(pe.to_owner()))
+            .with(Picker(r.owner))                                              // toplayan = isteğin sahibi
             .answers(r.reply);
     }
 }
@@ -530,7 +597,7 @@ sonucu t7'de gelir → `responses_owner_gone = 1`, bob yine cevaplanır.
 ```rust
 pub struct Locked(pub Vec<ItemId>);
 
-fn craft(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>, mut q: Query<(Entity, &Player, &mut Bag)>) {
+fn craft(mut calls: ResMut<GsbCalls>, inv: Res<Svc<InventoryClient>>, mut q: Query<(Entity, &Player, &mut Bag)>) {
     for r in calls.take_resolved::<inventory::Craft, Locked>() {
         let Ok((_, _, mut bag)) = q.get_mut(r.owner.entity()) else { continue };
         match r.outcome {
@@ -539,12 +606,12 @@ fn craft(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>, mut q: Query<
         }
     }
     for r in calls.take_incoming::<CraftReq>() {
-        let Some((e, _, mut bag)) = q.iter_mut().find(|(_, p, _)| p.conn == r.conn) else { continue };
+        let Ok((_, _, mut bag)) = q.get_mut(r.owner.entity()) else { continue };
         if !bag.try_lock(&r.body.consume) {
             calls.reply(r.reply, Err(err(MISSING)));
         } else {
             calls.call(inv.craft(r.body.recipe, r.body.consume.clone()))
-                .owner(e.to_owner())
+                .owner(r.owner)
                 .with(Locked(r.body.consume))              // kısmi taşıma: body.consume buraya,
                 .answers(r.reply);                         // reply buraya
         }
@@ -559,9 +626,9 @@ göremez); sonuç her durumda kilidi çözer. İstemciye `Crafted` ya da
 ### 6.5 Envanter 4: kuşanma (servissiz) + otomatik kayıt
 
 ```rust
-fn equip(mut calls: ResMut<Calls>, mut q: Query<(&Player, &mut Bag)>) {
+fn equip(mut calls: ResMut<GsbCalls>, mut q: Query<&mut Bag>) {
     for r in calls.take_incoming::<Equip>() {
-        let Some((_, mut bag)) = q.iter_mut().find(|(p, _)| p.conn == r.conn) else { continue };
+        let Ok(mut bag) = q.get_mut(r.owner.entity()) else { continue };
         if bag.has_unlocked(r.body.item) {
             bag.equipped = Some(r.body.item);
             bag.dirty = true;
@@ -572,7 +639,7 @@ fn equip(mut calls: ResMut<Calls>, mut q: Query<(&Player, &mut Bag)>) {
     }
 }
 
-fn autosave(mut calls: ResMut<Calls>, inv: Res<Svc<InventoryClient>>, tick: Res<Tick>,
+fn autosave(mut calls: ResMut<GsbCalls>, inv: Res<Svc<InventoryClient>>, tick: Res<Tick>,
             mut q: Query<(Entity, &Player, &mut Bag)>) {
     for r in calls.take_resolved::<inventory::Save, ()>() {
         if r.outcome.is_err() && let Ok((_, _, mut b)) = q.get_mut(r.owner.entity()) { b.dirty = true }
@@ -633,6 +700,8 @@ calls.import(pending, new_entity.to_owner());            // FLUSH'ta AYNI anahta
   anahtarla tekilleştirir → tek etki. Hedef sonucu bağlamıyla alır;
   `.answers` hedefi de taşındığı için istemci hedeften cevaplanır (s0
   S7'nin "göçte istemci isteği bırakılır" duruşu böylece düzelir).
+- O sahibe bağlı oturumlar da taşınır: kaynakta bağ çözülür, `import`
+  onları yeni sahibe bağlar (§5.6).
 - Spike `migration`: A çağırdı, banka ücretlendirdi; A export, B import;
   B aynı anahtarla yeniden yayınladı → **tek ücret**, B `(Owner(9), 100,
   Ok(400))` aldı ve istemciyi cevapladı, A'nın cevabı `results_late`.
@@ -657,6 +726,7 @@ uygulama turunda.
 `responses_owner_gone`, `answers_sent`.
 **İstekler:** `requests_received`, `requests_malformed`,
 `requests_no_handler`, `requests_undecodable`, `requests_duplicate`,
+`requests_unbound`,
 `requests_forwarded`, `requests_answered`, `requests_untaken`,
 `requests_unanswered`, `requests_replied_late`.
 **Tekrar:** `replay_diverged`.
@@ -744,7 +814,7 @@ koşu aynı (hash + cevaplar), farklı tohum farklı. (`Delay` impl'i değil,
 - `HashMap`/`HashSet` **iterasyon sırasına** bağımlılık (arama sorun
   değil; sıralı iterasyon için `BTreeMap` ya da ECS sorgusu).
 - Mantıkta duvar saati (`Instant::now`, `SystemTime`) ve kendi RNG'si.
-- bevy'de çok iş parçacıklı şema yürütücüsünün sırasına güvenmek
+- bevy_ecs'te çok iş parçacıklı şema yürütücüsünün sırasına güvenmek
   (adaptör tek iş parçacıklı koşar).
 - Tekrarı farklı bir ikiliyle oynatmak (`replay_diverged` yakalar,
   ama düzeltemez).
@@ -784,7 +854,7 @@ servis payını uygular.
 - s0'ın `TickCtx<'a, D>`, `GameLogic::{Done, Req, on_done, on_request}`,
   etiket kapanışları, `Refused::fail`, `RequestTable<In>`,
   `SystemCtx::ext` önerileri — hepsi gereksiz: `Calls` tablosu oyunun
-  her yerinden (bevy'de `ResMut<Calls>`, diğerlerinde `&mut Calls`)
+  her yerinden (bevy_ecs'te `ResMut<GsbCalls>`, diğerlerinde `&mut Calls`)
   erişilir.
 - Hub ve onun tel değişiklikleri (`RpcRequest.target`, `RPC_RESP`) —
   §18 A5.
@@ -960,12 +1030,21 @@ extend google.protobuf.MethodOptions {
 ## 17. Spike: `spikes/s0-calls`
 
 gsb çalışma alanının üyesi değil (kök `exclude`), kendi küçük çalışma
-alanı: `s0-calls` + `macros/` (`s0-calls-macros`, `#[service]`). Motora
-dokunmaz; kendi senkron tick'ini modeller. Çalıştırma:
-`cd spikes/s0-calls && cargo test --workspace` (22 test + 1 doc testi +
-5 `compile_fail`; iki crate'in `build.rs`'i `gsb-lint`'i koşar).
-Bağımlılıklar: tokio (sync/rt/time), tower 0.5, prost, bevy_ecs 0.19,
-hecs 0.10 (yalnız spike), syn/quote.
+alanı. Motora dokunmaz; kendi senkron tick'ini modeller. Yapısı motorun
+kuralını aynalar — **çekirdekte ECS yok**:
+
+| Crate | İçerik | ECS bağımlılığı |
+|---|---|---|
+| `s0-calls` (kök) | sözleşme, `Calls`, hostlar (canlı/test/tekrar), oda, ECS'siz biçim | **yok** (`cargo tree` ile doğrulandı) |
+| `macros/` (`s0-calls-macros`) | `#[service]` | yok |
+| `adapters/bevy-ecs` (`s0-calls-bevy-ecs`) | `GsbCalls`, `Svc`, `Tick`, uzantılar, `BevyRoom` | yalnız `bevy_ecs` crate'i |
+| `adapters/hecs` (`s0-calls-hecs`) | uzantılar, `HecsRoom` | yalnız `hecs` |
+| `scenario/` (`s0-calls-scenario`) | tüm testler (çekirdek dev-bağımlılık olarak bile ECS çekmesin diye ayrı) | ikisi de |
+
+Çalıştırma: `cd spikes/s0-calls && cargo test --workspace` (23 test + 1
+doc testi + 5 `compile_fail`; her crate'in `build.rs`'i `gsb-lint`'i
+koşar). Bağımlılıklar: tokio (sync/rt/time), tower 0.5, prost; adaptörlerde
+bevy_ecs 0.19 / hecs 0.10 (hecs yalnız spike); syn/quote.
 
 | Gereksinim | Test |
 |---|---|
@@ -977,11 +1056,12 @@ hecs 0.10 (yalnız spike), syn/quote.
 | Tip başına FIFO ve `take_incoming_all` kanonik sırası | `ordering` |
 | Göç: export → import → aynı anahtar → tek ücret; kaynağın geç cevabı | `migration` |
 | Servisten servise `Handle`, admin'den doğrudan `Handle`; tower timeout + load_shed | `live` (2, gerçek tokio) |
-| Aynı senaryo bevy / hecs / ECS'siz → aynı cevaplar, aynı tick hash'leri, aynı servis etkisi | `three_ways` |
+| Aynı senaryo bevy_ecs / hecs / ECS'siz → aynı cevaplar, aynı tick hash'leri, aynı servis etkisi | `three_ways` |
 | Rastgele gecikmeli canlı koşu kaydı → iki REPLAY aynı hash'ler, servis çağrılmadı; negatif kontrol; TEST modu iki koşu aynı | `determinism` (2) |
 | Yanlış cevap tipi derleme hatası (5 biçim: `.answers`, `reply`, servis impl'i, `take_resolved`, `forward`) | `src/lib.rs` doc testleri |
 | Boşta maliyet: tick başına iki boş `try_recv`, tampon kapasitesi 0 | `idle_cost` |
 | Op çakışması boot'ta; bilinmeyen/bozuk/id 0 motor cevabı | `boot` (2) |
+| Oturum bağlama: `Incoming.owner` doldurulur; bağsız oturum → motor cevabı + `requests_unbound`, oyun görmez; ayrılış bağı çözer; göç bağı taşır | `binding`, `migration` |
 
 **Bulgular:**
 
@@ -993,13 +1073,15 @@ hecs 0.10 (yalnız spike), syn/quote.
    de aynı kurala takılırdı).
 2. **`&svc.method` Rust ifadesi değildir** (alıcıya bağlı metot değeri
    yok) → `forward` kapanış alır (§19 S2).
-3. **bevy `Resource`** adaptör crate'inden `Calls`'a verilemez (yetim
-   kuralı) → çekirdekte `bevy` özelliği (§19 S3).
+3. **bevy_ecs `Resource`** adaptör crate'inden `Calls`'a verilemez (yetim
+   kuralı) → adaptörde `GsbCalls` yeni tipi; çekirdek ECS'siz kalır
+   (§5.5). Sistemler `ResMut<GsbCalls>` üzerinde `Deref` ile aynı kodu
+   yazar; üç biçimin testi değişmeden aynı sonucu verdi.
 4. **REPLAY ayrışması** (§10.2): kayıt çağrı tipini tutmalı;
    `replay_diverged`.
-5. `RoomLogic::state_hash` `&mut self` ister: bevy sorguları dünyaya
+5. `RoomLogic::state_hash` `&mut self` ister: bevy_ecs sorguları dünyaya
    `&mut` ister (sorgu durumu kurulumu).
-6. Tek iş parçacıklı bevy yürütücüsü determinizm için şart; adaptör
+6. Tek iş parçacıklı bevy_ecs yürütücüsü determinizm için şart; adaptör
    ayarlar.
 7. `async fn` → RPITIT (`impl Future + Send`) dönüşümü 1.95'te temiz
    çalışıyor; impl'ler düz `async fn` yazıyor, `async-trait` gerekmiyor.
@@ -1042,7 +1124,10 @@ maliyet.
 
 ## 19. Açık sorular (her biri öneriyle)
 
-1. **S1 — Kayıt biçimi** (onaylanan `server.service(PgInventory::new(db), ..)`
+> **Takip (s0b-2):** S1 sapması (`serve(..)`), S2, S4, S5 önerileri
+> **onaylandı**; S3 ve S14 aşağıdaki biçimde **kapandı**.
+
+1. **S1 — Kayıt biçimi** (ONAYLANDI: (a)) (onaylanan `server.service(PgInventory::new(db), ..)`
    yetim kuralı yüzünden olduğu gibi yazılamıyor). Seçenekler:
    (a) `server.service(Inventory::serve(PgInventory::new(db)), ..)` —
    spike'ta çalışan; bir tip birden çok servis trait'i uygulasa bile
@@ -1053,23 +1138,24 @@ maliyet.
    gerekir); (c) turbofish: `server.service::<inventory::Kind, _>(x, ..)`.
    **Öneri: (a)**; tek öznitelik, tek kural. (b) "aynı satır" için
    istenirse eklenebilir, (a) ile birlikte yaşar.
-2. **S2 — `forward` biçimi** (`&svc.method` Rust'ta değer değil).
+2. **S2 — `forward` biçimi** (ONAYLANDI: kapanış) (`&svc.method` Rust'ta değer değil).
    Spike: `calls.forward(move |r: ListFriends| friends.list(r))` — `R`
    kapanış parametresinden çıkar, tipler derlemede denetlenir. Seçenek:
    makro, tek argümanı bir `Request` olan metotlar için
    `friends.forward_list()` üretebilir → `calls.forward(friends.forward_list())`.
    **Öneri:** kapanış; şeker gerekirse sonra.
-3. **S3 — bevy `Resource`**. (a) çekirdek crate'te `bevy` özelliği
-   (`Calls`'a `#[derive(Resource)]`; spike böyle); (b) adaptörde
-   `GsbCalls(Calls)` yeni tipi + `Deref` (`ResMut<GsbCalls>`). **Öneri:
-   (a)**; o özellik açıkken `impl From<Entity> for Owner` de çekirdekte
-   mümkün olur (`.owner(e)` doğrudan) — `.entity()` uzantısı yine kalır.
-4. **S4 — Tick'i aşan cevap** (eşleştirme kuyruğu gibi "birkaç tick sonra
+3. **S3 — bevy_ecs `Resource`** — KAPANDI. Kullanıcı kararı: çekirdek
+   hiçbir ECS'e bağımlı değildir (özellik bayrağı arkasında bile).
+   bevy_ecs entegrasyonu isteğe bağlı `gsb-calls-bevy-ecs` crate'indeki
+   `GsbCalls(Calls)` yeni tipidir (`Resource` + `Deref/DerefMut`) ve
+   uzantılardır; hecs/shipyard yalnız sahip uzantısı alır (§5.5). Bevy
+   oyun motoru hiçbir yerde yoktur — yalnız `bevy_ecs` crate'i.
+4. **S4 — Tick'i aşan cevap** (ONAYLANDI) (eşleştirme kuyruğu gibi "birkaç tick sonra
    cevaplarım" istekleri). Şimdi: tick sonunda `requests_unanswered`.
    **Öneri:** açık bir `calls.hold(r.reply, ticks) -> Held<R>` (bileşende
    saklanabilir, süre sonunda motor cevaplar ve
    `requests_hold_expired` sayar) — ilk gerçek ihtiyaçta.
-5. **S5 — Girdi kaydının dosya biçimi.** Süreç içi sonuçlar (`InventoryData`)
+5. **S5 — Girdi kaydının dosya biçimi** (ONAYLANDI). Süreç içi sonuçlar (`InventoryData`)
    serileştirme ister; spike yalnız bellekte tutar (`Clone`). **Öneri:**
    `record` özelliği açıkken `Call` tiplerine `WireMessage` (ya da serde)
    sınırı; makro bu sınırı özellikle ekler. Biçim: oda başına dosya,
@@ -1101,10 +1187,10 @@ maliyet.
     **Öneri:** spike'taki kural.
 13. **S13 — FFI'da `unsafe`** (s0 S11). **Öneri:** değişmedi — tek, küçük,
     denetlenen `gsb-ffi` istisnası.
-14. **S14 — "Oyuncuyu bağlantıdan bul" tekrarı.** Örneklerde her sistem
-    `conn → varlık` araması yazıyor. **Öneri:** adaptör bir
-    `ConnId → Entity` dizini versin (`Res<Members>`), motorun üyelik
-    tablosundan beslenir.
+14. **S14 — "Oyuncuyu bağlantıdan bul" tekrarı** — KAPANDI: oturum →
+    sahip bağlama (`calls.bind` join kancasında, `Incoming.owner`,
+    bağsız oturum → `requests_unbound`; §5.6). Örneklerdeki taramalar
+    kalktı.
 
 ## 20. Uygulama planı
 
@@ -1113,7 +1199,8 @@ maliyet.
   `CallCx`, `Outcome`), `Calls` tablosu, `CallSpec`/`Route`/`ReplySink`,
   sayaçlar → metrikler.
 - Oda ve shard aktörlerinde fazlar: `phase_completions` → RESPONSES;
-  READ'de istek çözümü tabloya; FLUSH; tick sonu kapatma. `GameLogic`'e
+  READ'de istek çözümü tabloya (oturum → sahip bağı, `requests_unbound`);
+  FLUSH; tick sonu kapatma; ayrılışta `unbind`. `GameLogic`'e
   tablo erişimi ve `alive(owner)` (spike'taki `RoomLogic::with_calls`
   deseni, §5.5).
 - `External` → yerleşik forward; `handle_request` geçiş yolu.
@@ -1137,8 +1224,10 @@ maliyet.
   senaryosu.
 
 **Faz 5 — ECS adaptörleri ve kit**
-- `bevy` özelliği (S3), hecs adaptörü, ECS'siz adaptör; kit dikişleri;
-  `Members` dizini (S14).
+- Çekirdek ECS'siz kalır; isteğe bağlı adaptör crate'leri
+  `gsb-calls-bevy-ecs` (yalnız `bevy_ecs`: `GsbCalls`, uzantılar, oda
+  biçimi) ve `gsb-calls-hecs`; kit dikişleri. (shipyard istenirse aynı
+  birkaç satır.)
 
 **Faz 6 — olaylar turu** (§15'in yeniden tasarımı), sonra **istemci
 çekirdeği B28 + FFI** (C#, `Forget`, üretilmiş istemciler).
