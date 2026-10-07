@@ -11,6 +11,8 @@ use prost::Message;
 mod bound;
 // What a session that ended takes along, counted (B53).
 mod undelivered;
+// The call table on the shard (round q1).
+mod calls;
 
 /// Answered locally, in the tick that processes it.
 const OP_LOCAL: u16 = 0x01;
@@ -23,6 +25,8 @@ const OP_PRIV: u16 = 0x71A1;
 /// (`u64` LE each), only when there are any.
 struct ReplyLogic {
     next_wire: u64,
+    /// The echo service the call-table scenario calls (`calls.rs`).
+    echo: Option<crate::calls::Route<calls::EchoMsg>>,
 }
 
 impl GameLogic<TWorld> for ReplyLogic {
@@ -89,6 +93,16 @@ impl GameLogic<TWorld> for ReplyLogic {
         actions.clear();
     }
     fn update(&mut self, _w: &mut TWorld, _c: &TickCtx) {}
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut crate::calls::Calls,
+    ) -> Result<(), crate::calls::BootError> {
+        if self.echo.is_some() {
+            calls.accept::<calls::Echo>()?;
+        }
+        Ok(())
+    }
 }
 
 impl ShardLogic<TWorld> for ReplyLogic {
@@ -120,6 +134,18 @@ impl ShardLogic<TWorld> for ReplyLogic {
     fn own_wires(&self, w: &TWorld) -> Vec<u64> {
         w.ents.keys().copied().collect()
     }
+
+    fn update_seam_with_calls(
+        &mut self,
+        _w: &mut TWorld,
+        _c: &TickCtx,
+        _seam: &mut crate::shard::CrossSeam<'_, TStrip>,
+        table: &mut crate::calls::Calls,
+    ) {
+        if let Some(echo) = &self.echo {
+            calls::system(echo, table);
+        }
+    }
 }
 
 type Shard = ShardActor<TWorld, (), TState, TStrip>;
@@ -127,6 +153,10 @@ type Shard = ShardActor<TWorld, (), TState, TStrip>;
 /// A bare shard over [`ReplyLogic`]: `cap` in-flight requests per
 /// connection, `pull` actions pulled per connection per tick.
 fn shard(cap: usize, pull: usize) -> Shard {
+    shard_with(cap, pull, None)
+}
+
+fn shard_with(cap: usize, pull: usize, echo: Option<crate::calls::Route<calls::EchoMsg>>) -> Shard {
     let (_tick_tx, tick_rx) = broadcast::channel(64);
     let (_self_tx, rx) = channel::<ShardMsg<TState, TStrip>>(16);
     ShardActor::new(
@@ -141,7 +171,7 @@ fn shard(cap: usize, pull: usize) -> Shard {
         },
         0,
         TWorld::default(),
-        Box::new(ReplyLogic { next_wire: 0 }),
+        Box::new(ReplyLogic { next_wire: 0, echo }),
         tick_rx,
         rx,
         Vec::new(),
