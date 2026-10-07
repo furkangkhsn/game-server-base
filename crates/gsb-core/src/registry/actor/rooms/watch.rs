@@ -23,7 +23,7 @@ where
     Sp: Debug + Clone + PartialEq + Send + 'static,
 {
     /// Give the registry the rooms' drop barrier token (BACKLOG F5, see
-    /// [`crate::service`]): the registry keeps it until it exits and hands
+    /// [`crate::service`](mod@crate::service)): the registry keeps it until it exits and hands
     /// a clone to every room's (and shard's) death watcher, which drops it
     /// when that task has ended — after its teardown hooks
     /// (`on_shutdown`, `match_result`). The barrier's waiter therefore
