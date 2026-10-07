@@ -41,12 +41,6 @@ impl Game {
         self.next += 1;
         self.next
     }
-    fn by_conn(&mut self, conn: ConnId) -> Option<(u64, &mut P)> {
-        self.players
-            .iter_mut()
-            .find(|(_, p)| p.player.conn == conn)
-            .map(|(id, p)| (*id, p))
-    }
 }
 
 impl PlainGame for Game {
@@ -54,10 +48,11 @@ impl PlainGame for Game {
         self.players.contains_key(&o.0) || self.loots.contains_key(&o.0)
     }
 
-    fn control(&mut self, c: &Control) {
+    fn control(&mut self, calls: &mut Calls, c: &Control) {
         match c {
             Control::Join { conn, identity } => {
                 let id = self.id();
+                calls.bind(*conn, Owner(id));
                 self.players.insert(
                     id,
                     P {
@@ -112,7 +107,8 @@ impl PlainGame for Game {
             }
         }
         for r in calls.take_incoming::<TransferGold>() {
-            let Some((id, p)) = self.by_conn(r.conn) else {
+            let id = r.owner.0;
+            let Some(p) = self.players.get_mut(&id) else {
                 calls.reply(r.reply, Err(err(NOT_LOADED)));
                 continue;
             };
@@ -153,7 +149,8 @@ impl PlainGame for Game {
             }
         }
         for r in calls.take_incoming::<PickUp>() {
-            let Some((pid, p)) = self.by_conn(r.conn) else {
+            let pid = r.owner.0;
+            let Some(p) = self.players.get_mut(&pid) else {
                 calls.reply(r.reply, Err(err(NOT_LOADED)));
                 continue;
             };
@@ -192,7 +189,8 @@ impl PlainGame for Game {
             }
         }
         for r in calls.take_incoming::<CraftReq>() {
-            let Some((id, p)) = self.by_conn(r.conn) else {
+            let id = r.owner.0;
+            let Some(p) = self.players.get_mut(&id) else {
                 calls.reply(r.reply, Err(err(NOT_LOADED)));
                 continue;
             };
@@ -211,7 +209,7 @@ impl PlainGame for Game {
 
         // pattern 4a: equip (no service)
         for r in calls.take_incoming::<Equip>() {
-            let Some((_, p)) = self.by_conn(r.conn) else {
+            let Some(p) = self.players.get_mut(&r.owner.0) else {
                 calls.reply(r.reply, Err(err(NOT_LOADED)));
                 continue;
             };

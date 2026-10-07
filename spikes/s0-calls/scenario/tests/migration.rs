@@ -1,6 +1,7 @@
 //! Migration with a call in flight: `export(owner)` carries the call's
 //! key, context and client answer out of room A; `import` in room B
-//! re-issues it under the SAME key; the idempotent service charges once.
+//! re-issues it under the SAME key (the session's owner binding moves
+//! with it); the idempotent service charges once.
 //! A's late answer is counted (`results_late`); B gets the result with
 //! the context, and the client is answered from B.
 
@@ -24,7 +25,7 @@ fn sys(s: &mut S, calls: &mut Calls, _ctx: &mut TickCtx) {
     for r in calls.take_incoming::<TransferGold>() {
         calls
             .call(bank.transfer(Identity::new(&r.body.to), r.body.amount))
-            .owner(Owner(7))
+            .owner(r.owner)
             .with(Reserve(r.body.amount))
             .answers(r.reply);
     }
@@ -74,11 +75,22 @@ fn export_import_reissues_under_the_same_key_and_charges_once() {
     assert_eq!(be.charges(), 1);
 
     // The player (and their pending transfer) moves to B.
-    let exported = a.logic_mut().calls.export(Owner(7));
+    let alice = a.logic().calls.bound(ALICE).expect("bound at join");
+    let exported = a.logic_mut().calls.export(alice);
     assert_eq!(exported.len(), 1);
     let key = exported.keys()[0].expect("sent calls carry their key");
-    assert!(!a.logic().calls.in_flight::<bank::Transfer>(Owner(7)));
+    assert!(!a.logic().calls.in_flight::<bank::Transfer>(alice));
+    assert_eq!(
+        a.logic().calls.bound(ALICE),
+        None,
+        "the binding left with the export"
+    );
     b.logic_mut().calls.import(exported, Owner(9));
+    assert_eq!(
+        b.logic().calls.bound(ALICE),
+        Some(Owner(9)),
+        "and arrived with the import"
+    );
     assert!(b.logic().calls.in_flight::<bank::Transfer>(Owner(9)));
 
     for t in 1..6 {

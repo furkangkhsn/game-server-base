@@ -701,7 +701,12 @@ impl<S> s0_calls::ecs::plain::PlainGame for Scripted<S> {
     fn alive(&self, o: Owner) -> bool {
         !self.dead.contains(&o)
     }
-    fn control(&mut self, _c: &Control) {}
+    /// Join hook: bind each session to `Owner(conn)`.
+    fn control(&mut self, calls: &mut Calls, c: &Control) {
+        if let Control::Join { conn, .. } = c {
+            calls.bind(*conn, Owner(conn.0));
+        }
+    }
     fn systems(&mut self, calls: &mut Calls, ctx: &mut TickCtx) {
         (self.sys)(&mut self.s, calls, ctx);
     }

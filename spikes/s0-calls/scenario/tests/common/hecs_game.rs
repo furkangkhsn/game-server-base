@@ -1,7 +1,7 @@
 //! The scenario on hecs: systems are plain functions taking
 //! `(&mut World, &mut Calls, …)`.
 
-use s0_calls::ecs::hecs::{Entity, EntityExt, HecsGame, HecsRoom, OwnerExt, World};
+use s0_calls_hecs::{Entity, EntityExt, HecsGame, HecsRoom, OwnerExt, World};
 
 use super::*;
 
@@ -21,10 +21,10 @@ pub fn room(cfg: RoomConfig, clients: Clients) -> Room<HecsRoom<Game>> {
 }
 
 impl HecsGame for Game {
-    fn control(&mut self, world: &mut World, c: &Control) {
+    fn control(&mut self, world: &mut World, calls: &mut Calls, c: &Control) {
         match c {
             Control::Join { conn, identity } => {
-                world.spawn((
+                let e = world.spawn((
                     Player {
                         conn: *conn,
                         who: identity.clone(),
@@ -33,6 +33,7 @@ impl HecsGame for Game {
                     Bag::default(),
                     JustJoined,
                 ));
+                calls.bind(*conn, e.to_owner());
             }
             Control::Leave { conn } => {
                 let gone: Vec<Entity> = world
@@ -70,13 +71,6 @@ impl HecsGame for Game {
         }
         s.hash(h);
     }
-}
-
-fn player_by_conn(w: &mut World, conn: ConnId) -> Option<Entity> {
-    w.query_mut::<&Player>()
-        .into_iter()
-        .find(|(_, p)| p.conn == conn)
-        .map(|(e, _)| e)
 }
 
 fn spawn_loot(w: &mut World, ctx: &mut TickCtx) {
@@ -123,12 +117,12 @@ fn transfers(w: &mut World, calls: &mut Calls, bank: &BankClient) {
         }
     }
     for r in calls.take_incoming::<TransferGold>() {
-        let Some(e) = player_by_conn(w, r.conn) else {
+        let me = r.owner;
+        let Some(Ok((wallet, bag))) = me
+            .entity()
+            .map(|e| w.query_one_mut::<(&mut Wallet, &Bag)>(e))
+        else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
-            continue;
-        };
-        let me = e.to_owner();
-        let Ok((wallet, bag)) = w.query_one_mut::<(&mut Wallet, &Bag)>(e) else {
             continue;
         };
         if !bag.loaded {
@@ -174,12 +168,14 @@ fn loot(w: &mut World, calls: &mut Calls, inv: &InventoryClient) {
         }
     }
     for r in calls.take_incoming::<PickUp>() {
-        let Some(pe) = player_by_conn(w, r.conn) else {
+        let Some(Ok(who)) = r
+            .owner
+            .entity()
+            .map(|e| w.get::<&Player>(e).map(|p| p.who.clone()))
+        else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
             continue;
         };
-        let who = w.get::<&Player>(pe).map(|p| p.who.clone()).ok();
-        let Some(who) = who else { continue };
         let Some((le, l)) = w
             .query_mut::<&mut Loot>()
             .into_iter()
@@ -196,7 +192,7 @@ fn loot(w: &mut World, calls: &mut Calls, inv: &InventoryClient) {
         calls
             .call(inv.grant(who, l.item))
             .owner(le.to_owner())
-            .with(Picker(pe.to_owner()))
+            .with(Picker(r.owner))
             .answers(r.reply);
     }
 }
@@ -220,11 +216,8 @@ fn craft(w: &mut World, calls: &mut Calls, inv: &InventoryClient) {
         }
     }
     for r in calls.take_incoming::<CraftReq>() {
-        let Some(e) = player_by_conn(w, r.conn) else {
+        let Some(Ok(bag)) = r.owner.entity().map(|e| w.query_one_mut::<&mut Bag>(e)) else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
-            continue;
-        };
-        let Ok(bag) = w.query_one_mut::<&mut Bag>(e) else {
             continue;
         };
         if !bag.loaded {
@@ -234,7 +227,7 @@ fn craft(w: &mut World, calls: &mut Calls, inv: &InventoryClient) {
         } else {
             calls
                 .call(inv.craft(r.body.recipe, r.body.consume.clone()))
-                .owner(e.to_owner())
+                .owner(r.owner)
                 .with(Locked(r.body.consume))
                 .answers(r.reply);
         }
@@ -243,11 +236,8 @@ fn craft(w: &mut World, calls: &mut Calls, inv: &InventoryClient) {
 
 fn equip(w: &mut World, calls: &mut Calls) {
     for r in calls.take_incoming::<Equip>() {
-        let Some(e) = player_by_conn(w, r.conn) else {
+        let Some(Ok(bag)) = r.owner.entity().map(|e| w.query_one_mut::<&mut Bag>(e)) else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
-            continue;
-        };
-        let Ok(bag) = w.query_one_mut::<&mut Bag>(e) else {
             continue;
         };
         if bag.loaded && bag.has_unlocked(r.body.item) {

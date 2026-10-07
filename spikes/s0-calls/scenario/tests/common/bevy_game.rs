@@ -3,7 +3,7 @@
 //! `.entity()`).
 
 use bevy_ecs::prelude::*;
-use s0_calls::ecs::bevy::{BevyRoom, EntityExt, OwnerExt, Svc, Tick};
+use s0_calls_bevy_ecs::{BevyRoom, EntityExt, GsbCalls, OwnerExt, Svc, Tick};
 
 use super::*;
 
@@ -40,15 +40,19 @@ pub fn build(clients: Clients) -> impl FnOnce(Calls) -> BevyRoom {
 fn control(world: &mut World, c: &Control) {
     match c {
         Control::Join { conn, identity } => {
-            world.spawn((
-                Player {
-                    conn: *conn,
-                    who: identity.clone(),
-                },
-                Wallet::default(),
-                Bag::default(),
-                JustJoined,
-            ));
+            let e = world
+                .spawn((
+                    Player {
+                        conn: *conn,
+                        who: identity.clone(),
+                    },
+                    Wallet::default(),
+                    Bag::default(),
+                    JustJoined,
+                ))
+                .id();
+            // Bind once: every request from this session now carries `e`.
+            world.resource_mut::<GsbCalls>().bind(*conn, e.to_owner());
         }
         Control::Leave { conn } => {
             let gone: Vec<Entity> = world
@@ -85,7 +89,7 @@ fn spawn_loot(mut tick: ResMut<Tick>, mut commands: Commands) {
 
 /// Pattern 1 — load on join.
 fn load_on_join(
-    mut calls: ResMut<Calls>,
+    mut calls: ResMut<GsbCalls>,
     inv: Res<Svc<InventoryClient>>,
     joined: Query<(Entity, &Player), With<JustJoined>>,
     mut commands: Commands,
@@ -96,7 +100,7 @@ fn load_on_join(
     }
 }
 
-fn apply_loads(mut calls: ResMut<Calls>, mut q: Query<(&mut Wallet, &mut Bag)>) {
+fn apply_loads(mut calls: ResMut<GsbCalls>, mut q: Query<(&mut Wallet, &mut Bag)>) {
     for r in calls.take_resolved::<inventory::Load, ()>() {
         let Ok((mut wallet, mut bag)) = q.get_mut(r.owner.entity()) else {
             continue;
@@ -110,7 +114,7 @@ fn apply_loads(mut calls: ResMut<Calls>, mut q: Query<(&mut Wallet, &mut Bag)>) 
 
 /// Friend gold transfer: reserve, one charge, answered by `.answers`.
 fn transfers(
-    mut calls: ResMut<Calls>,
+    mut calls: ResMut<GsbCalls>,
     bank: Res<Svc<BankClient>>,
     mut q: Query<(Entity, &Player, &mut Wallet, &Bag)>,
 ) {
@@ -123,11 +127,11 @@ fn transfers(
         }
     }
     for r in calls.take_incoming::<TransferGold>() {
-        let Some((e, _, mut w, bag)) = q.iter_mut().find(|(_, p, ..)| p.conn == r.conn) else {
+        let me = r.owner;
+        let Ok((_, _, mut w, bag)) = q.get_mut(me.entity()) else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
             continue;
         };
-        let me = e.to_owner();
         if !bag.loaded {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
         } else if calls.in_flight::<bank::Transfer>(me) {
@@ -147,7 +151,7 @@ fn transfers(
 
 /// Pattern 2 — loot pickup; the pending state is on the loot entity.
 fn loot(
-    mut calls: ResMut<Calls>,
+    mut calls: ResMut<GsbCalls>,
     inv: Res<Svc<InventoryClient>>,
     mut bags: Query<(Entity, &Player, &mut Bag)>,
     mut piles: Query<(Entity, &mut Loot)>,
@@ -173,7 +177,7 @@ fn loot(
         }
     }
     for r in calls.take_incoming::<PickUp>() {
-        let Some((pe, p, _)) = bags.iter().find(|(_, p, _)| p.conn == r.conn) else {
+        let Ok((_, p, _)) = bags.get(r.owner.entity()) else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
             continue;
         };
@@ -189,14 +193,14 @@ fn loot(
         calls
             .call(inv.grant(p.who.clone(), l.item))
             .owner(le.to_owner())
-            .with(Picker(pe.to_owner()))
+            .with(Picker(r.owner))
             .answers(r.reply);
     }
 }
 
 /// Pattern 3 — crafting with locked ingredients, answered by `.answers`.
 fn craft(
-    mut calls: ResMut<Calls>,
+    mut calls: ResMut<GsbCalls>,
     inv: Res<Svc<InventoryClient>>,
     mut q: Query<(Entity, &Player, &mut Bag)>,
 ) {
@@ -217,7 +221,7 @@ fn craft(
         }
     }
     for r in calls.take_incoming::<CraftReq>() {
-        let Some((e, _, mut bag)) = q.iter_mut().find(|(_, p, _)| p.conn == r.conn) else {
+        let Ok((_, _, mut bag)) = q.get_mut(r.owner.entity()) else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
             continue;
         };
@@ -228,7 +232,7 @@ fn craft(
         } else {
             calls
                 .call(inv.craft(r.body.recipe, r.body.consume.clone()))
-                .owner(e.to_owner())
+                .owner(r.owner)
                 .with(Locked(r.body.consume))
                 .answers(r.reply);
         }
@@ -236,9 +240,9 @@ fn craft(
 }
 
 /// Pattern 4a — equip: no service, answered at once.
-fn equip(mut calls: ResMut<Calls>, mut q: Query<(&Player, &mut Bag)>) {
+fn equip(mut calls: ResMut<GsbCalls>, mut q: Query<&mut Bag>) {
     for r in calls.take_incoming::<Equip>() {
-        let Some((_, mut bag)) = q.iter_mut().find(|(p, _)| p.conn == r.conn) else {
+        let Ok(mut bag) = q.get_mut(r.owner.entity()) else {
             calls.reply(r.reply, Err(err(NOT_LOADED)));
             continue;
         };
@@ -254,7 +258,7 @@ fn equip(mut calls: ResMut<Calls>, mut q: Query<(&Player, &mut Bag)>) {
 
 /// Pattern 4b — autosave: a call nobody asked for, one in flight per player.
 fn autosave(
-    mut calls: ResMut<Calls>,
+    mut calls: ResMut<GsbCalls>,
     inv: Res<Svc<InventoryClient>>,
     tick: Res<Tick>,
     mut q: Query<(Entity, &Player, &mut Bag)>,

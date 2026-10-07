@@ -16,7 +16,7 @@ mod common;
 
 use bevy_ecs::prelude::*;
 use common::*;
-use s0_calls::ecs::bevy::{BevyRoom, EntityExt};
+use s0_calls_bevy_ecs::{BevyRoom, EntityExt, GsbCalls};
 
 fn bag(room: &mut Room<BevyRoom>, conn: ConnId) -> (Entity, Bag) {
     let w = &mut room.logic_mut().world;
@@ -35,7 +35,7 @@ fn loot_pile(room: &mut Room<BevyRoom>, id: u64) -> Option<Loot> {
 fn in_flight<C: Call>(room: &mut Room<BevyRoom>, owner: Owner) -> bool {
     room.logic_mut()
         .world
-        .resource::<Calls>()
+        .resource::<GsbCalls>()
         .in_flight::<C>(owner)
 }
 
