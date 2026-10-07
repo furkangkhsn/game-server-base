@@ -19,8 +19,8 @@
 //!   seam, answered when a [`Delay`] says) and [`SimRoom`] (a real room
 //!   actor stepped at a fixed `dt`, with scripted clients);
 //! - **record / REPLAY** (feature `record`): the room's input log
-//!   ([`InputLog`]: per tick, `dt`, the logic-visible inputs in the order
-//!   the room processed them, the state hash) and [`Replay`], which runs
+//!   (`InputLog`: per tick, `dt`, the logic-visible inputs in the order
+//!   the room processed them, the state hash) and `Replay`, which runs
 //!   a log against the same game without calling any service.
 
 mod hash;
