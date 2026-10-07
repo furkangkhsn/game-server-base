@@ -59,3 +59,28 @@ async fn a_spawned_economy_is_not_stopped_by_its_dropped_service() {
     let economy = EconomyService::spawn(Duration::ZERO);
     assert_eq!(economy.buy("shield".into()).await, Ok(300));
 }
+
+#[tokio::test]
+async fn every_ending_maps_onto_a_client_visible_reason() {
+    // A full mailbox: the host has not run yet (current-thread runtime),
+    // the second call of one poll finds the 1-slot mailbox full.
+    let (route, _stop) =
+        gsb_core::calls::spawn(Economy::serve(PriceList::new(Duration::ZERO)), |s| {
+            s.mailbox(1)
+        });
+    let economy = EconomyService::from_handle(EconomyHandle::from_route(route));
+    let (a, b) = tokio::join!(economy.buy("potion".into()), economy.buy("potion".into()));
+    assert_eq!(a, Ok(100));
+    assert_eq!(b, Err("economy service busy".to_string()));
+
+    // The host's deadline.
+    let (route, _stop) = gsb_core::calls::spawn(
+        Economy::serve(PriceList::new(Duration::from_secs(5))),
+        |s| s.timeout(Duration::from_millis(10)),
+    );
+    let slow = EconomyService::from_handle(EconomyHandle::from_route(route));
+    assert_eq!(
+        slow.buy("potion".into()).await,
+        Err("economy service timed out".to_string())
+    );
+}
