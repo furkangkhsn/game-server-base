@@ -299,7 +299,10 @@ mod logic;
 /// GSNT = the GSNS layout plus each room's call-table counters (round
 /// q1, `docs/SERVICES.md` §9: every `CallCounts` field, in its
 /// declaration order) right after the stop counters.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E54;
+/// GSNU = the GSNT layout with four more call-table counters per room
+/// (round q4: `replay_diverged`, `replay_undecodable`, `records_written`,
+/// `records_dropped`, at the end of `CallCounts`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E55;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
