@@ -17,7 +17,6 @@ gsb-core = { workspace = true }
 gsb-protocol = { workspace = true }
 prost = { workspace = true }
 bytes = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
 gsb-bevy-ecs = { workspace = true }

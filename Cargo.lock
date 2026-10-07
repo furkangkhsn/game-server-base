@@ -914,7 +914,6 @@ dependencies = [
  "gsb-protocol",
  "hecs",
  "prost",
- "tokio",
 ]
 
 [[package]]
