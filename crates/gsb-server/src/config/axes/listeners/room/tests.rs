@@ -227,3 +227,57 @@ fn the_check_refuses_a_room_the_registry_would() {
         assert!(checked(text).is_ok(), "{text}");
     }
 }
+
+/// The call-table knobs (BACKLOG B155): omitted = the core's defaults;
+/// written, they reach every room; `call_timeout_secs = 0` turns the
+/// table's deadline off.
+#[test]
+fn the_call_table_knobs_reach_every_room() {
+    let core = RoomConfig::default();
+    let room = parse("").expect("parses").room_config(1);
+    assert_eq!(
+        (room.call_share, room.call_completions, room.call_timeout),
+        (core.call_share, core.call_completions, core.call_timeout)
+    );
+    let cfg =
+        parse("call_share = 8\ncall_completions = 40\ncall_timeout_secs = 2.5").expect("parses");
+    for id in [1, 9] {
+        let room = cfg.room_config(id);
+        assert_eq!(
+            (room.call_share, room.call_completions, room.call_timeout),
+            (8, 40, Some(Duration::from_millis(2_500)))
+        );
+    }
+    let off = parse("call_timeout_secs = 0")
+        .expect("parses")
+        .room_config(1);
+    assert_eq!(off.call_timeout, None);
+}
+
+/// The startup check refuses call-table knobs no room can run with: a
+/// zero share, completions below 2 × share (SERVICES.md S7), a negative
+/// or non-finite deadline; the edge (completions = 2 × share) passes.
+#[test]
+fn the_call_table_check_refuses_what_no_room_can_run() {
+    let check = |text: &str| parse(text).expect("parses").check_call_table();
+    for text in [
+        "call_share = 0",
+        "call_share = 64\ncall_completions = 127",
+        "call_share = 600",
+        "call_timeout_secs = -1",
+        "call_timeout_secs = nan",
+        "call_timeout_secs = inf",
+    ] {
+        assert!(
+            matches!(check(text), Err(ServerError::BadCallTable(_))),
+            "{text}"
+        );
+    }
+    for text in [
+        "",
+        "call_share = 64\ncall_completions = 128",
+        "call_timeout_secs = 0",
+    ] {
+        assert!(check(text).is_ok(), "{text}");
+    }
+}

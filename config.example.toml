@@ -430,6 +430,31 @@ keepalive_hz = 1.0
 # input_rate_hz = 60
 # input_burst = 30
 
+# CALL TABLE (servis çağrıları) — docs/SERVICES.md §5.3, §19 S6/S7,
+# BACKLOG B155. Her odanın (sharded oyunda her shard'ın) çağrı tablosu;
+# yalnız düz anahtar ([rooms.<id>] ile oda başına değil).
+#
+#   call_share        = bir odanın TEK bir serviste aynı anda uçuşta
+#                       tuttuğu en çok çağrı (pay). Aşan çağrı
+#                       Refused(Share) ile biter (calls_refused_share).
+#                       Servisin posta kutusunu ≥ oda sayısı × pay seçin.
+#                       >= 1; varsayılan 64.
+#   call_completions  = servis cevaplarının odaya dönüş kanalı. Dolu kanal
+#                       cevabı kaybeder (serviste
+#                       replies_undeliverable_full sayılır). En az
+#                       2 × call_share olmalı (tek servis çağıran oda
+#                       için; n servis çağıran oda ≥ 2 × n × pay ister),
+#                       altı başlatmayı durdurur. Varsayılan 1024.
+#   call_timeout_secs = tablonun kendi son tarihi: bu kadar süre cevapsız
+#                       kalan çağrı TimedOut ile biter (results_timed_out;
+#                       servisin geç cevabı results_late). Servis
+#                       hostunun kendi 30 sn'lik süresinin ardındaki
+#                       güvenlik ağı. 0 = kapalı; sonlu, >= 0;
+#                       varsayılan 60.
+# call_share = 64
+# call_completions = 1024
+# call_timeout_secs = 60
+
 # ROOM SELECTION: three orthogonal axes (docs/ROADMAP.md, P2
 # "Konfigürasyon düzeltmesi" — Faz A):
 #

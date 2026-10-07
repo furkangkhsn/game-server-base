@@ -89,6 +89,10 @@ impl Config {
             max_detach_hold: self.max_detach_hold,
             afk_action: self.afk_action.unwrap_or(game.afk_action),
             input_rate: self.input_rate_over(game.input_rate),
+            call_share: self.call_share,
+            call_completions: self.call_completions,
+            call_timeout: (self.call_timeout_secs > 0.0)
+                .then(|| std::time::Duration::from_secs_f64(self.call_timeout_secs)),
             ..RoomConfig::default()
         };
         RoomTemplate {
@@ -111,6 +115,33 @@ impl Config {
     /// [`ServerHandle::open_room`]: crate::ServerHandle::open_room
     pub fn room_config(&self, id: u64) -> RoomConfig {
         self.room_template().room(id)
+    }
+
+    /// Refuse, before anything binds, call-table knobs no room can run
+    /// with (BACKLOG B155): a zero `call_share`, a `call_completions`
+    /// below 2 × `call_share` (SERVICES.md §19 S7), a `call_timeout_secs`
+    /// that is negative or not finite.
+    pub(crate) fn check_call_table(&self) -> Result<(), ServerError> {
+        if self.call_share == 0 {
+            return Err(ServerError::BadCallTable(
+                "`call_share` must be >= 1 (0 would refuse every call)".into(),
+            ));
+        }
+        let floor = 2 * self.call_share as usize;
+        if self.call_completions < floor {
+            return Err(ServerError::BadCallTable(format!(
+                "`call_completions` {} is below 2 x `call_share` ({floor}): a room's \
+                 answers could not all come back (SERVICES.md S7)",
+                self.call_completions
+            )));
+        }
+        if !self.call_timeout_secs.is_finite() || self.call_timeout_secs < 0.0 {
+            return Err(ServerError::BadCallTable(format!(
+                "`call_timeout_secs` {} must be finite and >= 0 (0 = off)",
+                self.call_timeout_secs
+            )));
+        }
+        Ok(())
     }
 
     /// Refuse, before anything binds, a `[rooms.<id>]` whose room the

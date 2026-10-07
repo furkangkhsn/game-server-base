@@ -285,6 +285,27 @@ pub struct Config {
     /// (`input_rate_hz`). Only with `input_rate_hz > 0` in the same table:
     /// alone, next to `input_rate_hz = 0`, or `0` refuses startup.
     pub input_burst: Option<u32>,
+    /// **The call table's share of a service** (`docs/SERVICES.md` §5.3,
+    /// BACKLOG B155) — every hosted room's `RoomConfig::call_share`: the
+    /// most calls one room (or shard) keeps in flight to ONE service; a
+    /// call past it ends `Refused(Share)` (`calls_refused_share`). Size a
+    /// service's mailbox ≥ rooms × share. `>= 1`. Default 64.
+    pub call_share: u32,
+    /// **The call table's completion channel** — every hosted room's
+    /// `RoomConfig::call_completions`: the services' answers on their way
+    /// back (an answer a full channel refuses is lost and counted at the
+    /// service, `replies_undeliverable_full`). Must be ≥ 2 ×
+    /// [`Self::call_share`] (SERVICES.md §19 S7 — the rule for a room
+    /// that calls ONE service; a room calling `n` services wants ≥ 2 ×
+    /// n × share), else startup is refused. Default 1024.
+    pub call_completions: usize,
+    /// **The call table's own deadline**, in seconds — every hosted
+    /// room's `RoomConfig::call_timeout` (SERVICES.md §19 S6, BACKLOG
+    /// B154): a game call unanswered this long after it left ends
+    /// `TimedOut` (`results_timed_out`), a backstop behind the service
+    /// host's own 30 s deadline. `0` = off (only the service's deadline
+    /// bounds a call). Finite, `>= 0`. Default 60.
+    pub call_timeout_secs: f64,
     /// **Per-room overrides** (`[rooms.<id>]`, BACKLOG B18): one room's
     /// own values for the room-level keys above (`tick_hz`,
     /// `room_control`, `conn_action`, `max_snapshot_bytes`,
@@ -778,6 +799,9 @@ impl Default for Config {
             // OFF: the number is the game's (or the operator's).
             input_rate_hz: None,
             input_burst: None,
+            call_share: 64,
+            call_completions: 1024,
+            call_timeout_secs: 60.0,
             rooms: std::collections::BTreeMap::new(),
             topology: None,
             communication: None,

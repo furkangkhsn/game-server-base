@@ -61,6 +61,7 @@ async fn start_inner(
     // (at boot it would only warn).
     cfg.check_room_keys()?;
     cfg.check_room_overrides()?;
+    cfg.check_call_table()?;
 
     // The push exporters (`[metrics]`): a table this build has no
     // exporter for, or a target the exporter refuses, refuses startup.

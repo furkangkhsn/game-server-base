@@ -118,6 +118,11 @@ pub enum ServerError {
     )]
     BadTickRate(f64),
 
+    /// The call-table knobs (`call_share`, `call_completions`,
+    /// `call_timeout_secs`; BACKLOG B155).
+    #[error("invalid call-table config: {0}")]
+    BadCallTable(String),
+
     #[error("invalid `http_listen` address `{0}`: {1}")]
     BadHttpListen(String, String),
 
