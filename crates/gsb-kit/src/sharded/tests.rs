@@ -20,6 +20,7 @@ use gsb_core::shard::{BorderRecord, ShardLogic, interleaved_id};
 use prost::Message;
 
 mod area;
+mod calls_actors;
 mod change_window;
 mod crystal;
 mod departing;
