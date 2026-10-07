@@ -29,6 +29,18 @@
 > `replay_diverged`/`replay_undecodable`/`records_written`/`records_dropped`
 > sayaçları. Sapmalar §20 "Faz 4 — uygulanan biçim"de.
 >
+> **Faz 5 uygulandı (tur q5):** ECS başına bir bağlayıcı crate —
+> `gsb-bevy-ecs` (`calls`: `GsbCalls` kaynağı + `lend`, `Svc<T>`,
+> `OwnerExt`/`EntityExt`, `owner_alive`) ve `gsb-hecs` (`calls`: uzantılar
+> + `owner_alive`); shipyard yalnız belge; `gsb-conformance` (yayınlanmaz)
+> aynı senaryonun ECS'siz, bevy_ecs ve hecs biçimlerinde aynı izi verdiğini
+> gerçek oda aktörüne karşı kanıtlar. Shard göçü çağrıları taşır
+> (`PlayerMigration.calls`, B152); açık `calls.bind` park + devamdan sağ
+> çıkar (B156, kayıt/tekrar dahil); boş `Reject` gerekçesi
+> `REJECTED_REASON` (B163); kit seam yolu gerçek shard aktörleriyle
+> sınandı (B168); yinelenen servis kaydı `RegisterError` (B169).
+> Sapmalar §20 "Faz 5 — uygulanan biçim"de.
+>
 > **Durum:** TASARIM — kullanıcı incelemesi bekliyor. Uygulama YOK; bu
 > turun çıktısı bu doküman ve `spikes/s0-calls` (gsb çalışma alanının
 > üyesi olmayan, motoru değiştirmeyen bir kanıt crate'i + `#[service]`
@@ -747,6 +759,8 @@ calls.import(pending, new_entity.to_owner());            // FLUSH'ta AYNI anahta
   checkpoint) oyun anahtarları checkpoint'e yazar.
 - Bu spike'ta `Exported` süreç içidir (bağlam `Box<dyn Any>`); süreçler
   arası göç bağlamın serileştirilmesini ister (§19 S8).
+- **Motorda (q5, B152):** shard göçü bunu kendisi yapar —
+  `PlayerMigration.calls`; ayrıntı §20 "Faz 5 — uygulanan biçim".
 
 ## 9. Her kaybı say: sayaçlar
 
@@ -1321,7 +1335,8 @@ somutlaşanlar:
   (iki argümanlı `service` ile aynı adı taşıyamazdı). Sunucusuz kullanım:
   `gsb_core::calls::Services` (aynı API, `into_stops`) ya da tek servis
   için `calls::spawn(served, setup) -> (Route, Service)`. Aynı tür iki
-  kez kaydedilirse panik (kompozisyon kökü hatası).
+  kez kaydedilirse panik (kompozisyon kökü hatası) — q5'ten beri
+  `Err(RegisterError::Duplicate)` (B169, Faz 5 notu).
 - **`Setup`:** `.timeout(d)` (tower; varsayılan süreyi değiştirir),
   `.concurrency_limit(n)`, `.load_shed()`, `.layer(l)`, `.mailbox(n)`
   (varsayılan 1024), `.no_timeout()`. **S6:** her servisin varsayılan
@@ -1536,6 +1551,69 @@ somutlaşanlar:
   `gsb-calls-bevy-ecs` (yalnız `bevy_ecs`: `GsbCalls`, uzantılar, oda
   biçimi) ve `gsb-calls-hecs`; kit dikişleri. (shipyard istenirse aynı
   birkaç satır.)
+
+**Faz 5 — uygulanan biçim (tur q5).** Tasarımdan farklar ve
+somutlaşanlar:
+
+- **Crate adları: ECS başına tek bağlayıcı** (KIT-ECS K10 önerisi (b)):
+  `gsb-bevy-ecs` ve `gsb-hecs`, her biri bir `calls` modülüyle (§5.5'teki
+  `gsb-calls-bevy-ecs`/`gsb-calls-hecs` adları yerine). Gerekçe: oyun
+  ECS'ini bir kez seçer; kit'in bağlayıcısı (KIT-ECS §5.9'un
+  `gsb-kit-bevy-ecs`/`gsb-kit-hecs`'i) aynı crate'e `kit` modülü olarak
+  katılır, crate sayısı yarıya iner; `gsb-ecs`'in `System`/`SystemRunner`'ı
+  da (KIT-ECS §5.7) `gsb-bevy-ecs`'in `systems` modülüne gidecek
+  (BACKLOG `q5:`). Bağımlılıklar: `gsb-core` + yalnız o ECS.
+  `cargo tree -p gsb-core` (tüm özelliklerle) hiçbir ECS crate'i göstermez.
+- **bevy_ecs:** tablo aktörün durumudur (Faz 1, A13), dünyanın değil.
+  `gsb_bevy_ecs::lend(world, calls, |w| schedule.run(w))` tabloyu
+  `GsbCalls` kaynağına takas eder ve koşudan sonra geri alır (iki
+  `mem::swap`; ilk çağrıda kaynak yedek bir tabloyla eklenir, sonra
+  tahsis yok) — sistemler `ResMut<GsbCalls>` ile `calls.call(..)` yazar.
+  `Svc<T>` istemci kaynağı (`Res<Svc<BankClient>>`). Oda biçimi
+  (spike'ın `BevyRoom`'u) yazılmadı: motorun `GameLogic`'i çok daha geniş;
+  oyun `update_with_calls`'ında `lend` çağırır.
+- **Sahip ⇄ varlık:** `owner.entity() -> Option<Entity>` (iki ECS'te de
+  `Option`; `Owner::ACTOR` hiçbir zaman varlık değildir — bitleri bevy'de
+  geçerli bir varlığa çözülse de), `e.to_owner()`, `owner_alive(world,
+  owner)` (`GameLogic::owner_alive` için). shipyard: `EntityId::inner` ⇄
+  `from_inner`, crate yok (K14).
+- **Kanıt (`crates/gsb-conformance`, yayınlanmaz):** kütüphanesi
+  ECS'sizdir (sözleşme, sahte banka, `Style` trait'i, `play` — gerçek
+  `RoomActor`'ı q4'ün `SimRoom`'uyla adımlar); ECS'li biçimler
+  `tests/calls_styles.rs`'tedir (ECS crate'leri yalnız dev-bağımlılık).
+  Aynı aktarım senaryosu (rezerv, BUSY çift tık, INSUFFICIENT, tek ücret,
+  `.answers`) üç biçimde bayt bayt aynı izi verir (cüzdanlar, istemci
+  cevapları, banka ücretleri, `CallCounts`). KIT-ECS'in
+  `gsb-kit-conformance` matrisi buraya katılabilir.
+- **Göç (B152, §8):** shard göçü `PlayerMigration.calls: Exported`
+  taşır. Kaynak, MIGRATE'te oturumun sahibinin (açık bağ, yoksa
+  `call_owner`) çağrılarını dışa alır; `calls_exported` yalnız gönderim
+  başarılınca sayılır (`take_owner` + `count_exported`), reddedilen
+  gönderimde çağrılar olduğu gibi geri konur (`restore`: gönderilmiş
+  olan bekleyen kümeye, taslak taslaklara; hiçbir şey sayılmaz). Hedef
+  CONTROL'de oyuncuyu kurduktan sonra **kendi** `call_owner`'ı (yoksa
+  oyuncu) altında `import` eder; çağrılar o tick'in FLUSH'ında aynı
+  anahtarla yeniden yayınlanır (idempotent servis: tek etki), sonuç
+  hedefte oyuna, `.answers` istemciye hedeften gider; kaynağa gelen geç
+  cevap `results_late`. Ölü bir katılımın göçü (ayrılış önce işlendi) ve
+  duran shard'da kalan göç taşıdıkları `.answers`'ı `requests_abandoned`
+  sayar. Yeni sayaç yok, tel değişmedi. Kit için ayrı iş gerekmedi:
+  `KitMig` `Clone` olduğundan `Exported`'ı taşıyamaz, ama çekirdek yol
+  kit'in `call_owner(world, player, entity)`'si ile çalışır (hedefte yeni
+  varlık sahibi) — `sharded/tests/calls_actors.rs` (B168) gerçek dört
+  shard aktörüyle bunu sınar.
+- **Açık bağ ve devam (B156):** park (`Detach::Hold`) oturumun cevap
+  borçlarını bırakır ama açık bağı tutar (`park_session`); devam bağı yeni
+  oturuma taşır (`resume_session`), oda ve shard aynı. Kayıtta iki yeni
+  girdi: `Input::SessionPark`, `Input::SessionMove` (dosya etiketleri 16,
+  17; eklemeli, `FORMAT_VERSION` değişmedi).
+- **B163:** `RpcReply::rejected` boş gerekçeyi `REJECTED_REASON`
+  (`"request rejected (no reason given)"`) yapar — eski `Reject("")` ve
+  `External`'ın `Err("")`'i; sayaç aynı (`requests_rejected_logic`).
+- **B169:** `Services::service` ve `RegistryParts::service`
+  `Result<&mut Self, RegisterError>` döner; yinelenen tür için hiçbir şey
+  başlatılmaz, ilk kayıt kalır.
+- Ertelenenler BACKLOG'da `q5:` satırları.
 
 **Faz 6 — olaylar turu** (§15'in yeniden tasarımı), sonra **istemci
 çekirdeği B28 + FFI** (C#, `Forget`, üretilmiş istemciler).

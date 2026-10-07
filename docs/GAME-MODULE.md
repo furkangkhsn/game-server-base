@@ -413,6 +413,29 @@ TEST modu: `SimRoom` + `Sim` (`Delay::ticks(n, ..)`, `Delay::never`),
 betikli istemciler; kayıt/tekrar: `record` özelliği, `RoomActor::with_record`,
 `Replay`.
 
+### 4.8 ECS bağlayıcıları ve çağrı tablosu (tur q5)
+
+Motor ECS'siz; ECS'li bir oyun tabloya ECS başına tek bağlayıcı crate
+üstünden ulaşır (`docs/SERVICES.md` §5.5, §20 "Faz 5 — uygulanan biçim"):
+
+- **bevy_ecs → `gsb-bevy-ecs`:** `update_with_calls`'ta
+  `gsb_bevy_ecs::lend(world, calls, |w| schedule.run(w))`; sistemler
+  `ResMut<GsbCalls>` ve `Res<Svc<BankClient>>` alır; sahip
+  `e.to_owner()` / `owner.entity()`; `owner_alive`'da
+  `gsb_bevy_ecs::owner_alive(world, o)`. Şemayı tek iş parçacıklı
+  yürütücüyle koşun.
+- **hecs → `gsb-hecs`:** sistemler düz fonksiyon (`&mut World, &mut
+  Calls, &BankClient`); aynı uzantılar ve `gsb_hecs::owner_alive`.
+- **ECS'siz:** `Owner(oyunun_id'si)`, `&mut Calls`.
+- Aynı oyunun üç biçimde aynı sonucu verdiğinin kanıtı ve örnek kodu:
+  `crates/gsb-conformance/tests/calls_styles.rs`.
+- **Sharded oyun:** göçen oyuncunun uçuştaki çağrıları kendiliğinden
+  taşınır; hedefte sonuç oyuncunun **hedefteki** sahibine
+  (`call_owner`) gelir — sahip varlıksa yeni varlık. Açık `calls.bind`
+  park ve devamdan sağ çıkar.
+- **Servis kaydı:** `parts.service(X::serve(..), |s| ..)` artık
+  `Result` döner (aynı tür ikinci kez → `RegisterError::Duplicate`).
+
 ## 5. Fazlar
 
 | Faz | Kapsam | Kapı |

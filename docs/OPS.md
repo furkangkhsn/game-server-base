@@ -81,6 +81,16 @@ açılmıyorlar (Prometheus/OTLP ailesi yok — BACKLOG `q2:` satırı);
 her çağrı `gsb.call` span'inde (`service`, `method`, `trace`) koşar ve
 gecikmesini DEBUG düzeyinde yazar.
 
+**Göç ve çağrılar (q5, B152).** Sharded odada göçen oyuncunun uçuştaki
+çağrıları `Migrate` ile taşınır: kaynak shard'ın satırında
+`calls_exported`, aynı çağrının oraya gelen geç cevabı `results_late`;
+hedef shard'ın satırında `calls_imported` ve çağrının yeniden gönderimi
+(`calls_sent`). Yani iki shard toplamında bir göç `calls_sent`'i bir
+artırır — servis anahtarla tekilleştirir (tek etki). Ölü bir katılımın
+ya da duran shard'ın taşıdığı istemci cevapları `requests_abandoned`.
+Yeni sayaç ve tel değişikliği yok. Gerekçesiz eski `Reject` artık
+istemciye `request rejected (no reason given)` der (B163).
+
 - **İstek başına tek geçersiz kılma `tick_hz`** (verilmezse odanın
   hızı: id'nin `[rooms.<id>]`'inde yazılıysa o, değilse sunucununki;
   doğrulama aynı: sonlu pozitif sayı değilse 400, registry'ye gitmez;
