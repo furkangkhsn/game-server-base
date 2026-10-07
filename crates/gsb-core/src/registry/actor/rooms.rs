@@ -81,6 +81,13 @@ where
                 if let Some(e) = actor.boot_error() {
                     return Err(e.clone());
                 }
+                // The input log (feature `record`, B170): this
+                // incarnation's own file.
+                #[cfg(feature = "record")]
+                let actor = match &self.record {
+                    Some(plan) if plan.records(id) => actor.with_record(plan.start(id, generation)),
+                    _ => actor,
+                };
                 let handle = tokio::spawn(actor.run());
                 Self::spawn_room_watcher(
                     id,
@@ -102,6 +109,13 @@ where
                 );
             }
             BuiltRoom::Sharded { shards, home_shard } => {
+                #[cfg(feature = "record")]
+                if self.record.as_ref().is_some_and(|p| p.records(id)) {
+                    tracing::warn!(
+                        room = id.0,
+                        "a sharded room is not recorded (BACKLOG B171): no input log"
+                    );
+                }
                 let n = shards.len();
                 debug_assert!(n >= 1, "a sharded room needs >= 1 shard");
                 // One channel per shard: the registry keeps the original

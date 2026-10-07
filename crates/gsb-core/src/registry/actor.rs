@@ -146,6 +146,10 @@ pub struct Registry<W, G, St, Sp> {
     /// death watcher keeps a clone until its room task ends, and the
     /// registry keeps this one until it exits. `None` = nobody waits.
     rooms_hold: Option<crate::service::Hold>,
+    /// What this registry records (feature `record`, B170; `None`: no
+    /// room records).
+    #[cfg(feature = "record")]
+    record: Option<crate::registry::RecordPlan>,
 }
 
 impl<W, G, St, Sp> Registry<W, G, St, Sp>
@@ -211,7 +215,18 @@ where
             retired: HashMap::new(),
             retired_order: VecDeque::new(),
             rooms_hold: None,
+            #[cfg(feature = "record")]
+            record: None,
         }
+    }
+
+    /// Record the rooms `plan` selects (feature `record`, B170): each
+    /// install of a selected single room writes its input log to a file
+    /// of its own on a writer thread (see [`crate::registry::RecordPlan`]).
+    #[cfg(feature = "record")]
+    pub fn with_record(mut self, plan: crate::registry::RecordPlan) -> Self {
+        self.record = Some(plan);
+        self
     }
 
     /// Flush the registry's local counters as a sample. Synchronous

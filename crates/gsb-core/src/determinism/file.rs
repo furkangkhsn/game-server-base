@@ -93,25 +93,29 @@ pub fn spawn_writer(
     path: PathBuf,
     mut inbox: Inbox<RecordMsg>,
 ) -> std::thread::JoinHandle<io::Result<WriterStats>> {
-    std::thread::spawn(move || {
-        let mut w = BufWriter::new(File::create(&path)?);
-        let mut stats = WriterStats::default();
-        let mut codecs: Option<Codecs> = None;
-        while let Some(msg) = inbox.blocking_recv() {
-            match msg {
-                RecordMsg::Start(header, c) => {
-                    w.write_all(&header_bytes(&header))?;
-                    codecs = Some(c);
-                }
-                RecordMsg::Tick(t) => match &codecs {
-                    Some(c) => write_frame(&mut w, &t, c, &mut stats)?,
-                    None => stats.frames_headless += 1,
-                },
+    std::thread::spawn(move || write_records(&path, &mut inbox))
+}
+
+/// [`spawn_writer`]'s body, on the calling thread (the registry's writer
+/// threads log its result).
+pub(crate) fn write_records(path: &Path, inbox: &mut Inbox<RecordMsg>) -> io::Result<WriterStats> {
+    let mut w = BufWriter::new(File::create(path)?);
+    let mut stats = WriterStats::default();
+    let mut codecs: Option<Codecs> = None;
+    while let Some(msg) = inbox.blocking_recv() {
+        match msg {
+            RecordMsg::Start(header, c) => {
+                w.write_all(&header_bytes(&header))?;
+                codecs = Some(c);
             }
+            RecordMsg::Tick(t) => match &codecs {
+                Some(c) => write_frame(&mut w, &t, c, &mut stats)?,
+                None => stats.frames_headless += 1,
+            },
         }
-        w.flush()?;
-        Ok(stats)
-    })
+    }
+    w.flush()?;
+    Ok(stats)
 }
 
 /// Read a log file. Outcomes stay encoded: the replaying table decodes

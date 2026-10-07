@@ -126,6 +126,9 @@ pub struct RegistryParts {
     /// The `#[service]` implementations hosted on tower (their routes,
     /// for [`Self::client`]); their stops go into `services`.
     pub(crate) hosted: Services,
+    /// What the registry records (`[record]`, feature `record`; B170).
+    #[cfg(feature = "record")]
+    pub(crate) record: Option<gsb_core::registry::RecordPlan>,
 }
 
 impl RegistryParts {
@@ -205,21 +208,25 @@ impl RegistryParts {
         St: Debug + Send + 'static,
         Sp: Debug + Clone + PartialEq + Send + 'static,
     {
-        let task = tokio::spawn(
-            Registry::new(
-                self.inbox,
-                self.self_mailbox,
-                factory,
-                self.ticker,
-                self.metrics,
-                self.max_connections,
-                self.max_unauth_conns,
-                self.result_sink,
-            )
-            .with_rooms_hold(self.rooms_hold)
-            .with_unauth_per_source(self.max_unauth_per_source)
-            .run(),
-        );
+        let registry = Registry::new(
+            self.inbox,
+            self.self_mailbox,
+            factory,
+            self.ticker,
+            self.metrics,
+            self.max_connections,
+            self.max_unauth_conns,
+            self.result_sink,
+        )
+        .with_rooms_hold(self.rooms_hold)
+        .with_unauth_per_source(self.max_unauth_per_source);
+        // The input logs `[record]` asks for (B170).
+        #[cfg(feature = "record")]
+        let registry = match self.record {
+            Some(plan) => registry.with_record(plan),
+            None => registry,
+        };
+        let task = tokio::spawn(registry.run());
         RegistryTask {
             _task: task,
             services: self.services,

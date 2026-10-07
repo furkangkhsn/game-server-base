@@ -49,6 +49,8 @@ mod actor;
 mod close;
 mod hub;
 mod msg;
+#[cfg(feature = "record")]
+mod record;
 mod result;
 mod seat;
 mod table;
@@ -57,6 +59,8 @@ pub use actor::Registry;
 pub use close::{CloseRequest, LeaveRequest};
 pub(crate) use close::{flush_close_requests, flush_despawn_reports, flush_leave_requests};
 pub use msg::RegistryMsg;
+#[cfg(feature = "record")]
+pub use record::{DEFAULT_RECORD_BUFFER, RecordPlan, RecordRooms};
 pub(crate) use result::send_match_result;
 pub use seat::Seat;
 

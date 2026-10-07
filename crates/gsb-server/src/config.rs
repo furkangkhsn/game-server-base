@@ -11,6 +11,9 @@ pub use axes::*;
 mod metrics;
 pub use metrics::{MetricsConfig, OtlpSection};
 
+mod record;
+pub use record::RecordSection;
+
 mod origin;
 pub use origin::ConfigOrigin;
 

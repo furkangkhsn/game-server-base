@@ -285,6 +285,19 @@ pub enum ServerError {
     )]
     TicketNotBuilt,
 
+    #[error(
+        "`[record]` is set but this gsb-server was built without input \
+             logs: rebuild with the `record` cargo feature, or remove the \
+             table (a recording the operator asked for is never silently \
+             skipped)"
+    )]
+    RecordNotBuilt,
+
+    /// A `[record]` table the server cannot serve (its directory, its
+    /// buffer).
+    #[error("invalid `[record]`: {0}")]
+    BadRecord(String),
+
     /// A `[ticket]` table the validator refuses; the reason never carries
     /// a character of a key.
     #[error("invalid `[ticket]`: {0}")]

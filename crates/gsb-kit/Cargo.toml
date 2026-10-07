@@ -30,6 +30,11 @@ prost = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 
+[features]
+# `record`: the core's input log (docs/SERVICES.md §10.1) — a game built
+# on the kit turns it on here without naming gsb-core (BACKLOG B170).
+record = ["gsb-core/record"]
+
 # The real-actor tests of the sharded team composite run the core's
 # registry and shard actors on a paused-clock runtime (`test-util`): the
 # ticker's sleeps auto-advance only when every actor is idle, so each

@@ -31,7 +31,7 @@ mod sim;
 mod tests;
 
 #[cfg(feature = "record")]
-mod file;
+pub(crate) mod file;
 #[cfg(feature = "record")]
 mod log;
 

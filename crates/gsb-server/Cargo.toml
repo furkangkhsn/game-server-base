@@ -45,6 +45,11 @@ otlp = ["gsb-core/otlp"]
 # (gsb-ticket, docs/TICKETS.md). Off by default: without it the table
 # refuses startup by name.
 ticket = ["dep:gsb-ticket"]
+# `record`: the `[record]` table records the selected rooms' input logs
+# (docs/SERVICES.md §10.1, BACKLOG B170; forwarded to gsb-core and, when
+# a game is built in, gsb-kit). Off by default: without it the table
+# refuses startup by name.
+record = ["gsb-core/record", "gsb-kit?/record"]
 
 [dependencies]
 tokio = { workspace = true }

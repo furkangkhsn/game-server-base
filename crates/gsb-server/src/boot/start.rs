@@ -21,6 +21,7 @@ pub use entry::*;
 mod export;
 pub(super) mod ops_door;
 mod pre_auth;
+mod record;
 use pre_auth::{handshake_bound_of, unauth_cap_of};
 mod ticket;
 
@@ -78,6 +79,12 @@ async fn start_inner(
     // principle as `resolve_listeners`).
     module.configure(&cfg.raw, &cfg)?;
     info!(game = module.name(), selection = %module.describe(), "game module configured");
+
+    // `[record]` (B170): the rooms whose input logs the registry writes;
+    // a table this build cannot serve, or a directory it cannot make,
+    // refuses startup.
+    #[cfg_attr(not(feature = "record"), allow(unused_variables))]
+    let record = record::plan(&cfg, module.name())?;
 
     // The rooms this server builds — boot, admin open, `room_config` —
     // from ONE template: the config's room-level keys over the game's
@@ -198,6 +205,8 @@ async fn start_inner(
         rooms_hold,
         services: Vec::new(),
         hosted: gsb_core::calls::Services::new(),
+        #[cfg(feature = "record")]
+        record,
     });
 
     // Pre-create rooms 1..=room_count (at the global rate, unless the

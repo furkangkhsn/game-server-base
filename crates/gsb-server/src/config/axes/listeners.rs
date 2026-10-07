@@ -717,6 +717,12 @@ pub struct Config {
     /// Absent (the default) = no validator from config; the caller's
     /// `ServerHooks::ticket`, or local auth.
     pub ticket: Option<toml::Table>,
+    /// `[record]` (BACKLOG B170, docs/SERVICES.md §10.1): the selected
+    /// rooms write their input log (`dir`, `rooms`, `game_version`,
+    /// `buffer`). Absent (the default) = nothing records. A build without
+    /// the `record` cargo feature refuses it by name
+    /// ([`ServerError::RecordNotBuilt`]).
+    pub record: Option<crate::config::RecordSection>,
     /// The game this server hosts (docs/GAME-MODULE.md §6 decision 3): the
     /// name of one of the games compiled into the build (cargo features;
     /// see `gsb_server::games::compiled_in`). Default `"demo"`, the 2D
@@ -837,6 +843,7 @@ impl Default for Config {
             http_route_timeout_secs: DEFAULT_HTTP_ROUTE_TIMEOUT_SECS,
             metrics: MetricsConfig::default(),
             ticket: None,
+            record: None,
             game: crate::games::DEFAULT_GAME.into(),
             raw: toml::Table::new(),
             origin: crate::config::ConfigOrigin::default(),

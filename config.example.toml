@@ -658,6 +658,25 @@ keepalive_hz = 1.0
 #replay_capacity = 100000
 #timeout_ms = 2000
 
+# ── Girdi kaydı: [record] (docs/SERVICES.md §10.1, BACKLOG B170) ────────
+# Seçilen odaların mantığa giren her girdisini (CONTROL kancaları, çağrı
+# sonları, okunan istekler ve aksiyonlar, dt, durum hash'i) tick başına
+# bir dosyaya yazar; dosya aynı oyuna karşı `gsb_core::determinism::
+# Replay` ile tekrar edilir (hile doğrulama, hata yeniden üretme). Her
+# oda enkarnasyonu kendi dosyasını alır: `<dir>/room-<id>-<nesil>.gsblog`
+# (yeniden kurulan oda yeni nesil). Tick dosyaya dokunmaz: kayıt
+# `buffer` kadar kayıtlık bir kanaldan ayrı bir yazar iş parçacığına
+# gider; dolu kanal kaydı düşürür ve sayar (`records_dropped`).
+# `rooms` yoksa her oda kaydedilir; sharded odalar kaydedilmez (uyarı,
+# BACKLOG B171). `game_version` her başlığa yazılır (varsayılan: oyunun
+# adı). Bu tablo yalnız `record` cargo feature'ıyla derlenmiş sunucuda
+# çalışır; feature'sız derlemede başlatmayı adıyla durdurur.
+#[record]
+#dir = "/var/lib/gsb/logs"
+#rooms = [1, 2]
+#game_version = "demo-1.0.0"
+#buffer = 4096
+
 # ── Hosted games' own tables ──────────────────────────────────────────
 # game = "arena", game = "mmo" and game = "war" read ONLY the table named
 # after them (a

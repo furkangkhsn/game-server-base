@@ -32,7 +32,7 @@ pub use boot::{
 };
 pub use config::{
     Communication, Config, ConfigError, ConfigOrigin, ListenerEntry, ListenerTransport,
-    MetricsConfig, OtlpSection, RoomOverride, ServerError, Topology, TransportKind,
+    MetricsConfig, OtlpSection, RecordSection, RoomOverride, ServerError, Topology, TransportKind,
     UdpCongestionKind, UdpSecurityKind, Visibility, ephemeral_udp_key, parse_udp_public_key,
     udp_key_hex,
 };
