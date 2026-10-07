@@ -194,6 +194,7 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
         }
     });
     let method_names = methods.iter().map(|m| m.name.to_string());
+    let call_names = methods.iter().map(|m| &m.call);
     let index_arms = methods.iter().enumerate().map(|(i, m)| {
         let call = &m.call;
         quote!(Bare::#call(_) => #i)
@@ -318,6 +319,11 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
                     match bare {
                         #(#index_arms),*
                     }
+                }
+                #[allow(clippy::needless_borrow, clippy::needless_borrows_for_generic_args)]
+                fn record_codecs(calls: &mut #calls::Calls) {
+                    use #krate::__private::record::{ViaNone as _, ViaWire as _};
+                    #((&&#krate::__private::record::Probe::<#call_names>::new()).register(calls);)*
                 }
             }
 

@@ -44,6 +44,60 @@ pub mod __private {
     //! What `#[service]`'s generated code needs besides [`crate::calls`].
     pub use crate::calls::{BoxError, BoxFuture};
     pub use tower;
+
+    pub mod record {
+        //! `ServiceKind::record_codecs`'s probe (BACKLOG B173): the macro
+        //! knows a method's `Response`/`Error` types but not whether they
+        //! have a wire form, so it asks per call type with autoref
+        //! dispatch — `(&&Probe::<C>::new()).register(calls)` resolves to
+        //! [`ViaWire`] when both are [`WireMessage`](crate::calls::WireMessage)s
+        //! (the codec is registered) and falls back to [`ViaNone`] (a
+        //! no-op) otherwise. Works on the concrete types the macro writes;
+        //! not for generic code.
+
+        use std::marker::PhantomData;
+
+        use crate::calls::{Call, Calls, WireMessage};
+
+        /// A call type, probed.
+        pub struct Probe<C>(PhantomData<fn() -> C>);
+
+        impl<C> Probe<C> {
+            /// The probe of `C`.
+            #[allow(clippy::new_without_default)]
+            pub const fn new() -> Self {
+                Self(PhantomData)
+            }
+        }
+
+        /// `C`'s outcomes have a wire form: register its codec.
+        pub trait ViaWire {
+            /// Register (a no-op without the `record` feature).
+            fn register(self, calls: &mut Calls);
+        }
+
+        impl<C> ViaWire for &&Probe<C>
+        where
+            C: Call<Response: WireMessage, Error: WireMessage>,
+        {
+            fn register(self, calls: &mut Calls) {
+                #[cfg(feature = "record")]
+                calls.record_as::<C>();
+                #[cfg(not(feature = "record"))]
+                let _ = calls;
+            }
+        }
+
+        /// `C`'s outcomes have no wire form: nothing to register.
+        pub trait ViaNone {
+            /// Nothing.
+            fn register(self, calls: &mut Calls);
+        }
+
+        impl<C> ViaNone for &Probe<C> {
+            fn register(self, _calls: &mut Calls) {}
+        }
+    }
 }
 
 pub mod auth;

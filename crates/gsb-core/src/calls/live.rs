@@ -83,6 +83,13 @@ pub trait ServiceKind: 'static {
     fn split(msg: Self::Msg) -> (Self::Bare, Reply);
     /// The index of a bare message's method in [`Self::METHODS`].
     fn method(bare: &Self::Bare) -> usize;
+    /// Cover in a log FILE (feature `record`) the outcomes of every
+    /// method whose `Response` and `Error` both have a wire form
+    /// ([`WireMessage`](crate::calls::WireMessage)); a method's outcome
+    /// without one is written missing (counted). `#[service]` generates
+    /// it (B173); a hand-written kind covers nothing. Called through
+    /// [`Calls::record_service`](crate::calls::Calls::record_service).
+    fn record_codecs(_calls: &mut crate::calls::Calls) {}
 }
 
 /// "`S` implements this service": how to build its tower router

@@ -217,6 +217,9 @@ fn a_generated_service_serves_in_test_mode_on_the_engines_clock() {
     let route = sim.served(8, Delay::ticks(2, Purse::serve(Fake)));
     let purse = PurseClient::from_route(route);
     let mut calls = Calls::default();
+    // Boot code needs no `cfg`: a no-op without the `record` feature
+    // (and `Purse`'s outcomes have no wire form anyway).
+    calls.record_service::<purse::Kind>();
     let mut m = RoomCounters::default();
     let alive = |_: Owner| true;
     calls.call(purse.spend(3)).with(1u8);

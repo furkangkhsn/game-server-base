@@ -456,6 +456,17 @@ impl Calls {
         self.clock = Some(at);
     }
 
+    /// Cover a `#[service]`'s calls in a log FILE (feature `record`;
+    /// without it a no-op, so boot code needs no `cfg`): every method
+    /// whose `Response` and `Error` both have a wire form gets its outcome
+    /// codec — what [`Self::record_as`] does for one call type, here for
+    /// the whole service (`calls.record_service::<inventory::Kind>()`).
+    /// Boot-time, like `accept`; a method without a wire form is written
+    /// missing (the writer's `outcomes_unencodable`).
+    pub fn record_service<K: crate::calls::ServiceKind>(&mut self) {
+        K::record_codecs(self);
+    }
+
     /// The table's knobs.
     pub fn config(&self) -> &CallsConfig {
         &self.cfg

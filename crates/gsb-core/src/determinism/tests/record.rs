@@ -479,3 +479,49 @@ fn a_recording_sim_room_hashes_once_per_step() {
     assert_eq!(HASHED.with(|n| n.get()), 10);
     assert_eq!(log.hashes(), hashes, "TEST mode keeps the recorded hash");
 }
+
+// B173: a generated service covers its wire-form calls itself.
+use crate::calls::CallCx;
+
+/// A wire-form answer.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct Receipt {
+    #[prost(uint64, tag = "1")]
+    pub total: u64,
+}
+/// A wire-form error.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VaultError {
+    #[prost(uint32, tag = "1")]
+    pub code: u32,
+}
+
+/// No wire form.
+#[derive(Clone, Debug)]
+pub struct Shelf;
+
+#[crate::service]
+pub trait Vault {
+    /// Wire-form outcomes (prost messages).
+    async fn deposit(&self, cx: &CallCx, price: u64) -> Result<Receipt, VaultError>;
+    /// No wire form (`Shelf` is a plain struct; `u64` and `String`
+    /// would have one — prost's wrapper messages).
+    async fn note(&self, cx: &CallCx, text: String) -> Result<Shelf, String>;
+}
+
+/// `calls.record_service::<vault::Kind>()` registers the outcome codec of
+/// every method whose `Response` and `Error` have a wire form, and skips
+/// the others (written missing, counted) — no `record_as` per type.
+#[test]
+fn a_generated_service_registers_its_wire_form_calls() {
+    let mut calls = crate::calls::Calls::default();
+    let deposit = std::any::type_name::<vault::Deposit>();
+    let note = std::any::type_name::<vault::Note>();
+    assert!(!calls.codecs().covers(deposit));
+    calls.record_service::<vault::Kind>();
+    assert!(
+        calls.codecs().covers(deposit),
+        "a wire-form call is covered"
+    );
+    assert!(!calls.codecs().covers(note), "the other is not");
+}
