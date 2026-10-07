@@ -28,6 +28,32 @@ pub enum Event {
     Settled(u64),
     /// The ledger ended on its stop message.
     Stopped,
+    /// The hosted `#[service]` (the audit) ended: its implementation
+    /// was dropped with its host task.
+    HostedStopped,
+}
+
+/// A `#[gsb_core::service]` hosted through `RegistryParts::service`: its
+/// stop must come after the rooms too (F5), like the hand-written one.
+#[gsb_core::service]
+pub trait Audit {
+    async fn note(&self, cx: &gsb_core::calls::CallCx, what: u64) -> Result<(), ()>;
+}
+
+struct AuditLog {
+    events: mpsc::Sender<Event>,
+}
+
+impl Audit for AuditLog {
+    async fn note(&self, _cx: &gsb_core::calls::CallCx, _what: u64) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+impl Drop for AuditLog {
+    fn drop(&mut self) {
+        let _ = self.events.try_send(Event::HostedStopped);
+    }
 }
 
 enum LedgerMsg {
@@ -131,10 +157,17 @@ impl GameModule for LedgerGame {
     fn spawn_registry(&self, mut parts: RegistryParts) -> RegistryTask {
         if self.deaf {
             let task = tokio::spawn(std::future::pending::<()>());
-            parts.service(Service::new("deaf", task, || {}));
+            parts.add_service(Service::new("deaf", task, || {}));
         }
         let (ledger, service) = ledger(self.events.clone());
-        parts.service(service);
+        parts.add_service(service);
+        parts.service(
+            Audit::serve(AuditLog {
+                events: self.events.clone(),
+            }),
+            |s| s,
+        );
+        let _audit: AuditClient = parts.client();
         let events = self.events.clone();
         let factory: RoomFactory<(), (), (), ()> =
             Arc::new(move |id: RoomId, _config| BuiltRoom::Single {

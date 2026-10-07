@@ -15,6 +15,9 @@ use std::hash::Hash;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use gsb_core::calls::{
+    AnyOutcome, BoxError, Dispatch, Served, ServiceClient, ServiceDef, Services, Setup,
+};
 use gsb_core::channel::{Inbox, Mailbox};
 use gsb_core::metrics::MetricsEvent;
 use gsb_core::registry::{MatchResult, Registry, RegistryMsg, RoomFactory};
@@ -47,8 +50,10 @@ pub trait GameModule: Send + Sync + 'static {
     /// Spawn the registry actor (and the game's services) through
     /// [`RegistryParts::spawn`] — the only way to obtain the returned
     /// [`RegistryTask`], so a module cannot forget the registry. A
-    /// service handed to [`RegistryParts::service`] first is stopped
-    /// explicitly by `ServerHandle::stop`, after the rooms.
+    /// service handed to [`RegistryParts::service`] (a `#[service]`
+    /// implementation) or [`RegistryParts::add_service`] (a hand-written
+    /// one) first is stopped explicitly by `ServerHandle::stop`, after
+    /// the rooms.
     fn spawn_registry(&self, parts: RegistryParts) -> RegistryTask;
 
     /// A one-line account of what was configured (the startup log).
@@ -101,7 +106,8 @@ pub trait GameModule: Send + Sync + 'static {
 /// server, consumed by the module's [`GameModule::spawn_registry`]. The
 /// fields stay private — a module can only hand them to
 /// [`RegistryParts::spawn`], unchanged — plus the game services the
-/// module registers on the way ([`RegistryParts::service`]).
+/// module registers on the way ([`RegistryParts::service`],
+/// [`RegistryParts::add_service`]).
 pub struct RegistryParts {
     pub(crate) inbox: Inbox<RegistryMsg>,
     pub(crate) self_mailbox: Mailbox<RegistryMsg>,
@@ -114,19 +120,73 @@ pub struct RegistryParts {
     pub(crate) result_sink: Option<Mailbox<MatchResult>>,
     /// The rooms' drop barrier token (the server keeps the waiter).
     pub(crate) rooms_hold: Hold,
-    /// The services registered so far (see [`Self::service`]).
+    /// The services registered so far, in registration order (see
+    /// [`Self::service`] and [`Self::add_service`]).
     pub(crate) services: Vec<Service>,
+    /// The `#[service]` implementations hosted on tower (their routes,
+    /// for [`Self::client`]); their stops go into `services`.
+    pub(crate) hosted: Services,
 }
 
 impl RegistryParts {
-    /// Register a game service for an explicit stop (BACKLOG F5,
-    /// DESIGN §9.2): `ServerHandle::stop` asks it to stop only after every
-    /// room and shard task has ended (their `on_shutdown` and
-    /// `match_result` ran, so what a room sent it on the way out is
-    /// already queued), then waits for it up to a deadline and aborts it
-    /// past that. Opt-in: a service never registered keeps its own life
-    /// (it ends when its last sender drops).
-    pub fn service(&mut self, service: Service) {
+    /// Host a `#[gsb_core::service]` implementation on tower
+    /// (`docs/SERVICES.md` §4.1): spawn it with the stack `setup` builds
+    /// (`|s| s.timeout(..).concurrency_limit(..).load_shed()`; a
+    /// [`DEFAULT_SERVICE_TIMEOUT`](gsb_core::calls::DEFAULT_SERVICE_TIMEOUT)
+    /// deadline unless the setup sets its own), and stop it like an
+    /// [`Self::add_service`] one — after the rooms (F5). Its clients come
+    /// from [`Self::client`].
+    ///
+    /// ```ignore
+    /// parts.service(Inventory::serve(PgInventory::new(db)), |s| s.timeout(Duration::from_secs(3)));
+    /// let inv: InventoryClient = parts.client();   // rooms (non-blocking)
+    /// let inv_h: InventoryHandle = parts.client(); // services, admin (awaitable)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// When a service of the same kind is already hosted.
+    pub fn service<K, S, L, F>(&mut self, served: Served<K, S>, setup: F) -> &mut Self
+    where
+        K: ServiceDef<S>,
+        S: Send + Sync + 'static,
+        F: FnOnce(Setup<tower::layer::util::Identity>) -> Setup<L>,
+        L: tower::Layer<K::Router>,
+        L::Service:
+            tower::Service<Dispatch<K::Bare>, Response = AnyOutcome> + Clone + Send + 'static,
+        <L::Service as tower::Service<Dispatch<K::Bare>>>::Future: Send,
+        <L::Service as tower::Service<Dispatch<K::Bare>>>::Error: Into<BoxError> + Send,
+    {
+        self.hosted.service(served, setup);
+        self.services.extend(self.hosted.take_stops());
+        self
+    }
+
+    /// A generated client of a hosted service (`InventoryClient` for
+    /// rooms, `InventoryHandle` for services and admin code).
+    ///
+    /// # Panics
+    ///
+    /// When the service is not hosted ([`Self::service`] first).
+    pub fn client<C: ServiceClient>(&self) -> C {
+        self.hosted.client()
+    }
+
+    /// [`Self::client`], `None` when the service is not hosted.
+    pub fn try_client<C: ServiceClient>(&self) -> Option<C> {
+        self.hosted.try_client()
+    }
+
+    /// Register a hand-written game service for an explicit stop
+    /// (BACKLOG F5, DESIGN §9.2): `ServerHandle::stop` asks it to stop
+    /// only after every room and shard task has ended (their
+    /// `on_shutdown` and `match_result` ran, so what a room sent it on
+    /// the way out is already queued), then waits for it up to a
+    /// deadline and aborts it past that. Opt-in: a service never
+    /// registered keeps its own life (it ends when its last sender
+    /// drops). (Before round q2 this was `service`; a `#[service]`
+    /// implementation goes through [`Self::service`].)
+    pub fn add_service(&mut self, service: Service) {
         self.services.push(service);
     }
 

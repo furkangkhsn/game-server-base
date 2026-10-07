@@ -3,7 +3,8 @@
 //! The game here is a test module whose rooms SETTLE with a ledger
 //! service on their way out: each room's `on_shutdown` blocks for a while
 //! (a long final settlement), then sends the ledger one message. The
-//! ledger is registered through `RegistryParts::service`, so
+//! ledger is registered through `RegistryParts::add_service` (and a hosted
+//! `#[service]` audit through `RegistryParts::service`), so
 //! `ServerHandle::stop` must (1) wait until every room has run that hook,
 //! (2) only then ask the ledger to stop — its stop message queues BEHIND
 //! the settlements, so all of them are served — and (3) return only after
@@ -69,12 +70,17 @@ async fn wait_running(handle: &gsb_server::ServerHandle) {
 }
 
 /// Every room's teardown, then every settlement it sent, then the
-/// ledger's stop — all recorded before `stop` returned.
+/// services' stops (the hand-written ledger's and the hosted audit's,
+/// in either order) — all recorded before `stop` returned.
 fn assert_settled_then_stopped(seen: &[Event]) {
-    assert_eq!(
-        seen.last(),
-        Some(&Event::Stopped),
-        "the ledger had not stopped when stop() returned: {seen:?}"
+    let stopped = seen.iter().position(|e| *e == Event::Stopped);
+    let hosted = seen.iter().position(|e| *e == Event::HostedStopped);
+    let (Some(stopped), Some(hosted)) = (stopped, hosted) else {
+        panic!("a service had not stopped when stop() returned: {seen:?}");
+    };
+    assert!(
+        stopped.min(hosted) == seen.len() - 2,
+        "the services stop last: {seen:?}"
     );
     for id in 1..=ROOMS {
         let down = seen.iter().position(|e| *e == Event::RoomDown(id));
@@ -84,7 +90,7 @@ fn assert_settled_then_stopped(seen: &[Event]) {
             "room {id}: teardown then settlement expected: {seen:?}"
         );
     }
-    assert_eq!(seen.len() as u64, 2 * ROOMS + 1, "{seen:?}");
+    assert_eq!(seen.len() as u64, 2 * ROOMS + 2, "{seen:?}");
 }
 
 /// Every wait in `stop` ended on its event, none at its grace: the accept
@@ -106,7 +112,7 @@ async fn the_service_serves_the_rooms_last_words_then_stops_before_stop_returns(
     let (report, _, seen) = run(false).await;
     assert_settled_then_stopped(&seen);
     assert_no_grace_ran_out_but_the_services(&report);
-    assert_eq!((report.services_ended, report.services_aborted), (1, 0));
+    assert_eq!((report.services_ended, report.services_aborted), (2, 0));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -114,7 +120,7 @@ async fn a_service_that_never_ends_is_aborted_and_stop_still_completes() {
     let (report, took, seen) = run(true).await;
     assert_settled_then_stopped(&seen);
     assert_no_grace_ran_out_but_the_services(&report);
-    assert_eq!((report.services_ended, report.services_aborted), (1, 1));
+    assert_eq!((report.services_ended, report.services_aborted), (2, 1));
     // The grace was given: a stall only lengthens `took`. "And no more"
     // is the report above — only the services' grace ran out.
     assert!(

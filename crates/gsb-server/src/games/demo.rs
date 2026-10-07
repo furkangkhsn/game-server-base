@@ -128,10 +128,14 @@ impl GameModule for DemoModule {
         // decision 11). Registered for the server's explicit stop
         // (BACKLOG F5): it is asked to stop only after every room ended,
         // so a purchase a room delegated on its way out is still answered.
-        let (economy, service) = gsb_demo::economy::EconomyService::start(
-            gsb_demo::economy::EconomyService::default_latency(),
+        // A `#[gsb_core::service]` trait hosted on tower (SERVICES.md
+        // §4.1); the rooms reach it through its awaitable client.
+        use gsb_demo::economy::{Economy, EconomyService, PriceList};
+        parts.service(
+            Economy::serve(PriceList::new(EconomyService::default_latency())),
+            |s| s.mailbox(EconomyService::mailbox()),
         );
-        parts.service(service);
+        let economy = EconomyService::from_handle(parts.client());
         let grace = s.disconnect_grace;
         // The sharded builds report one match result per shard through the
         // shared sink, under the logical room id (see `gsb_core::shard`).

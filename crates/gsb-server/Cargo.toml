@@ -56,6 +56,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 gsb-core = { workspace = true }
+# The `RegistryParts::service` bounds name tower's `Layer`/`Service`.
+tower = { workspace = true }
 gsb-ecs = { workspace = true }
 gsb-net = { workspace = true }
 gsb-protocol = { workspace = true }

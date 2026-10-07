@@ -196,6 +196,7 @@ async fn start_inner(
         result_sink: Some(result_tx.clone()),
         rooms_hold,
         services: Vec::new(),
+        hosted: gsb_core::calls::Services::new(),
     });
 
     // Pre-create rooms 1..=room_count (at the global rate, unless the
