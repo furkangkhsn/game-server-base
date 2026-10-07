@@ -277,7 +277,17 @@ where
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
         // Grid half: systems, shard-aware orphan stamping, border-cache
         // rebuild (positions just changed).
-        self.inner.step(world, ctx, None);
+        self.inner.step(world, ctx, None, None);
+        self.spatial_step(world, ctx);
+    }
+
+    fn update_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.inner.step(world, ctx, None, Some(calls));
         self.spatial_step(world, ctx);
     }
 
@@ -288,6 +298,25 @@ where
         req: &gsb_core::rpc::RpcRequest,
     ) -> Option<RequestDecision> {
         self.inner.handle_request(world, ctx, req)
+    }
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut gsb_core::calls::Calls,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        GameLogic::boot_calls(&mut self.inner, calls)
+    }
+
+    fn call_owner(
+        &self,
+        world: &World,
+        player: gsb_core::id::PlayerId,
+    ) -> Option<gsb_core::calls::Owner> {
+        GameLogic::call_owner(&self.inner, world, player)
+    }
+
+    fn owner_alive(&self, world: &World, owner: gsb_core::calls::Owner) -> Option<bool> {
+        GameLogic::owner_alive(&self.inner, world, owner)
     }
 
     fn match_result(&mut self, world: &mut World) -> Option<bytes::Bytes> {

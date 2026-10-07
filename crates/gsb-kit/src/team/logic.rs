@@ -247,27 +247,16 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        // One step: the delta ledgers' "previous step" and the tick the
-        // `private` seam stamps into one-shot fulls.
-        self.step += 1;
-        self.tick = ctx.tick;
-        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
+        self.tick_update(world, ctx, None);
+    }
 
-        // Orphan stamping (idempotent, mirrors the other rooms): entities
-        // with the codec's marker but no `WireId` get the next serial, so
-        // the broadcast set is exactly "has the marker" — structural,
-        // never silently invisible. Done before `rebuild` so
-        // freshly-stamped entities are in this tick's content.
-        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
-
-        self.rebuild(world);
-
-        // The tick's ONE change-window close (§4.4: the kit owns it; a
-        // game hook never calls it). This room reads no change filter
-        // itself, but the window is world-wide: without the close the
-        // removed-component buffers grow with every despawn for the
-        // room's lifetime (§8.3).
-        crate::common::close_change_window(world);
+    fn update_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.tick_update(world, ctx, Some(calls));
     }
 
     fn encoded_records(&mut self) -> u64 {
@@ -296,6 +285,59 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         self.game
             .handle_request(world, ctx, req, &self.player_entity)
     }
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut gsb_core::calls::Calls,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_calls(calls)
+    }
+
+    fn call_owner(
+        &self,
+        world: &World,
+        player: gsb_core::id::PlayerId,
+    ) -> Option<gsb_core::calls::Owner> {
+        self.game
+            .call_owner(world, player, self.player_entity.get(&player).copied())
+    }
+
+    fn owner_alive(&self, world: &World, owner: gsb_core::calls::Owner) -> Option<bool> {
+        self.game.owner_alive(world, owner)
+    }
 }
 
 impl<G: TeamGame, V: Vision> RoomLogic<World> for TeamRoom<G, V> {}
+
+impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
+    /// The tick's update (`GameLogic::update`), with the actor's call
+    /// table when it lent one (`update_with_calls`).
+    fn tick_update(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: Option<&mut gsb_core::calls::Calls>,
+    ) {
+        // One step: the delta ledgers' "previous step" and the tick the
+        // `private` seam stamps into one-shot fulls.
+        self.step += 1;
+        self.tick = ctx.tick;
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity, calls);
+
+        // Orphan stamping (idempotent, mirrors the other rooms): entities
+        // with the codec's marker but no `WireId` get the next serial, so
+        // the broadcast set is exactly "has the marker" — structural,
+        // never silently invisible. Done before `rebuild` so
+        // freshly-stamped entities are in this tick's content.
+        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
+
+        self.rebuild(world);
+
+        // The tick's ONE change-window close (§4.4: the kit owns it; a
+        // game hook never calls it). This room reads no change filter
+        // itself, but the window is world-wide: without the close the
+        // removed-component buffers grow with every despawn for the
+        // room's lifetime (§8.3).
+        crate::common::close_change_window(world);
+    }
+}

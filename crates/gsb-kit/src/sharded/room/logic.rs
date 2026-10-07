@@ -267,8 +267,18 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
         self.input.dropped(player);
     }
 
+    fn update_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.step(world, ctx, None, Some(calls));
+        crate::common::close_change_window(world);
+    }
+
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        self.step(world, ctx, None);
+        self.step(world, ctx, None, None);
         // The tick's ONE change-window close (§4.4, §8.3 — see
         // `TeamRoom::update`); the spatial composite runs `step` and
         // closes after its own dirty pass instead.
@@ -291,6 +301,26 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
     ) -> Option<RequestDecision> {
         self.game
             .handle_request(world, ctx, req, &self.player_entity)
+    }
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut gsb_core::calls::Calls,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_calls(calls)
+    }
+
+    fn call_owner(
+        &self,
+        world: &World,
+        player: gsb_core::id::PlayerId,
+    ) -> Option<gsb_core::calls::Owner> {
+        self.game
+            .call_owner(world, player, self.player_entity.get(&player).copied())
+    }
+
+    fn owner_alive(&self, world: &World, owner: gsb_core::calls::Owner) -> Option<bool> {
+        self.game.owner_alive(world, owner)
     }
 
     /// This shard's match result (the Faz 3 promotion; the per-shard

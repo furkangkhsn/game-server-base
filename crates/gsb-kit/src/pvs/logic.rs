@@ -218,36 +218,16 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
+        self.tick_update(world, ctx, None);
+    }
 
-        // Orphan stamping (idempotent, mirrors the other rooms): entities
-        // with the codec's marker but no `WireId` get the next serial, so
-        // the broadcast set is exactly "has the marker" — structural,
-        // never silently invisible. Done here (before the bucket build)
-        // so freshly-stamped entities are in the buckets the broadcast
-        // phase reads.
-        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
-
-        // Bucket the world by sector, once per tick (each entity exactly
-        // once); a sector's snapshot is the union of the buckets its
-        // visibility entry names. An entity without the map's position
-        // lands in the containment sector.
-        self.buckets.clear();
-        let codec = self.game.codec();
-        for (wire_id, item, pos) in self.placed.state(world).iter(world) {
-            let s = match pos {
-                Some(pos) => self.map.sector_of(pos),
-                None => self.map.outside(),
-            };
-            self.buckets
-                .entry(s)
-                .or_default()
-                .push((wire_id.get(), codec.wire(item)));
-        }
-
-        // The tick's ONE change-window close (§4.4, §8.3 — see
-        // `TeamRoom::update`).
-        crate::common::close_change_window(world);
+    fn update_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.tick_update(world, ctx, Some(calls));
     }
 
     fn encoded_records(&mut self) -> u64 {
@@ -293,6 +273,68 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         self.game
             .handle_request(world, ctx, req, &self.player_entity)
     }
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut gsb_core::calls::Calls,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_calls(calls)
+    }
+
+    fn call_owner(
+        &self,
+        world: &World,
+        player: gsb_core::id::PlayerId,
+    ) -> Option<gsb_core::calls::Owner> {
+        self.game
+            .call_owner(world, player, self.player_entity.get(&player).copied())
+    }
+
+    fn owner_alive(&self, world: &World, owner: gsb_core::calls::Owner) -> Option<bool> {
+        self.game.owner_alive(world, owner)
+    }
 }
 
 impl<G: Game, M: SectorMap> RoomLogic<World> for SectorRoom<G, M> {}
+
+impl<G: Game, M: SectorMap> SectorRoom<G, M> {
+    /// The tick's update (`GameLogic::update`), with the actor's call
+    /// table when it lent one (`update_with_calls`).
+    fn tick_update(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: Option<&mut gsb_core::calls::Calls>,
+    ) {
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity, calls);
+
+        // Orphan stamping (idempotent, mirrors the other rooms): entities
+        // with the codec's marker but no `WireId` get the next serial, so
+        // the broadcast set is exactly "has the marker" — structural,
+        // never silently invisible. Done here (before the bucket build)
+        // so freshly-stamped entities are in the buckets the broadcast
+        // phase reads.
+        crate::common::stamp_orphans(&mut self.orphans, &mut self.minter, world);
+
+        // Bucket the world by sector, once per tick (each entity exactly
+        // once); a sector's snapshot is the union of the buckets its
+        // visibility entry names. An entity without the map's position
+        // lands in the containment sector.
+        self.buckets.clear();
+        let codec = self.game.codec();
+        for (wire_id, item, pos) in self.placed.state(world).iter(world) {
+            let s = match pos {
+                Some(pos) => self.map.sector_of(pos),
+                None => self.map.outside(),
+            };
+            self.buckets
+                .entry(s)
+                .or_default()
+                .push((wire_id.get(), codec.wire(item)));
+        }
+
+        // The tick's ONE change-window close (§4.4, §8.3 — see
+        // `TeamRoom::update`).
+        crate::common::close_change_window(world);
+    }
+}

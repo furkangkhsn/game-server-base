@@ -184,6 +184,17 @@ impl<G: LitGame, S: CellSpace<Wire<G>>> GameLogic<World> for LitAoiRoom<G, S> {
         self.light_pass(world);
     }
 
+    /// [`Self::update`] with the actor's call table.
+    fn update_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.room.update_with_calls(world, ctx, calls);
+        self.light_pass(world);
+    }
+
     fn handle_request(
         &mut self,
         world: &mut World,
@@ -191,6 +202,25 @@ impl<G: LitGame, S: CellSpace<Wire<G>>> GameLogic<World> for LitAoiRoom<G, S> {
         req: &RpcRequest,
     ) -> Option<RequestDecision> {
         self.room.handle_request(world, ctx, req)
+    }
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut gsb_core::calls::Calls,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        GameLogic::boot_calls(&mut self.room, calls)
+    }
+
+    fn call_owner(
+        &self,
+        world: &World,
+        player: gsb_core::id::PlayerId,
+    ) -> Option<gsb_core::calls::Owner> {
+        GameLogic::call_owner(&self.room, world, player)
+    }
+
+    fn owner_alive(&self, world: &World, owner: gsb_core::calls::Owner) -> Option<bool> {
+        GameLogic::owner_alive(&self.room, world, owner)
     }
 }
 

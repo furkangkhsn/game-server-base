@@ -179,6 +179,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         world: &mut World,
         ctx: &TickCtx,
         mut seam: Option<&mut CrossSeam<'_, Wire<G>>>,
+        calls: Option<&mut gsb_core::calls::Calls>,
     ) {
         match seam.as_deref_mut() {
             Some(cross) => {
@@ -186,14 +187,26 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
                 self.departures.hide(world, own, cross);
                 let mut seam = Seam::new(cross, own, &self.departures, self.crystal.as_mut());
                 let game = &mut self.game;
-                crate::common::guard_change_window(world, |w| game.systems_seam(w, ctx, &mut seam));
+                match calls {
+                    Some(calls) => crate::common::guard_change_window(world, |w| {
+                        game.systems_seam_with_calls(w, ctx, &mut seam, calls)
+                    }),
+                    None => crate::common::guard_change_window(world, |w| {
+                        game.systems_seam(w, ctx, &mut seam)
+                    }),
+                }
                 // The game's hooks of the tick are over: the doomed copies
                 // are back for the passes below (and the border export).
                 self.departures.show(world);
             }
             None => {
                 let game = &mut self.game;
-                crate::common::guard_change_window(world, |w| game.systems(w, ctx));
+                match calls {
+                    Some(calls) => crate::common::guard_change_window(world, |w| {
+                        game.systems_with_calls(w, ctx, calls)
+                    }),
+                    None => crate::common::guard_change_window(world, |w| game.systems(w, ctx)),
+                }
             }
         }
         // The kicks the game asked for this tick (E8), to the core's verb:

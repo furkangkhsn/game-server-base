@@ -274,13 +274,16 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
-        // The tick's ONE change-window close (§4.4: the kit owns it; a
-        // game hook never calls it). This room reads no change filter
-        // itself, but the window is world-wide: without the close the
-        // removed-component buffers grow with every despawn for the
-        // room's lifetime (§8.3).
-        crate::common::close_change_window(world);
+        self.tick_update(world, ctx, None);
+    }
+
+    fn update_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.tick_update(world, ctx, Some(calls));
     }
 
     /// The game's request handlers ([`Game::handle_request`] — the demo:
@@ -295,6 +298,26 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
     ) -> Option<RequestDecision> {
         self.game
             .handle_request(world, ctx, req, &self.player_entity)
+    }
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut gsb_core::calls::Calls,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_calls(calls)
+    }
+
+    fn call_owner(
+        &self,
+        world: &World,
+        player: gsb_core::id::PlayerId,
+    ) -> Option<gsb_core::calls::Owner> {
+        self.game
+            .call_owner(world, player, self.player_entity.get(&player).copied())
+    }
+
+    fn owner_alive(&self, world: &World, owner: gsb_core::calls::Owner) -> Option<bool> {
+        self.game.owner_alive(world, owner)
     }
 
     /// The match result (the control plane's result seam, feature A):
@@ -324,3 +347,22 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
 // shared `GameLogic` supertrait above; this impl remains the compile-time
 // marker that OpenRoom targets the single-room actor.
 impl<G: Game> RoomLogic<World> for OpenRoom<G> {}
+
+impl<G: Game> OpenRoom<G> {
+    /// The tick's update (`GameLogic::update`), with the actor's call
+    /// table when it lent one (`update_with_calls`).
+    fn tick_update(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: Option<&mut gsb_core::calls::Calls>,
+    ) {
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity, calls);
+        // The tick's ONE change-window close (§4.4: the kit owns it; a
+        // game hook never calls it). This room reads no change filter
+        // itself, but the window is world-wide: without the close the
+        // removed-component buffers grow with every despawn for the
+        // room's lifetime (§8.3).
+        crate::common::close_change_window(world);
+    }
+}

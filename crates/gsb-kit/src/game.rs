@@ -24,6 +24,7 @@ use std::fmt::Debug;
 
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::auth::Joiner;
+use gsb_core::calls::{BootError, Calls, Owner};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::metrics::LogicCounters;
 use gsb_core::room::{Action, TickCtx};
@@ -239,6 +240,42 @@ pub trait Game: Send + 'static {
         false
     }
 
+    /// Boot: register the client requests this game takes through the
+    /// room's call table (`calls.accept::<R>()`, `calls.forward(..)` —
+    /// `docs/SERVICES.md` §5; the core's `GameLogic::boot_calls`,
+    /// forwarded by every kit room). Default: nothing claimed.
+    fn boot_calls(&mut self, _calls: &mut Calls) -> Result<(), BootError> {
+        Ok(())
+    }
+
+    /// [`Self::systems`] with the room's call table (`take_incoming`,
+    /// `calls.call(..)`, `take_resolved` — the core's
+    /// `GameLogic::update_with_calls`, forwarded by every kit room; the
+    /// sharded rooms call [`ShardGame::systems_seam_with_calls`] on the
+    /// seam path). Default: [`Self::systems`].
+    fn systems_with_calls(&mut self, world: &mut World, ctx: &TickCtx, _calls: &mut Calls) {
+        self.systems(world, ctx);
+    }
+
+    /// The owner a session's table requests are bound to (the core's
+    /// `GameLogic::call_owner`, forwarded by every kit room): `entity`
+    /// is the player's entity in this room, if it has one. Default: the
+    /// player itself (`Owner::from(player)`).
+    fn call_owner(
+        &self,
+        _world: &World,
+        player: PlayerId,
+        _entity: Option<Entity>,
+    ) -> Option<Owner> {
+        Some(player.into())
+    }
+
+    /// Does `owner` still exist (the core's `GameLogic::owner_alive`,
+    /// forwarded by every kit room)? `None`: the core's default test.
+    fn owner_alive(&self, _world: &World, _owner: Owner) -> Option<bool> {
+        None
+    }
+
     /// Answer an RPC request (`None` = not a request this game handles;
     /// the core answers "no handler"). `players` resolves the requester.
     fn handle_request(
@@ -397,6 +434,19 @@ pub trait ShardGame: Game {
         self.systems(world, ctx);
     }
 
+    /// [`Self::systems_seam`] with the shard's call table (the core's
+    /// `ShardLogic::update_seam_with_calls`, forwarded by every sharded
+    /// kit room). The default is `systems_seam`.
+    fn systems_seam_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        seam: &mut Seam<'_, '_, Wire<Self>>,
+        _calls: &mut Calls,
+    ) {
+        self.systems_seam(world, ctx, seam);
+    }
+
     /// Apply a remote effect a neighbour sent to `target`, this shard's
     /// entity (the kit resolved `effect.target` to it; the core already
     /// dropped duplicates, stale epochs and effects past the transport
@@ -431,3 +481,6 @@ pub use lit::LitGame;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod calls_tests;

@@ -105,7 +105,18 @@ where
 
     fn update_seam(&mut self, world: &mut World, ctx: &TickCtx, seam: &mut CrossSeam<'_, Wire<G>>) {
         // `update`'s two halves, the grid half through the seam.
-        self.inner.step(world, ctx, Some(seam));
+        self.inner.step(world, ctx, Some(seam), None);
+        self.spatial_step(world, ctx);
+    }
+
+    fn update_seam_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.inner.step(world, ctx, Some(seam), Some(calls));
         self.spatial_step(world, ctx);
     }
 

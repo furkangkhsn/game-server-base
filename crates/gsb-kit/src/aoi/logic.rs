@@ -342,7 +342,66 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
     }
 
     fn update(&mut self, world: &mut World, ctx: &TickCtx) {
-        crate::common::systems(&mut self.game, world, ctx, &self.player_entity);
+        self.tick_update(world, ctx, None);
+    }
+
+    fn update_with_calls(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+    ) {
+        self.tick_update(world, ctx, Some(calls));
+    }
+
+    /// The game's request handlers
+    /// ([`Game::handle_request`]), resolved
+    /// against this room's player→entity table. Every kit room forwards:
+    /// whether a room answers game RPCs does not depend on its
+    /// visibility strategy.
+    fn handle_request(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        req: &gsb_core::rpc::RpcRequest,
+    ) -> Option<gsb_core::rpc::RequestDecision> {
+        self.game
+            .handle_request(world, ctx, req, &self.player_entity)
+    }
+
+    fn boot_calls(
+        &mut self,
+        calls: &mut gsb_core::calls::Calls,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_calls(calls)
+    }
+
+    fn call_owner(
+        &self,
+        world: &World,
+        player: gsb_core::id::PlayerId,
+    ) -> Option<gsb_core::calls::Owner> {
+        self.game
+            .call_owner(world, player, self.player_entity.get(&player).copied())
+    }
+
+    fn owner_alive(&self, world: &World, owner: gsb_core::calls::Owner) -> Option<bool> {
+        self.game.owner_alive(world, owner)
+    }
+}
+
+impl<G: Game, S: CellSpace<Wire<G>>> RoomLogic<World> for AoiRoom<G, S> {}
+
+impl<G: Game, S: CellSpace<Wire<G>>> AoiRoom<G, S> {
+    /// The tick's update (`GameLogic::update`), with the actor's call
+    /// table when it lent one (`update_with_calls`).
+    fn tick_update(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: Option<&mut gsb_core::calls::Calls>,
+    ) {
+        crate::common::systems(&mut self.game, world, ctx, &self.player_entity, calls);
         // Orphan stamping (idempotent, mirrors `OpenRoom`): entities with
         // the codec's marker but no `WireId` get the next serial, so the
         // broadcast set is exactly "has the marker". It runs BEFORE the
@@ -397,21 +456,4 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         // game hook never calls it).
         crate::common::close_change_window(world);
     }
-
-    /// The game's request handlers
-    /// ([`Game::handle_request`]), resolved
-    /// against this room's player→entity table. Every kit room forwards:
-    /// whether a room answers game RPCs does not depend on its
-    /// visibility strategy.
-    fn handle_request(
-        &mut self,
-        world: &mut World,
-        ctx: &TickCtx,
-        req: &gsb_core::rpc::RpcRequest,
-    ) -> Option<gsb_core::rpc::RequestDecision> {
-        self.game
-            .handle_request(world, ctx, req, &self.player_entity)
-    }
 }
-
-impl<G: Game, S: CellSpace<Wire<G>>> RoomLogic<World> for AoiRoom<G, S> {}
