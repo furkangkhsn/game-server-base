@@ -1974,7 +1974,7 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `ev_received= ev_undecodable= ev_gaps= ev_missed= ev_stale=
   ev_restarted= ev_handled= ev_taken= ev_dropped_unread=
   ev_body_undecodable=`, sonra `ev_gapped_clients= chat_lines_rx=
-  friend_online_rx= friend_offline_rx= chat_lat_{p50,p99,max}_us=`
+  friend_online_rx= friend_offline_rx= item_granted_rx=` (demo ekonomisinin `ItemGranted`'ı, `--rpc-rate` ile; alınır ki kuyruğu doldurmasın) `chat_lat_{p50,p99,max}_us=`
   (itme → alma, istemci saatiyle; süreç içi aynı saat)
   `join_{p50,p99,max}_us=` (AUTH+JOIN → JOIN_ROOM_RESULT)
   `reg_probes= reg_busy= reg_gone= reg_rtt_{p50,p99,max}_us=` (registry

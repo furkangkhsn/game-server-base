@@ -8,7 +8,7 @@
 
 use bytes::Bytes;
 use gsb_client::events::{EventCounters, Events};
-use gsb_demo::game::{FriendOffline, FriendOnline};
+use gsb_demo::game::{FriendOffline, FriendOnline, ItemGranted};
 use gsb_protocol::FrameBody;
 use gsb_protocol::op;
 
@@ -27,6 +27,10 @@ pub(crate) struct EventTally {
     pub(crate) friend_online: u64,
     /// `FriendOffline` events taken.
     pub(crate) friend_offline: u64,
+    /// `ItemGranted` events taken (the economy's grant, on a run with
+    /// `--rpc-rate` beside the scenario): taken so they never fill the
+    /// queue.
+    pub(crate) item_granted: u64,
     /// Each chat line's push → receive latency, µs.
     pub(crate) chat_lat_us: Vec<u32>,
 }
@@ -39,6 +43,7 @@ impl EventTally {
         self.chat_lines += o.chat_lines;
         self.friend_online += o.friend_online;
         self.friend_offline += o.friend_offline;
+        self.item_granted += o.item_granted;
         self.chat_lat_us.extend_from_slice(&o.chat_lat_us);
     }
 }
@@ -73,6 +78,7 @@ impl EventsClient {
         }
         self.tally.friend_online += self.table.take::<FriendOnline>().len() as u64;
         self.tally.friend_offline += self.table.take::<FriendOffline>().len() as u64;
+        self.tally.item_granted += self.table.take::<ItemGranted>().len() as u64;
         if !self.table.take_gaps().is_empty() {
             self.tally.gapped = true;
         }

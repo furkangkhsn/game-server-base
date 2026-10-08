@@ -92,7 +92,7 @@ pub(crate) fn chat_lines(t: &ChatTotals) -> String {
     format!(
         "chat/presence: rate={}/s channels={} friends={} rooms={} | router: routed={:.0}/s client_legs={:.0}/s\n\
          client events: received={} gaps={} missed={} gapped_clients={} restarted={} stale={} \
-         dropped_unread={} undecodable={} | chat_lines={} friend_online={} friend_offline={}\n\
+         dropped_unread={} undecodable={} | chat_lines={} friend_online={} friend_offline={} item_granted={}\n\
          chat push->receive: p50={l50}us p99={l99}us max={lmax}us | join: p50={j50}us p99={j99}us max={jmax}us\n\
          {probe}",
         t.plan.rate,
@@ -112,6 +112,7 @@ pub(crate) fn chat_lines(t: &ChatTotals) -> String {
         t.tally.chat_lines,
         t.tally.friend_online,
         t.tally.friend_offline,
+        t.tally.item_granted,
     )
 }
 
@@ -129,7 +130,7 @@ pub(crate) fn chat_segment(t: &ChatTotals) -> String {
     let p = t.probe.clone().unwrap_or_default();
     let (r50, r99, rmax) = spread(&p.rtt_us);
     seg.push_str(&format!(
-        " ev_gapped_clients={} chat_lines_rx={} friend_online_rx={} friend_offline_rx={} \
+        " ev_gapped_clients={} chat_lines_rx={} friend_online_rx={} friend_offline_rx={} item_granted_rx={} \
          chat_lat_p50_us={l50} chat_lat_p99_us={l99} chat_lat_max_us={lmax} \
          join_p50_us={j50} join_p99_us={j99} join_max_us={jmax} \
          reg_probes={} reg_busy={} reg_gone={} reg_rtt_p50_us={r50} reg_rtt_p99_us={r99} \
@@ -138,6 +139,7 @@ pub(crate) fn chat_segment(t: &ChatTotals) -> String {
         t.tally.chat_lines,
         t.tally.friend_online,
         t.tally.friend_offline,
+        t.tally.item_granted,
         p.answered,
         p.busy,
         p.gone,

@@ -350,7 +350,7 @@ birbirine karışmaz:
   `game=`'den hemen önce — `chat_rate chat_channels friends rooms`,
   istemci tablolarının toplamı `ev_<sayaç>` (on `EventCounters` alanı),
   `ev_gapped_clients chat_lines_rx friend_online_rx friend_offline_rx
-  chat_lat_{p50,p99,max}_us join_{p50,p99,max}_us reg_probes reg_busy
+  item_granted_rx chat_lat_{p50,p99,max}_us join_{p50,p99,max}_us reg_probes reg_busy
   reg_gone reg_rtt_{p50,p99,max}_us routed_per_s client_legs_per_s`.
   Ölçüm ve bölme kararı: EVENTS §12 "e6 ölçümü".
 
