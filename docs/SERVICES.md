@@ -65,8 +65,8 @@
 > crate'lerinde (S3 kapandı).
 >
 > **Kapsam:** İSTEKLER (servis çağrıları + istemci istekleri). OLAYLAR
-> (sunucunun ittiği) bu turun dışında — s0 metni §15'te duruyor,
-> **sonraki tur, yeniden tasarlanacak**.
+> (sunucunun ittiği) ayrı dokümanda: **`docs/EVENTS.md`** (tur e0,
+> tasarım; §15 özetler).
 >
 > Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
@@ -88,8 +88,11 @@ determinizm sınırıdır: tick'e giren her şey kanonik sırayla kaydedilip
 REPLAY modunda servis çağırmadan aynen tekrar oynatılabilir.
 
 ```text
-CONTROL → RESPONSES → READ → (EVENTS, sonraki tur) → CONVERT → SYSTEMS → BROADCAST
+CONTROL → RESPONSES → READ → CONVERT → SYSTEMS → BROADCAST
 ```
+
+(Olaylar turu e0, `docs/EVENTS.md`: CONTROL → RESPONSES → **EVENTS** →
+READ → CONVERT → SYSTEMS → FLUSH → BROADCAST.)
 
 ---
 
@@ -120,7 +123,7 @@ bir oda türü + ikinci bir cevap yolu). s0b bunların üçünü de kaldırır.
 | 1 | **İki tanım kaynağı.** Süreç içi servisler: `#[gsb::service]` ile işaretli Rust trait'i (makro: metot başına çağrı tipi + `impl Call`, tower tabanlı yönlendirici, beklemeyen `XClient`, beklenebilir `XHandle`). İstemci-tel istekleri: `.proto` `service` blokları, `option (gsb.op) = N` (+ hata tipi) → üretilmiş `Request` impl'leri (ileride C#/TS/GDScript istemcileri). Trait ayrımı: `Call { Response; Error }` (süreç içi, op yok, tel yok) ve `Request: Call + WireMessage { const OP }`. Arayan kimliği istemci yükünden ASLA gelmez. | Oyun geliştiricinin kullanım temizliği birinci öncelik; makro tekrarı kaldırır. Süreç içi tipler protobuf olmak zorunda değil. |
 | 2 | **Çekirdekte ECS'ten bağımsız `Calls` tablosu** (bileşen değil, kapanış/devam değil, `Done` enum'u değil, bileşende yoklanan handle değil): `take_incoming`, `take_incoming_all`, `call(..).owner().with().answers()`, `take_resolved`, `in_flight`, `forward`, `export`/`import`. Owner opak `u64`; bevy_ecs/hecs yalnız minik bir `.entity()` uzantısı alır. bevy_ecs'te tablo şema boyunca bir `Resource` (adaptörün `GsbCalls` yeni tipi); hecs/ECS'siz oyunda `&mut Calls` geçilir. **Takip kararı: çekirdeğin hiçbir ECS bağımlılığı yoktur** (isteğe bağlı özellik arkasında bile); adaptörler ayrı, isteğe bağlı crate'lerdir. Söz konusu olan yalnız `bevy_ecs` crate'idir — Bevy oyun motoru asla. Alınmayan sonuç ve cevaplanmayan istek tick sonunda kapatılır ve sayılır. | Tek kavram, her ECS'te aynı; "her kaybı say". |
 | 3 | **Servisler cevaplar; çağıranlar yalnız okur ve temizler.** `Calls` tablosu + boşaltma noktası olan her aktör çağırabilir (oda bir türü; zamanlayıcı/admin görevi bir diğeri). **Hub YOK**: lobi bir odadır; her oyuncu her zaman bir odadadır ("ECS'te her şey birer oda"). | Tek programlama modeli, tek cevap yolu. |
-| 4 | Tick: **CONTROL → RESPONSES → READ → (EVENTS) → CONVERT → SYSTEMS → BROADCAST.** RESPONSES servis tamamlanmalarını READ'den önce tabloya boşaltır. | Girdi, dünyanın en güncel hâline karşı doğrulanır (s0 gerekçesi). |
+| 4 | Tick: **CONTROL → RESPONSES → READ → (EVENTS) → CONVERT → SYSTEMS → BROADCAST.** RESPONSES servis tamamlanmalarını READ'den önce tabloya boşaltır. (Tur e0 kararı: EVENTS RESPONSES ile READ arasına alındı — `docs/EVENTS.md` §2, §3.) | Girdi, dünyanın en güncel hâline karşı doğrulanır (s0 gerekçesi). |
 | 5 | **Determinizm** gerekli: geçmiş maçın hata ayıklama tekrarı, hile doğrulama (tekrar oynat + karşılaştır), izleme tekrarı, deterministik testler. Canlı zamanlama deterministik değildir; tekrar üretilebilirlik oda sınırında **kayıttan** gelir. `ctx.time()/dt()`, tohumlu `ctx.rng()`, deterministik çağrı anahtarları, opt-in girdi kaydı, REPLAY modu, deterministik TEST modu (`Delay::ticks(n, impl)` / `Delay::never`), tick başına durum hash kancası. Oda determinizm sınırıdır; oda dışı çağıranlar kaydedilmez. | Hata ayıklama ve hile doğrulama aynı makineyi ister. |
 | 6 | Sürümleme: op'lar asla yeniden kullanılmaz; çakışma boot'ta yakalanır; bilinmeyen op → motor "no handler". Gözlemlenebilirlik: çağrı anahtarı trace id taşır; servis katmanı metot başına span + gecikme yayar (OTLP ihracatçısı var). | |
 | 7 | Oyunun işi (motorun değil): yetkilendirme, istek başına hız sınırı, sayfalama. | "Motor, oyun değil." |
@@ -137,7 +140,7 @@ global ticker ──TickInfo──▶ oda aktörü (tek await)
                  türüne göre kovaya koy (take_resolved bekler)
    2  READ       üye kanallarından istekler → tablo: çözülür, tipine göre
                  kuyruğa (ya da `forward` kuralıyla doğrudan servise)
-  (3  EVENTS     sonraki tur)
+  (EVENTS      tur e0: RESPONSES ile READ arasında — docs/EVENTS.md §3)
    4  CONVERT    oyunun ilk sistemleri: take_incoming / aksiyonlar
    5  SYSTEMS    oyun; calls.call(..) yalnız tabloya yazar
       FLUSH      bu tick'in çağrıları sırayla gönderilir (try_send);
@@ -809,7 +812,8 @@ yalnız-.answers`.
 Her tick için, kanonik sırayla: `dt`; CONTROL girdileri; RESPONSES'ta
 teslim edilen her sonuç (`CallKey`, çağrı tipi, sonucun kopyası — geç
 gelenler yalnız anahtar); READ'in çektiği istekler (`ConnId`,
-`RpcRequest`); (EVENTS, sonraki tur). Başlıkta oda id'si ve **tohum**.
+`RpcRequest`); EVENTS'in aldıkları (`Input::Events`, docs/EVENTS.md §11).
+Başlıkta oda id'si ve **tohum**.
 Kayıt her tick'in durum hash'ini de tutar.
 
 Determinizmi sağlayan diğer parçalar:
@@ -993,77 +997,38 @@ try {
 protosunu Rust çekirdeği üzerinden konuşur; üretilmiş GDScript/TS
 istemcileri aynı `.proto`'dan.
 
-## 15. OLAYLAR (sistemin bize ittiği) — sonraki tur, yeniden tasarlanacak
+## 15. OLAYLAR (sistemin bize ittiği) → `docs/EVENTS.md`
 
-> **Bu bölüm s0 metnidir ve bu turda DEĞİŞTİRİLMEDİ** (yalnız hub'a
-> düşüş işaretlendi). s0b'nin kararlarıyla çelişen yerleri var (hub'a
-> düşüş, `on_events` kancası); olaylar bir sonraki turda `Calls`
-> tablosuyla aynı biçimde (`take_events::<E>()` benzeri) yeniden
-> tasarlanacak. Tick'teki yeri (READ ile CONVERT arası) korunuyor.
+> Tur e0 bu bölümün s0 metnini **yeniden tasarladı**; tasarımın tamamı
+> `docs/EVENTS.md`'de (kanıt: `spikes/e0-events`). s0 metninin
+> kaldırılan yerleri: WORLD itmesinin üyenin girdi kanalından gitmesi
+> (spam yapan istemci kendi itmelerini düşürüyordu), hub'a düşüş,
+> tipsiz `on_events` kancası.
 
-### 15.1 API (s0)
+Özet (ayrıntı ve gerekçeler EVENTS.md'de):
 
-```rust
-#[derive(Clone)]
-pub struct Pusher { /* yönlendiricinin kutusu */ }   // servislere kompozisyonda verilir
-pub enum Dest { Client, World }
-
-impl Pusher {
-    pub fn push<E: Event>(&self, identity: &str, dest: Dest, e: &E) -> Result<(), PushRefused>; // try_send
-    pub fn push_many<E: Event>(&self, identities: &[&str], dest: Dest, e: &E) -> Result<(), PushRefused>; // yük bir kez kodlanır
-}
-// Oda tarafı:
-fn on_events(&mut self, w, ctx, events: &mut Vec<PushIn>) {
-    for e in events.drain(..) { if let Some(b) = e.decode::<BalanceChanged>() { … } }
-}
-```
-
-Kimlik = doğrulanmış bilet kimliği (`ValidatedTicket.player`, TICKETS),
-registry'nin zaten tuttuğu `ConnInfo.identity`.
-
-### 15.2 Yönlendirme: iki hedef, tek yol (s0)
-
-```text
-servis ──Pusher.push──▶ [registry: kimlik → canlı oturum]
-                              │ yok → pushes_offline / ayrık (park) → pushes_world_parked
-                              ▼
-                     bağlantı aktörü (ConnIn::Push)
-             Dest::Client │                    │ Dest::World
-                          ▼                    ▼
-              PUSH karesi (kendi yolu)   üyelik kanalı (Inbound::Push) ──▶ READ ayırır ──▶ EVENTS
-              odanın haberi olmaz        oda yok → (s0: hub'a; s0b'de hub yok) pushes_world_no_room
-```
-
-**Neden `Dest::World` oturumun üyelik kanalından gider (oda başına
-ayrı bir itme kutusu yerine):** üyelik kanalı oturumu **yapısal olarak**
-izler — resume'da yarılar takas edilir, shard göçünde kanal oturumla
-birlikte taşınır. Oda başına kutu + "kimlik → oda" yönlendirmesi
-sharded odada çöker: registry oyuncunun hangi shard'da olduğunu bilmez
-(leave'i bugün tüm shard'lara yayınlıyor); yayın + "sahibi alır"
-yapılırsa geçiş anındaki itme hiçbir shard'a ait olmaz ve **sayılamaz**
-(N shard'ın her biri "bende değil" der). Oturum kanalı ise tam bir
-sayaç verir: dolu (`pushes_world_dropped_full`), kapalı
-(`pushes_world_dropped_closed`), bağsız oturum (`pushes_world_unbound`,
-`requests_dropped_unbound`'ın ikizi). Bedel: itme, istemcinin girdi
-kanalının kapasitesini paylaşır — kendi kanalını dolduran bir istemci
-kendi itmelerini düşürür (yalnız kendine zarar, sayılır). READ'de itme
-işareti istemcinin pull bütçesine sayılmaz.
-
-**Park edilmiş oyuncu** (oturumu yok, varlığı dünyada): ilk sürümde
-`Dest::World` itmesi `pushes_world_parked` olarak sayılır, teslim
-edilmez — otorite servistedir, resume'da oyun yeniden eşitler.
-
-**Çevrimdışı** teslim (kutu, davet saklama) motorun işi değil: servis
-saklar, oyuncu giriş yapınca oyun kendi isteğiyle çeker. Motor yalnız
-`pushes_offline` sayar.
-
-**Yetenek bayrağı.** Eski bir istemci `PUSH` opcode'unu bilmez; ona
-asla gönderilmez: `Auth.features` (yeni alan) `PUSH` bitini taşımayan
-bağlantıya `Dest::Client` itmesi `pushes_unsupported` olarak sayılır.
-
-**Neden yönlendirici registry (ilk sürüm):** kimlik→oturum tablosu
-zaten orada (auth/close olaylarıyla güncel). Risk: sohbet hacmi kontrol
-düzleminin kutusuna biner (join/leave gecikmesi). Ölç-sonra-böl.
+- **Tanım:** `message FriendOnline { option (gsb.event) = { op: 2003, to:
+  CLIENT }; … }` — hedef (`WORLD | CLIENT | BOTH`) tipin özelliği;
+  `gsb-build` `impl Event` + `WorldEvent`/`ClientEvent` işaretçisi üretir
+  (yanlış taraf derleme hatası); istek ve olay op'ları tek oyun bandı,
+  tek çakışma denetimi (EVENTS §4).
+- **Yayın:** `Publisher::{push, push_many, push_room, push_all}` — tek
+  `try_send`, yük bir kez kodlanır, tipli anlık ret (`RouterFull`,
+  `RouterGone`) (§5).
+- **Yönlendirme:** registry'nin kimlik → konum tablosu; her alıcının her
+  bacağı (yayıncı, kimlik, bacak) başına numaralanır; CLIENT bacağı
+  bağlantı aktörüne (`PUSH = 17` karesi, oda yolda yok), WORLD bacağı
+  odanın **kendi** sınırlı olay kutusuna (§6). Shard göçünde mezar taşı
+  + ileri gönderme + çit FIFO'yu korur (§7.3).
+- **Oda:** EVENTS fazı RESPONSES ile READ arasında; `Events` tablosu
+  `Calls`'ın ikizi (`accept`, `take::<E>()`, `take_all()`); alınmayan
+  olay tick sonunda atılır ve `events_untaken` sayılır (§3, §4).
+- **Motor olayları:** `EngineEvent` (Online, Offline, Joined, Left,
+  Parked, Resumed) servislere: `#[gsb(engine_events)]` metodu ya da
+  `parts.engine_events(..)` alıcısı (§5.4).
+- **Teslim ve sıra:** en-fazla-bir-kez, her kayıp adıyla (§9); FIFO yalnız
+  (yayıncı, kimlik, bacak) başına; olaylar ve cevaplar arasında sıra yok →
+  sürüm numaraları (§10). Olaylar kayıtlı girdilerdir (`Input::Events`, §11).
 
 ## 16. Tel değişiklikleri (eklemeli — DESIGN §5)
 
@@ -1082,7 +1047,7 @@ Neden bayrak (s0 bulgusu): varsayılan değerli bir proto3 hata mesajı
 sıfır bayta kodlanır; "yük boşsa motor reddi" kuralı onu yanlış okur.
 `PROTOCOL_VERSION` artmaz; eski istemci `game_error`'ı okumaz, `ok=false`
 görür. s0'ın `RpcRequest.target`/`RPC_RESP` önerileri hub'la birlikte
-düştü; `Push`/`PUSH`/`Auth.features` olaylar turunda.
+düştü; `Push`/`PUSH`/`Auth.features` olaylar turunda (docs/EVENTS.md §14).
 
 Oyun tarafı `.proto` için `gsb/options.proto`:
 
@@ -1680,5 +1645,6 @@ somutlaşanlar:
   başlatılmaz, ilk kayıt kalır.
 - Ertelenenler BACKLOG'da `q5:` satırları.
 
-**Faz 6 — olaylar turu** (§15'in yeniden tasarımı), sonra **istemci
-çekirdeği B28 + FFI** (C#, `Forget`, üretilmiş istemciler).
+**Faz 6 — olaylar turu**: tasarım `docs/EVENTS.md` (tur e0; plan e1–e6,
+§21), sonra **istemci çekirdeği B28 + FFI** (C#, `Forget`, `Event::Push`,
+üretilmiş istemciler).

@@ -1085,8 +1085,8 @@ tek `await`'li döngüler). `build.rs` `gsb-lint`'i koşar.
    shard kendi doğrudan bacaklarını bekletir, ileri gönderilmişleri hemen
    aktarır; giden çit gelen çitten sonra. İlk taslak (bekletilenleri
    göçte hemen ileri göndermek) iz sürülürken düştü: 3, 4 numaralılar
-   C'ye, A'nın hâlâ B üzerinden ilettiği 1, 2'den önce varırdı; test tam
-   bu en kötü sırayı koşar.
+   C'ye, A'nın hâlâ B üzerinden ilettiği 1, 2'den önce varır. Mutasyonla
+   doğrulandı: o taslağa dönünce test `[3, 4, 1, 2, 5]` görür.
 3. **Numara bacak başına olmalı** — yoksa istemci WORLD bacaklarını
    boşluk sanar.
 4. **EVENTS sahibi çözmek için kimlik → oyuncu eşlemi ister**; odada
