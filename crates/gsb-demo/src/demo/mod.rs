@@ -17,6 +17,7 @@ pub(crate) mod bot;
 pub mod codec;
 pub mod components;
 pub mod economy;
+pub mod friends;
 pub(crate) mod input;
 pub mod migrate;
 pub mod op;

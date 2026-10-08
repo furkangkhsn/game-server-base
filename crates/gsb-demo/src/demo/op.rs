@@ -52,3 +52,11 @@ pub const ECONOMY: u16 = 1006;
 /// space with the request ops above — `gsb-build` refuses a number both
 /// take.
 pub const ITEM_GRANTED: u16 = 1007;
+
+/// Event op: `FriendOnline` (`to: CLIENT`, round e4) — the friends
+/// service's (`gsb_demo::friends`) "a friend came online".
+pub const FRIEND_ONLINE: u16 = 1008;
+
+/// Event op: `FriendOffline` (`to: CLIENT`, round e4) — "a friend went
+/// offline (or parked)".
+pub const FRIEND_OFFLINE: u16 = 1009;

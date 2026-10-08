@@ -194,6 +194,23 @@ message ItemGranted {
   uint64 version = 2;
 }
 
+// Events (round e4, docs/EVENTS.md §8.3; ops FRIEND_ONLINE = 1008,
+// FRIEND_OFFLINE = 1009): the demo's friends service (`gsb_demo::friends`)
+// turns the engine's presence events into these, pushed to the friends
+// who are online. `to: CLIENT`: no room ever sees them (a `gsb.base.Push`
+// frame straight to the connection).
+message FriendOnline {
+  option (gsb.event) = { op: 1008, to: CLIENT };
+  // The friend who came online (or resumed), by identity.
+  string who = 1;
+}
+
+message FriendOffline {
+  option (gsb.event) = { op: 1009, to: CLIENT };
+  // The friend who went offline (or parked), by identity.
+  string who = 1;
+}
+
 // Client → server (RPC inner op ECONOMY = 1006): "buy item `kind`". The
 // demo's EXTERNAL-I/O request kind: the answer requires a round trip to
 // the in-process economy service (the reference adapter for delegated

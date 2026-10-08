@@ -341,3 +341,39 @@ fn the_generated_event_contract_matches_the_demo_ops() {
     assert_eq!(body.to_wire(), body.encode_to_vec());
     assert_eq!(ItemGranted::from_wire(&body.to_wire()), Ok(body));
 }
+
+/// The friends service's events (round e4): `to: CLIENT` (a
+/// `ClientEvent`, and no `WorldEvent` — a room cannot take them), at the
+/// demo's ops, in the game band, distinct from every other op.
+#[test]
+fn the_friend_events_are_client_events_at_the_demo_ops() {
+    use gsb_demo::game::{FriendOffline, FriendOnline};
+    use gsb_protocol::event::{ClientEvent, Dest};
+    fn client<E: ClientEvent>() -> (u16, Dest) {
+        (E::OP, E::TO)
+    }
+    assert_eq!(
+        client::<FriendOnline>(),
+        (gsb_demo::op::FRIEND_ONLINE, Dest::Client)
+    );
+    assert_eq!(
+        client::<FriendOffline>(),
+        (gsb_demo::op::FRIEND_OFFLINE, Dest::Client)
+    );
+    let ops = [
+        gsb_demo::op::MOVE_TO,
+        gsb_demo::op::WORLD_SNAPSHOT,
+        gsb_demo::op::PRIVATE,
+        gsb_demo::op::ABILITY,
+        gsb_demo::op::ECONOMY,
+        gsb_demo::op::ITEM_GRANTED,
+        gsb_demo::op::FRIEND_ONLINE,
+        gsb_demo::op::FRIEND_OFFLINE,
+    ];
+    let mut seen = std::collections::HashSet::new();
+    for op in ops {
+        assert!(op >= gsb_protocol::op::GAME_BAND_START);
+        assert!(!gsb_demo::op::RETIRED.contains(&op));
+        assert!(seen.insert(op), "op {op} once");
+    }
+}

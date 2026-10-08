@@ -59,7 +59,7 @@ mod demo;
 /// composes it (the B21 lobby example wraps it to spawn by the ticket's
 /// verified claims — `examples/lobby`).
 pub use demo::play::DemoGame;
-pub use demo::{economy, game, op, register, systems};
+pub use demo::{economy, friends, game, op, register, systems};
 pub use gsb_kit::DEFAULT_DISCONNECT_GRACE;
 
 /// The demo rooms' constructors (`OpenRoom::new()`,
