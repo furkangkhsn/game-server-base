@@ -7,7 +7,7 @@
 
 Sen gsb ("game-server-base") Rust workspace'inde çalışacaksın:
 `/home/furkangkhsn/Documents/Projects/Self/game-server-base`. Branch: main.
-2053 test yeşil (4 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
+2180 test yeşil (14 ignored: doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası), clippy 0 uyarı, ağaç temiz. Görevin, sözleşmeli turları
 devam ettirmek ve disiplini korumak.
 
 Teknik borç turu (CHANGELOG "teknik borç turu") üç borcu kapattı ve
@@ -339,6 +339,15 @@ feature'lı `[ticket]` tablosu. Oyun talepleri `Joiner::claims` (bayt, JSON)
 olarak katılım kancalarına gelir. `HomeShard` artık `Arc<dyn HomeRoute>`
 (eski kapanışlar derleniyor). Lobi örneği: `cargo run -p gsb-example-lobby`.
 B22 kullanıcı kararıyla kapsam dışı. Açık: B134–B139.
+
+**İstek sistemi tamam (s0–q6)** (CHANGELOG "s0–q6", `docs/SERVICES.md`):
+`gsb_core::calls` (tablo, `#[gsb_core::service]`, `calls::live` tower
+sunucusu), `gsb-build` + `gsb/options.proto`, `gsb_client::requests`,
+`gsb_core::determinism` + `record` özelliği, `gsb-bevy-ecs`/`gsb-hecs`
+bağlayıcıları, `gsb-conformance`. Kural: işlevler ECS-bağımsız
+(`docs/KIT-ECS.md`, kit uygulaması bekliyor). Sıradaki: olaylar (EVENTS)
+tasarımı, kit P1–P6, B28 istemci çekirdeği + FFI. Açık: B158, B162,
+B165–B167, B171, B172, B176, B178–B189.
 
 **f104 tamam** (CHANGELOG "f104"): B104 kapandı — `udp_congestion`
 varsayılanı `"pace"` (`UdpCongestion`, `UdpTransportConfig`, sunucu
@@ -1063,6 +1072,6 @@ aynı yüzeyi koru (politika / veto testleri altısını birden sürüyor:
 Her turdan sonra: `cargo fmt --all --check` → temiz;
 `CARGO_HOME=$PWD/.cargo cargo clippy --workspace
 --all-targets -- -D warnings` → 0 uyarı; `CARGO_HOME=$PWD/.cargo cargo test
---workspace` → tamamen yeşil (bugün itibarıyla 2053 passed, 4 ignored);
+--workspace` → tamamen yeşil (bugün itibarıyla 2180 passed, 14 ignored);
 `cargo run --release -p gsb-server --bin gsb-loadgen -- 50 --duration 3`
 → left=50, errors=0, panic yok.

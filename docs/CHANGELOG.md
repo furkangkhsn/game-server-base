@@ -5,6 +5,54 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## s0–q6 — Servis çağrıları ve istek sistemi; k0 — ECS-bağımsız kit tasarımı (`docs/SERVICES.md`, `docs/KIT-ECS.md`)
+
+- **Tasarım (kullanıcıyla, 2026-10-04…07; s0, s0b):** motor servis
+  tanımlamaz; tek genel mekanizma. Süreç içi servis = `#[gsb_core::service]`
+  trait'i; istemci istekleri = `.proto` `service` + `option (gsb.op)`.
+  Her çağıranın kendi senkron `Calls` tablosu (aktör değil, A13), ECS'ten
+  bağımsız; cevabı servis üretir, çağıran okur ve temizler; hub yok (lobi
+  de bir oda). Tick: CONTROL → RESPONSES → READ → CONVERT → SYSTEMS →
+  FLUSH → BROADCAST. Kural: tüm işlevler ECS-bağımsız, ECS bağımlılıkları
+  yalnız bağlayıcı paketlerde.
+- **q1 — çekirdek:** `gsb_core::calls` (`call().owner().with().answers()`,
+  `take_incoming`/`_all`, `take_resolved`, `in_flight`, `forward`,
+  `bind`, `export`/`import`), oda ve shard'da tek ortak istek fazı kodu,
+  `Owner` (`gsb_core::owner`), 24 `CallCounts` sayacı; tel değişmedi.
+- **q2 — servis tarafı:** `gsb-macros` (`#[service]`: çağrı tipleri,
+  tower yönlendirici, beklemeyen `XClient`, beklenebilen `XHandle`),
+  `calls::live` tower sunucusu (timeout/concurrency/load_shed, varsayılan
+  30 sn, span + gecikme), tablo tarafı süre süpürmesi, demo ekonomisi
+  `#[service]`, kit kanca iletimi, `CoreError::RoomBoot`,
+  `call_share`/`call_completions`/`call_timeout_secs` ayarları.
+- **q3 — `.proto` istekleri:** sözleşme `gsb_protocol::request`'te,
+  `gsb/options.proto`, `gsb-build` (prost-build üstünde kod üretimi, op
+  çakışma/ayrılmış/motor aralığı denetimi), `RpcResponse.game_error = 6`
+  (eklemeli, `PROTOCOL_VERSION` 1), `gsb_client::requests` tipli istemci.
+- **q4 — determinizm:** `TickCtx { time, rng }`, tohumdan çağrı anahtarı,
+  `state_hash`, TEST kipi (`Sim`/`SimRoom`/`Delay`), `record` özelliği
+  (girdi kaydı, dosya, `Replay`, `replay_diverged`).
+- **q5 — bağlayıcılar ve göç:** `gsb-bevy-ecs`, `gsb-hecs` (`calls`
+  modülü), `gsb-conformance` (aynı oyun ECS'siz/bevy_ecs/hecs → aynı iz),
+  shard göçü yoldaki çağrıları taşır (aynı anahtar, tek etki), açık bağ
+  devamda korunur, çift servis kaydı hata.
+- **q6 — bağlama:** servis sayaçları metrik (`gsb_service_*`), loadgen
+  RESULT ve RPC kipi tipli istemcide, `[record]` ayarı, TEST kipinde
+  son tarihler sim saatinde, tekrar kabul/bırakma cevaplarını da
+  karşılaştırır; kayıt testlerinin aralıklı düşmesinin kök nedeni
+  düzeltildi.
+- **k0 — kit tasarımı:** kit'in ECS temas noktaları yedi dikişte; AOI
+  hızlı yolu ECS'siz çekirdek + bevy_ecs bağlayıcısıyla bugünkü hızda
+  (hecs `Tracked<T>` + `KitWorld` ile de). Uygulama (P1–P6) kullanıcı
+  onayını bekliyor.
+- Loadgen metrik teli GSNS → GSNV (GSNT q1, GSNU q4, GSNV q6).
+
+Testler 2053 → 2180 (`otlp` ile 2198; `record` ile gsb-core + gsb-server
+1147), 14 ignored (4 `#[ignore]` + 10 derlenmeyen doc örneği). Her turda
+ebeveyn mutasyonu yakalandı; q2'de asılı kalan bir test süreyle sınırlandı.
+Tam kapılar yeşil (fmt, clippy otlp+record, test, özellik matrisi, doc,
+gsb-core'da ECS bağımlılığı 0).
+
 ## f104 — B104 kapandı: `udp_congestion` varsayılanı `"pace"` (`net/f104-pace-default`)
 
 - **Ölçüm (kullanıcı, 2026-10-03, `rudp-jitter.sh`, tur 5 koduyla,
