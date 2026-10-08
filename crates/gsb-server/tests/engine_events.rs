@@ -120,7 +120,10 @@ async fn a_hosted_service_and_a_plain_receiver_hear_a_client_come_and_go() {
         identity: me.clone(),
     };
     assert_eq!(got, [("Watch", online.clone()), ("audit", online)]);
-    let now = presence.of(std::slice::from_ref(&me)).await.expect("answered");
+    let now = presence
+        .of(std::slice::from_ref(&me))
+        .await
+        .expect("answered");
     assert_eq!(now[0].state, PresenceState::Live);
 
     drop(conn);

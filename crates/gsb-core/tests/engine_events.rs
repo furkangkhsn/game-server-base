@@ -48,6 +48,8 @@ fn factory() -> RoomFactory<(), (), (), ()> {
             serial: 0,
             park: id == PARKS,
             seen: seen.clone(),
+            neighbors: Vec::new(),
+            hops: Default::default(),
         }) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
     })
 }
