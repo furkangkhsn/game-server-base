@@ -87,7 +87,7 @@ impl Game for DemoGame {
     }
 
     /// [`Self::spawn_player`], the entity stamped with the player's
-    /// identity ([`Account`]) when the session has one.
+    /// identity (`Account`) when the session has one.
     fn spawn_player_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Entity {
         let entity = self.spawn_player(world, conn);
         stamp_account(world, entity, identity);
@@ -131,7 +131,7 @@ impl Game for DemoGame {
         events.accept::<ItemGranted>()
     }
 
-    /// The tick's grants first (the buyer's [`Granted`]), then the
+    /// The tick's grants first (the buyer's `Granted`), then the
     /// systems.
     fn systems_with_events(
         &mut self,
@@ -164,7 +164,7 @@ impl TeamGame for DemoGame {
         spawn::team_of(conn)
     }
 
-    /// The team spawn, stamped with the player's identity ([`Account`]).
+    /// The team spawn, stamped with the player's identity (`Account`).
     fn spawn_team_player_as(
         &mut self,
         world: &mut World,
@@ -186,7 +186,7 @@ fn stamp_account(world: &mut World, entity: Entity, identity: &str) {
     }
 }
 
-/// Count each grant on the entity whose [`Account`] it is addressed to;
+/// Count each grant on the entity whose `Account` it is addressed to;
 /// a grant no newer than the entity's last is a duplicate. A grant for
 /// an identity this world holds no entity of (it left this tick) or a
 /// room-wide one (the demo pushes none) has no buyer here.
