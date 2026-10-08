@@ -323,7 +323,9 @@ mod services;
 /// counters, the router's after the registry section, the connections'
 /// PUSH frames after the server closes, and the publishing handles
 /// after the services (`codec/events.rs`).
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E57;
+/// GSNX = the GSNW layout with the migration fence's counters (round
+/// e3): nine more per room's event table, four more in the router's.
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E58;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
