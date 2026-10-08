@@ -328,10 +328,9 @@ mod services;
 /// after the services (`codec/events.rs`).
 /// GSNX = the GSNW layout with the migration fence's counters (round
 /// e3): nine more per room's event table, four more in the router's.
-/// Round e4 appends the engine-event subscribers after the publishing
-/// handles (`codec/events.rs`, `docs/EVENTS.md` §5.4); the magic moves
-/// to the next free one (GSNY) when the round merges.
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E58;
+/// GSNY = the GSNX layout plus the engine-event subscribers after the
+/// publishing handles (round e4: `codec/events.rs`, `docs/EVENTS.md` §5.4).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E59;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
