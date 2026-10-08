@@ -81,9 +81,20 @@ fn a_purchase_grants_the_item_to_the_buyer() {
             ))
         );
     }
-    assert_eq!(grants.stats().counts().events_pushed, 2);
-    let pushes = sim.pushes();
-    assert_eq!(pushes.len(), 2);
+    // A grant no newer than the last (a duplicate) counts nothing.
+    let alice_id = gsb_core::calls::Identity::new("alice");
+    let again = ItemGranted {
+        kind: "potion".into(),
+        version: 2,
+    };
+    grants.push(&alice_id, &again).expect("pushed");
+    room.tick(&mut sim);
+    room.tick(&mut sim);
+    assert_eq!(granted(&room).map(|(_, g)| g.items), Some(2), "a duplicate");
+    let c = room.event_counts();
+    assert_eq!((c.events_admitted, c.events_taken), (3, 3), "{c:?}");
+    assert_eq!(grants.stats().counts().events_pushed, 3);
+    let pushes = &sim.pushes()[..2];
     for (i, p) in pushes.iter().enumerate() {
         assert_eq!((p.op(), p.dest()), (op::ITEM_GRANTED, Dest::Both));
         assert!(matches!(p.target(), Target::One(id) if id.as_str() == "alice"));
@@ -91,8 +102,6 @@ fn a_purchase_grants_the_item_to_the_buyer() {
         assert_eq!(body.kind, "potion");
         assert_eq!(body.version, i as u64 + 1);
     }
-    let c = room.event_counts();
-    assert_eq!((c.events_admitted, c.events_taken), (2, 2), "{c:?}");
 }
 
 /// Alice buys a potion (request `id`).
