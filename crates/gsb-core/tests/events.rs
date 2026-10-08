@@ -30,6 +30,7 @@ use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
 use gsb_core::room::{RoomConfig, RoomLogic};
 use gsb_core::shard::ShardLogic;
 use gsb_core::ticker::Ticker;
+use gsb_core::events::Event;
 use gsb_protocol::{FEATURE_PUSH, base, base_table, op};
 use prost::Message;
 use tokio::sync::mpsc;
@@ -37,7 +38,7 @@ use tokio::sync::mpsc;
 #[path = "events/logic.rs"]
 mod logic;
 
-use logic::{BalanceChanged, ChatLine, EvLogic, GoldReceived, SHARDS, SPAN, Took};
+use logic::{BalanceChanged, Boom, ChatLine, EvLogic, GoldReceived, Hop, SHARDS, SPAN, Took};
 
 const WAIT: Duration = Duration::from_secs(5);
 /// The sharded room's id; every other id is a single room.
@@ -51,12 +52,7 @@ fn factory(seen: logic::Seen, park: bool) -> RoomFactory<(), (), (), ()> {
         if id == GRID {
             let shards = (0..SHARDS)
                 .map(|index| {
-                    let l = EvLogic {
-                        index,
-                        serial: 0,
-                        park,
-                        seen: seen.clone(),
-                    };
+                    let l = EvLogic::new(index, park, seen.clone(), true);
                     (
                         (),
                         Box::new(l)
@@ -75,12 +71,8 @@ fn factory(seen: logic::Seen, park: bool) -> RoomFactory<(), (), (), ()> {
         } else {
             BuiltRoom::Single {
                 world: (),
-                logic: Box::new(EvLogic {
-                    index: id.0 as usize,
-                    serial: 0,
-                    park,
-                    seen: seen.clone(),
-                }) as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
+                logic: Box::new(EvLogic::new(id.0 as usize, park, seen.clone(), false))
+                    as Box<dyn RoomLogic<(), GroupKey = (), Strip = ()>>,
             }
         }
     })
@@ -123,6 +115,8 @@ impl Server {
             let config = RoomConfig {
                 id,
                 tick_hz: 60.0,
+                // Room 2 comes back after a panic (§7.4).
+                restart_on_panic: id == RoomId(2),
                 ..Default::default()
             };
             tx.send(RegistryMsg::CreateRoom { config, reply })
@@ -730,4 +724,251 @@ async fn conn_pushes(gone: bool, inbox: Vec<ConnIn>) -> PushCounts {
         }
     }
     pushes
+}
+
+// ---- location changes (round e3, `docs/EVENTS.md` §7) ---------------------------
+
+/// A member walks across shards while a publisher keeps pushing (a
+/// `Hop` the shard's game takes moves bob from shard 2 to 0 in that
+/// tick's MIGRATE): the live registry learns the move (`Relocated`),
+/// seals shard 2, and every leg — those that still reached shard 2 and
+/// those sent to shard 0 directly — is taken exactly once, in order.
+#[tokio::test]
+async fn a_shard_migration_keeps_every_leg_in_order() {
+    let mut server = Server::start(false).await;
+    let _bob = Client::login(&server, 1, "bob", FEATURE_PUSH, Some(GRID)).await;
+    let bank = server.publisher("bank");
+    for _ in 0..3 {
+        bank.push(&id("bob"), &GoldReceived { balance: 1 })
+            .expect("taken");
+    }
+    bank.push(&id("bob"), &Hop { to: 0 }).expect("taken"); // seq 4
+    // Keep pushing across the move: some legs reach shard 2 after bob
+    // left it (forwarded), some go to shard 0 directly (held until the
+    // fence).
+    for _ in 0..40 {
+        bank.push(&id("bob"), &GoldReceived { balance: 1 })
+            .expect("taken");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let got = server.took(44).await;
+    let seqs: Vec<u64> = got.iter().map(|t| t.seq).collect();
+    assert_eq!(seqs, (1..=44).collect::<Vec<u64>>(), "every leg, in order");
+    assert_eq!((got[3].op, got[3].shard), (Hop::OP, 2));
+    assert_eq!(got[43].shard, 0, "bob is on shard 0 now");
+    server.took_nothing().await;
+    let (r, _) = server
+        .counts_until(|r, _| r.events_relocations == 1 && r.events_routed == 44)
+        .await;
+    assert_eq!(
+        (
+            r.events_seals_sent,
+            r.events_seals_refused,
+            r.events_relocations_stale,
+            r.events_world_sent
+        ),
+        (1, 0, 0, 44)
+    );
+}
+
+/// Park and resume: the CLIENT leg pushed while bob is parked is counted
+/// (`events_client_parked`), its WORLD leg still reaches his room, and
+/// his next session continues the same stream — the client sees the
+/// gap (1, then 3) and re-syncs.
+#[tokio::test]
+async fn a_resumed_client_sees_the_gap_its_park_left() {
+    let mut server = Server::start(true).await;
+    let mut bob = Client::login(&server, 1, "bob", FEATURE_PUSH, Some(RoomId(1))).await;
+    let chat = server.publisher("chat");
+    let line = |t: &str| ChatLine { text: t.into() };
+    chat.push(&id("bob"), &line("hi")).expect("taken");
+    let first = bob.pushes(1).await;
+    assert_eq!(first[0].seq, 1);
+    bob.close().await;
+    // Parked once the registry marked his row (a CLIENT leg says so).
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let before = server.counts_until(|_, _| true).await.0;
+        chat.push(&id("bob"), &line("missed")).expect("taken");
+        let (r, _) = server
+            .counts_until(|r, _| r.events_routed > before.events_routed)
+            .await;
+        if r.events_client_parked > before.events_client_parked {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "parked in time");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let bank = server.publisher("bank");
+    bank.push(&id("bob"), &GoldReceived { balance: 70 })
+        .expect("taken");
+    let got = server.took(1).await;
+    assert_eq!((got[0].shard, got[0].seq), (1, 1), "the parked entity's room took it");
+    // Bob comes back: a new session of the identity while its park row
+    // holds the numbers (the CLIENT leg needs no room).
+    let mut back = Client::login(&server, 2, "bob", FEATURE_PUSH, None).await;
+    chat.push(&id("bob"), &line("back")).expect("taken");
+    let got = back.pushes(1).await;
+    // 1 written; every probe lost on the way (parked, or refused by the
+    // closing connection) is a number spent: a gap.
+    assert!(got[0].seq >= 3, "a gap: {}", got[0].seq);
+    let (r, _) = server
+        .counts_until(|r, _| {
+            r.events_client_sent
+                + r.events_client_parked
+                + r.events_client_refused_conn_gone
+                + r.events_client_refused_conn_full
+                == got[0].seq
+        })
+        .await;
+    assert!(r.events_client_parked >= 1);
+    assert_eq!(got[0].stream, first[0].stream, "the same stream: a gap, not a restart");
+}
+
+/// A room change (leave → join): a WORLD leg between the rooms is
+/// counted `events_world_no_room` and lost (E13) — never delivered late;
+/// the next one reaches the new room with the next number.
+#[tokio::test]
+async fn a_room_change_counts_the_leg_between_rooms() {
+    let mut server = Server::start(false).await;
+    let mut bob = Client::login(&server, 1, "bob", FEATURE_PUSH, Some(RoomId(1))).await;
+    let bank = server.publisher("bank");
+    bank.push(&id("bob"), &GoldReceived { balance: 1 })
+        .expect("taken");
+    assert_eq!(server.took(1).await[0].shard, 1);
+    let before = server.members(RoomId(1)).await;
+    bob.send(op::base::LEAVE_ROOM_REQ, base::LeaveRoom {}.encode_to_vec())
+        .await;
+    bob.expect(op::base::LEAVE_ROOM_RESULT).await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while server.members(RoomId(1)).await >= before {
+        assert!(tokio::time::Instant::now() < deadline, "leave settled");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    bank.push(&id("bob"), &GoldReceived { balance: 2 })
+        .expect("taken"); // seq 2: in no room
+    server
+        .counts_until(|r, _| r.events_world_no_room == 1)
+        .await;
+    let j = base::JoinRoom { room_id: 2 };
+    bob.send(op::base::JOIN_ROOM_REQ, j.encode_to_vec()).await;
+    bob.expect(op::base::JOIN_ROOM_RESULT).await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while server.members(RoomId(2)).await == 0 {
+        assert!(tokio::time::Instant::now() < deadline, "join settled");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    bank.push(&id("bob"), &GoldReceived { balance: 3 })
+        .expect("taken");
+    let got = server.took(1).await;
+    assert_eq!((got[0].shard, got[0].seq), (2, 3), "the new room, a gap of one");
+    server.took_nothing().await;
+}
+
+/// A room death (§7.4): the dead room's members are reaped (their
+/// connections closed, `RoomGone`) — a leg for one of them is counted
+/// by name, never lost silently — and the rebuilt room gets new event
+/// mailboxes: a player joining it is reached there.
+#[tokio::test]
+async fn a_rebuilt_room_is_reached_through_its_new_mailbox() {
+    let mut server = Server::start(false).await;
+    let _bob = Client::login(&server, 1, "bob", FEATURE_PUSH, Some(RoomId(2))).await;
+    let bank = server.publisher("bank");
+    bank.push(&id("bob"), &Boom { n: 1 }).expect("taken"); // the room panics
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while server.members(RoomId(2)).await != 0 {
+        assert!(tokio::time::Instant::now() < deadline, "reaped and rebuilt");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let before = server.counts_until(|r, _| r.events_routed == 1).await.0;
+    bank.push(&id("bob"), &GoldReceived { balance: 1 })
+        .expect("taken");
+    let (r, _) = server.counts_until(|r, _| r.events_routed == 2).await;
+    let d = |f: fn(&RouterCounts) -> u64| f(&r) - f(&before);
+    assert_eq!(
+        d(|c| c.events_world_no_room)
+            + d(|c| c.events_world_refused_room_gone)
+            + d(|c| c.events_offline),
+        1,
+        "{r:?}"
+    );
+    assert_eq!(d(|c| c.events_world_sent), 0);
+    let _carl = Client::login(&server, 2, "carl", FEATURE_PUSH, Some(RoomId(2))).await;
+    bank.push(&id("carl"), &GoldReceived { balance: 2 })
+        .expect("taken");
+    let got = server.took(1).await;
+    assert_eq!((got[0].shard, got[0].op, got[0].to.as_deref()), (2, GoldReceived::OP, Some("carl")));
+}
+
+/// BACKLOG B197: a row the room parked through `CloseConn` keeps its
+/// connection's inbox until the connection reads the verdict — a CLIENT
+/// leg routed in that window is `events_client_parked`, never sent to
+/// the closing connection.
+#[tokio::test]
+async fn a_client_leg_skips_a_row_parked_by_close_conn() {
+    let mut server = Server::start(true).await;
+    let (inbox_tx, mut inbox) = channel::<ConnIn>(64);
+    let conn = ConnectionId(7);
+    let reg = server.reg.clone();
+    reg.send(RegistryMsg::ConnOpened {
+        conn,
+        inbox: inbox_tx,
+        source: None,
+    })
+    .await
+    .expect("registry");
+    reg.send(RegistryMsg::Authed {
+        conn,
+        identity: "dan".into(),
+        features: FEATURE_PUSH,
+    })
+    .await
+    .expect("registry");
+    let (out, _out) = channel::<FrameBatch>(64);
+    let (reply, seat) = tokio::sync::oneshot::channel();
+    reg.send(RegistryMsg::SpawnPlayer {
+        conn,
+        room: RoomId(1),
+        out,
+        identity: "dan".into(),
+        claims: None,
+        reply,
+    })
+    .await
+    .expect("registry");
+    let seat = tokio::time::timeout(WAIT, seat)
+        .await
+        .expect("in time")
+        .expect("reply")
+        .expect("joined");
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while server.members(RoomId(1)).await == 0 {
+        assert!(tokio::time::Instant::now() < deadline, "join settled");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let chat = server.publisher("chat");
+    chat.push(&id("dan"), &ChatLine { text: "a".into() })
+        .expect("taken");
+    server.counts_until(|r, _| r.events_client_sent == 1).await;
+    reg.send(RegistryMsg::CloseConn(gsb_core::registry::CloseRequest {
+        conn,
+        room: RoomId(1),
+        entity: seat.entity,
+        parked: true,
+        cause: gsb_core::conn::ServerClose::IdleTimeout,
+        reason: "test".into(),
+    }))
+    .await
+    .expect("registry");
+    chat.push(&id("dan"), &ChatLine { text: "b".into() })
+        .expect("taken");
+    let (r, _) = server.counts_until(|r, _| r.events_routed == 2).await;
+    assert_eq!((r.events_client_sent, r.events_client_parked), (1, 1));
+    let mut pushes = 0;
+    while let Ok(m) = inbox.try_recv() {
+        if matches!(m, ConnIn::Push { .. }) {
+            pushes += 1;
+        }
+    }
+    assert_eq!(pushes, 1, "only the leg before the park");
 }

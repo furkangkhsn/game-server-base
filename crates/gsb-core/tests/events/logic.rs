@@ -6,6 +6,7 @@ use gsb_core::events::{ClientEvent, Dest, Event, Events, WorldEvent};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, Admission, Detach, ExpireTo, GameLogic, RoomLogic, TickCtx};
 use gsb_core::shard::{BorderRecord, CrossSeam, Migrating, ShardLogic};
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 /// Wire ids (and players) are `shard * SPAN + serial`.
@@ -46,6 +47,31 @@ impl Event for BalanceChanged {
 impl WorldEvent for BalanceChanged {}
 impl ClientEvent for BalanceChanged {}
 
+/// Moves the addressed player to shard `to` in this tick's MIGRATE (a
+/// sharded room's game deciding a crossing, `docs/EVENTS.md` §7.3).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct Hop {
+    #[prost(uint32, tag = "1")]
+    pub to: u32,
+}
+impl Event for Hop {
+    const OP: u16 = 2009;
+    const TO: Dest = Dest::World;
+}
+impl WorldEvent for Hop {}
+
+/// The room's game panics on it (a room death, §7.4).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct Boom {
+    #[prost(uint32, tag = "1")]
+    pub n: u32,
+}
+impl Event for Boom {
+    const OP: u16 = 2010;
+    const TO: Dest = Dest::World;
+}
+impl WorldEvent for Boom {}
+
 /// One event a room or shard took: `(shard, op, addressee identity —
 /// None for room-wide, owner, publisher, seq)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,11 +93,50 @@ pub struct EvLogic {
     pub serial: u64,
     pub park: bool,
     pub seen: Seen,
+    /// A shard's neighbours (every other shard); empty for a room.
+    pub neighbors: Vec<usize>,
+    /// Players a `Hop` sends away: player → target shard.
+    pub hops: HashMap<PlayerId, usize>,
 }
 
 impl EvLogic {
-    fn report(&self, events: &mut Events) {
+    /// A room (`index` = its id) or one shard of the grid.
+    pub fn new(index: usize, park: bool, seen: Seen, sharded: bool) -> Self {
+        Self {
+            index,
+            serial: 0,
+            park,
+            seen,
+            neighbors: if sharded {
+                (0..SHARDS).filter(|&j| j != index).collect()
+            } else {
+                Vec::new()
+            },
+            hops: HashMap::new(),
+        }
+    }
+
+    fn report(&mut self, events: &mut Events) {
         for any in events.take_all() {
+            match any.op() {
+                Boom::OP => panic!("Boom: the room dies (test)"),
+                Hop::OP => {
+                    let player = PlayerId(any.owner().0);
+                    if let Ok(hop) = any.downcast::<Hop>() {
+                        self.hops.insert(player, hop.body.to as usize);
+                        let _ = self.seen.send(Took {
+                            shard: self.index,
+                            op: Hop::OP,
+                            to: Some("hop".into()),
+                            owner: player.0,
+                            from: hop.from.0,
+                            seq: hop.seq,
+                        });
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             let to = match any.to() {
                 gsb_core::events::Addressee::Player(id) => Some(id.as_str().to_owned()),
                 gsb_core::events::Addressee::Room => None,
@@ -133,7 +198,9 @@ impl GameLogic<()> for EvLogic {
     fn update(&mut self, _w: &mut (), _c: &TickCtx) {}
     fn boot_events(&mut self, events: &mut Events) -> Result<(), BootError> {
         events.accept::<GoldReceived>()?;
-        events.accept::<BalanceChanged>()
+        events.accept::<BalanceChanged>()?;
+        events.accept::<Hop>()?;
+        events.accept::<Boom>()
     }
     fn update_with_events(
         &mut self,
@@ -163,10 +230,26 @@ impl ShardLogic<()> for EvLogic {
         self.serial
     }
     fn neighbors(&self) -> &[usize] {
-        &[]
+        &self.neighbors
     }
-    fn collect_migrations(&mut self, _w: &mut (), _nb: usize) -> Vec<Migrating<()>> {
-        Vec::new()
+    /// Wire ids are the players' (`on_join`).
+    fn collect_migrations(&mut self, _w: &mut (), nb: usize) -> Vec<Migrating<()>> {
+        let go: Vec<PlayerId> = self
+            .hops
+            .iter()
+            .filter(|(_, to)| **to == nb)
+            .map(|(p, _)| *p)
+            .collect();
+        go.into_iter()
+            .map(|p| {
+                self.hops.remove(&p);
+                Migrating {
+                    wire: p.0,
+                    state: (),
+                    player: Some(p),
+                }
+            })
+            .collect()
     }
     fn on_migrate_in(&mut self, _w: &mut (), _wire: u64, _s: (), _p: Option<PlayerId>) {}
     fn on_migrate_out(&mut self, _w: &mut (), _wire: u64) {}
