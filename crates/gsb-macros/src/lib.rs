@@ -25,6 +25,14 @@
 //!   code (`inv.load(who).await`, `within(cx)`, `on_behalf_of(&id)`);
 //! - `Inventory::serve(impl)`: the value a host registers.
 //!
+//! **Engine events** (`docs/EVENTS.md` §5.4). One method may be marked
+//! `#[gsb(engine_events)]`: `async fn on_engine(&self, e: EngineEvent)`
+//! (or `e: EngineNotice`, to see the subscriber's sequence numbers) — no
+//! `cx`, no result. It is no call (no call type, no client method): the
+//! host runs it for every engine event the registration subscribes to
+//! (`Setup::engine_events`). At most one per trait; a trait may hold
+//! only it.
+//!
 //! **The engine path.** Generated code names the engine crate as
 //! `::gsb_core`. A crate that reaches the engine under another path
 //! (a re-export) says so: `#[gsb_core::service(crate = my::engine)]`.
@@ -42,6 +50,14 @@ use syn::{
 /// method whose call type or name would collide is refused.
 const RESERVED_CALLS: &[&str] = &["Msg", "Bare", "Kind", "Router"];
 const RESERVED_METHODS: &[&str] = &["serve", "within", "on_behalf_of", "route", "player"];
+
+/// The `#[gsb(engine_events)]` method.
+struct EngineMethod {
+    attrs: Vec<syn::Attribute>,
+    name: Ident,
+    arg: Ident,
+    ty: Type,
+}
 
 struct Method {
     docs: Vec<syn::Attribute>,
@@ -114,6 +130,7 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
     let name_str = name.to_string();
 
     let mut methods = Vec::new();
+    let mut engine: Option<EngineMethod> = None;
     for item in &tr.items {
         let TraitItem::Fn(f) = item else {
             return Err(syn::Error::new(
@@ -121,9 +138,19 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
                 "a service trait holds only `async fn`s",
             ));
         };
-        methods.push(method(f)?);
+        if is_engine_events(f)? {
+            if engine.is_some() {
+                return Err(syn::Error::new(
+                    f.sig.ident.span(),
+                    "a service has at most one `#[gsb(engine_events)]` method",
+                ));
+            }
+            engine = Some(engine_method(f)?);
+        } else {
+            methods.push(method(f)?);
+        }
     }
-    if methods.is_empty() {
+    if methods.is_empty() && engine.is_none() {
         return Err(syn::Error::new(
             name.span(),
             "a service has at least one method",
@@ -151,6 +178,38 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
             #(#attrs)*
             fn #name(&self, #cx, #(#arg_list),*)
                 -> impl ::core::future::Future<Output = ::core::result::Result<#ok, #err>> + ::core::marker::Send;
+        }
+    });
+
+    let engine_trait_fn = engine.as_ref().map(|e| {
+        let EngineMethod {
+            attrs,
+            name,
+            arg,
+            ty,
+        } = e;
+        quote! {
+            #(#attrs)*
+            fn #name(&self, #arg: #ty)
+                -> impl ::core::future::Future<Output = ()> + ::core::marker::Send;
+        }
+    });
+    let engine_def = engine.as_ref().map(|e| {
+        let m = &e.name;
+        quote! {
+            fn engine_events(
+                svc: &::std::sync::Arc<__S>,
+            ) -> ::core::option::Option<#calls::EngineHandler> {
+                let svc = ::std::sync::Arc::clone(svc);
+                ::core::option::Option::Some(::std::boxed::Box::new(
+                    move |n: #krate::events::EngineNotice| -> #calls::EngineFuture {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        ::std::boxed::Box::pin(async move {
+                            svc.#m(::core::convert::Into::into(n)).await
+                        })
+                    },
+                ))
+            }
         }
     });
 
@@ -199,6 +258,12 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
         let call = &m.call;
         quote!(Bare::#call(_) => #i)
     });
+    // A trait with no call method: the method index matches nothing.
+    let method_body = if methods.is_empty() {
+        quote!(match *bare {})
+    } else {
+        quote!(match bare { #(#index_arms),* })
+    };
 
     let dispatch_arms = methods.iter().map(|m| {
         let Method {
@@ -277,6 +342,8 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
         #vis trait #name: ::core::marker::Send + ::core::marker::Sync + 'static {
             #(#trait_fns)*
 
+            #engine_trait_fn
+
             #[doc = #serve_doc]
             fn serve(self) -> #calls::Served<#module::Kind, Self>
             where
@@ -287,7 +354,7 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
         }
 
         #[doc = #mod_doc]
-        #[allow(unused_imports, missing_docs, clippy::enum_variant_names)]
+        #[allow(unused_imports, unused_variables, missing_docs, clippy::enum_variant_names)]
         #vis mod #module {
             use super::*;
 
@@ -316,9 +383,7 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
                     }
                 }
                 fn method(bare: &Bare) -> usize {
-                    match bare {
-                        #(#index_arms),*
-                    }
+                    #method_body
                 }
                 #[allow(clippy::needless_borrow, clippy::needless_borrows_for_generic_args)]
                 fn record_codecs(calls: &mut #calls::Calls) {
@@ -332,6 +397,8 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
                 fn router(svc: ::std::sync::Arc<__S>) -> Router<__S> {
                     Router(svc)
                 }
+
+                #engine_def
             }
 
             /// The tower router (generated): one `Dispatch<Bare>` in, the
@@ -415,6 +482,106 @@ fn expand(args: Args, tr: ItemTrait) -> syn::Result<TokenStream2> {
                 Self { route, on: ::core::default::Default::default() }
             }
         }
+    })
+}
+
+/// Whether `f` carries `#[gsb(engine_events)]` (any other `#[gsb(..)]`
+/// is refused).
+fn is_engine_events(f: &syn::TraitItemFn) -> syn::Result<bool> {
+    let mut found = false;
+    for a in f.attrs.iter().filter(|a| a.path().is_ident("gsb")) {
+        a.parse_nested_meta(|m| {
+            if m.path.is_ident("engine_events") && m.input.is_empty() {
+                found = true;
+                Ok(())
+            } else {
+                Err(m.error("the only `#[gsb(..)]` on a service method is `#[gsb(engine_events)]`"))
+            }
+        })?;
+    }
+    Ok(found)
+}
+
+/// The engine-event method: `async fn name(&self, e: EngineEvent)` (or
+/// `EngineNotice`), no default body, no generics, returns nothing.
+fn engine_method(f: &syn::TraitItemFn) -> syn::Result<EngineMethod> {
+    let sig = &f.sig;
+    let shape = |span: Span| {
+        syn::Error::new(
+            span,
+            "the engine-event method is `async fn name(&self, e: EngineEvent)` \
+             (or `e: EngineNotice`), returning nothing",
+        )
+    };
+    if sig.asyncness.is_none() {
+        return Err(shape(sig.fn_token.span()));
+    }
+    if f.default.is_some() {
+        return Err(syn::Error::new(
+            sig.ident.span(),
+            "service methods have no default body",
+        ));
+    }
+    if !sig.generics.params.is_empty()
+        || sig.generics.where_clause.is_some()
+        || sig.constness.is_some()
+        || sig.unsafety.is_some()
+        || sig.abi.is_some()
+        || sig.variadic.is_some()
+    {
+        return Err(shape(sig.span()));
+    }
+    let name = sig.ident.clone();
+    if RESERVED_METHODS.contains(&name.to_string().as_str()) {
+        return Err(syn::Error::new(
+            name.span(),
+            format!("`{name}` is a name the generated service uses; rename the method"),
+        ));
+    }
+    match &sig.output {
+        ReturnType::Default => {}
+        ReturnType::Type(_, t) if matches!(&**t, Type::Tuple(u) if u.elems.is_empty()) => {}
+        ReturnType::Type(_, t) => return Err(shape(t.span())),
+    }
+    let mut inputs = sig.inputs.iter();
+    match inputs.next() {
+        Some(FnArg::Receiver(r)) if r.reference.is_some() && r.mutability.is_none() => {}
+        _ => return Err(shape(sig.inputs.span())),
+    }
+    let (arg, ty) = match (inputs.next(), inputs.next()) {
+        (Some(FnArg::Typed(p)), None) => {
+            let Pat::Ident(id) = &*p.pat else {
+                return Err(shape(p.pat.span()));
+            };
+            if id.by_ref.is_some() || id.subpat.is_some() {
+                return Err(shape(p.pat.span()));
+            }
+            let named = match &*p.ty {
+                Type::Path(t) => t
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "EngineEvent" || s.ident == "EngineNotice"),
+                _ => false,
+            };
+            if !named {
+                return Err(shape(p.ty.span()));
+            }
+            (id.ident.clone(), (*p.ty).clone())
+        }
+        _ => return Err(shape(sig.inputs.span())),
+    };
+    let attrs = f
+        .attrs
+        .iter()
+        .filter(|a| !a.path().is_ident("gsb"))
+        .cloned()
+        .collect();
+    Ok(EngineMethod {
+        attrs,
+        name,
+        arg,
+        ty,
     })
 }
 

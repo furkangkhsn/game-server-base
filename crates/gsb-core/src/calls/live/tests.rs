@@ -469,3 +469,130 @@ fn generated_call_types_carry_the_methods_types() {
     assert_eq!(<bank::Kind as ServiceKind>::NAME, "Bank");
     let _ = CallKey { origin: 0, seq: 0 };
 }
+
+// ---- engine events (round e4) -------------------------------------------------
+
+#[crate::service]
+pub trait Watcher {
+    /// How many notices the engine method ran.
+    async fn seen(&self, cx: &CallCx) -> Result<u64, String>;
+    /// The engine's events, with their numbers.
+    #[gsb(engine_events)]
+    async fn on_engine(&self, n: crate::events::EngineNotice);
+}
+
+struct Log {
+    seen: AtomicU64,
+    order: tokio::sync::mpsc::UnboundedSender<u64>,
+}
+
+impl Watcher for Log {
+    async fn seen(&self, _cx: &CallCx) -> Result<u64, String> {
+        Ok(self.seen.load(Ordering::SeqCst))
+    }
+    async fn on_engine(&self, n: crate::events::EngineNotice) {
+        // The first notice is the slowest: the order still holds.
+        if n.seq == 1 {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        self.seen.fetch_add(1, Ordering::SeqCst);
+        let _ = self.order.send(n.seq);
+    }
+}
+
+fn online(n: &str) -> crate::events::EngineEvent {
+    crate::events::EngineEvent::Online {
+        identity: Identity::new(n),
+    }
+}
+
+/// A hosted service's engine method runs once per notice, one at a time,
+/// in the registry's order — and its calls keep working beside it.
+#[tokio::test]
+async fn the_engine_method_runs_every_notice_in_order() {
+    let (order, mut seqs) = tokio::sync::mpsc::unbounded_channel();
+    let mut services = Services::new();
+    services
+        .service(
+            Watcher::serve(Log {
+                seen: AtomicU64::new(0),
+                order,
+            }),
+            |s| s.engine_events(crate::events::Interest::ONLINE),
+        )
+        .expect("once");
+    let subs = services.take_engine_subscriptions();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].name, "Watcher");
+    assert!(
+        services.take_engine_subscriptions().is_empty(),
+        "taken once"
+    );
+    let mut engine = crate::events::EngineSubscribers::new();
+    for s in subs {
+        engine.add(s.name, s.interest, s.tx);
+    }
+    for n in ["a", "b", "c"] {
+        engine.emit(&online(n));
+    }
+    let mut got = Vec::new();
+    while got.len() < 3 {
+        let s = tokio::time::timeout(Duration::from_secs(5), seqs.recv())
+            .await
+            .expect("in time")
+            .expect("open");
+        got.push(s);
+    }
+    assert_eq!(got, [1, 2, 3]);
+    let watcher: WatcherHandle = services.client();
+    assert_eq!(watcher.seen().await, Ok(3));
+}
+
+/// A full engine channel (the setup's mailbox size) loses the notice,
+/// counted under the service's name.
+#[tokio::test]
+async fn a_full_engine_channel_is_counted_under_the_services_name() {
+    let (order, _seqs) = tokio::sync::mpsc::unbounded_channel();
+    let mut services = Services::new();
+    services
+        .service(
+            Watcher::serve(Log {
+                seen: AtomicU64::new(0),
+                order,
+            }),
+            |s| s.mailbox(1).engine_events(crate::events::Interest::ALL),
+        )
+        .expect("once");
+    let mut engine = crate::events::EngineSubscribers::new();
+    for s in services.take_engine_subscriptions() {
+        engine.add(s.name, s.interest, s.tx);
+    }
+    // No await between them: the engine task cannot drain its channel.
+    for n in ["a", "b", "c"] {
+        engine.emit(&online(n));
+    }
+    let c = engine.sources()[0].1.counts();
+    assert_eq!(engine.sources()[0].0.as_ref(), "Watcher");
+    assert_eq!((c.engine_events_sent, c.engine_events_refused_full), (1, 2));
+}
+
+/// Subscribing a service whose trait has no engine method is a
+/// registration error; nothing is hosted.
+#[test]
+fn engine_events_without_an_engine_method_are_refused() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let mut services = Services::new();
+        let err = services
+            .service(Bank::serve(Vault::default()), |s| {
+                s.engine_events(crate::events::Interest::ALL)
+            })
+            .expect_err("no engine method");
+        assert_eq!(err, RegisterError::NoEngineEvents { service: "Bank" });
+        assert!(services.try_client::<BankHandle>().is_none());
+        assert!(services.stats().is_empty());
+    });
+}
