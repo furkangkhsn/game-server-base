@@ -18,6 +18,13 @@
 //! reserve. Every tick's wallets, every client answer, the bank's
 //! charges and the room's call counters form the [`Trace`] the styles
 //! must agree on.
+//!
+//! The events scenario ([`play_events`], `docs/EVENTS.md` §4.5, round
+//! e5): the bank pushes bob 200 gold (a WORLD event, [`GoldReceived`])
+//! right before he sends alice 600 — EVENTS runs before READ and the
+//! systems take events before requests, so the gold received pays the
+//! same tick's transfer; later a room-wide gift of 7 reaches every
+//! wallet (its owner is `Owner::ACTOR`, no entity's).
 
 use std::collections::BTreeMap;
 use std::sync::mpsc as smpsc;
@@ -27,8 +34,9 @@ use gsb_core::calls::{
 };
 use gsb_core::channel::Inbox;
 use gsb_core::determinism::{Sim, SimClient, SimRoom};
+use gsb_core::events::{Dest, Event, Events, WorldEvent};
 use gsb_core::id::{ConnectionId, PlayerId, RoomId};
-use gsb_core::metrics::CallCounts;
+use gsb_core::metrics::{CallCounts, EventCounts};
 use gsb_core::room::{Action, GameLogic, RoomConfig, RoomLogic, TickCtx};
 use gsb_core::rpc::RpcReply;
 use prost::Message;
@@ -66,6 +74,20 @@ impl Request for TransferGold {
     const OP: u16 = 1001;
 }
 
+/// Gold reaching a player from outside the room (a WORLD event): to
+/// one identity, or room-wide (every wallet).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GoldReceived {
+    #[prost(uint64, tag = "1")]
+    pub amount: u64,
+}
+
+impl Event for GoldReceived {
+    const OP: u16 = 1003;
+    const TO: Dest = Dest::World;
+}
+impl WorldEvent for GoldReceived {}
+
 /// A transfer is already in flight for this owner.
 pub const BUSY: u32 = 1;
 /// The wallet cannot cover the transfer.
@@ -80,6 +102,8 @@ pub const NO_WALLET: u32 = 99;
 pub struct Charge {
     /// The amount to take.
     pub amount: u64,
+    /// The payer's confirmed gold when the game issued it.
+    pub have: u64,
 }
 impl gsb_core::calls::Call for Charge {
     type Response = TransferDone;
@@ -100,15 +124,16 @@ pub struct BankClient {
 }
 
 impl BankClient {
-    /// Charge `amount` from the caller.
-    pub fn charge(&self, amount: u64) -> CallSpec<Charge> {
-        CallSpec::new(&self.route, Charge { amount }, BankMsg::Charge)
+    /// The charge [`decide`] asked for.
+    pub fn charge(&self, charge: Charge) -> CallSpec<Charge> {
+        CallSpec::new(&self.route, charge, BankMsg::Charge)
     }
 }
 
 /// A fake bank [`play`] drains after every tick (its answers land at the
-/// next tick's RESPONSES): ONE effect per call key (idempotent), every
-/// payer starting at [`START`] gold.
+/// next tick's RESPONSES): ONE effect per call key (idempotent); the
+/// balance it confirms is the payer's gold the call carried, less the
+/// amount.
 pub struct Bank {
     inbox: Inbox<Mail<BankMsg>>,
     done: BTreeMap<CallKey, u64>,
@@ -140,7 +165,7 @@ impl Bank {
             let charges = &mut self.charges;
             let balance = *self.done.entry(cx.key()).or_insert_with(|| {
                 *charges += 1;
-                START - ask.call.amount
+                ask.call.have - ask.call.amount
             });
             ask.answer(Ok(TransferDone { balance }));
         }
@@ -174,10 +199,10 @@ impl Wallet {
 pub struct Reserve(pub u64);
 
 /// The game's rule for one transfer request, on the wallet its owner
-/// holds: `Ok(amount)` — reserved, issue the charge — or the game error
-/// to answer now. Every style calls this: the styles differ in WHERE the
+/// holds: `Ok(charge)` — reserved, issue it — or the game error to
+/// answer now. Every style calls this: the styles differ in WHERE the
 /// wallet lives, not in what the game decides.
-pub fn decide(wallet: Option<&mut Wallet>, busy: bool, amount: u64) -> Result<u64, GameError> {
+pub fn decide(wallet: Option<&mut Wallet>, busy: bool, amount: u64) -> Result<Charge, GameError> {
     let Some(w) = wallet else {
         return Err(GameError { code: NO_WALLET });
     };
@@ -187,8 +212,16 @@ pub fn decide(wallet: Option<&mut Wallet>, busy: bool, amount: u64) -> Result<u6
         Err(GameError { code: INSUFFICIENT })
     } else {
         w.reserved += amount;
-        Ok(amount)
+        Ok(Charge {
+            amount,
+            have: w.gold,
+        })
     }
+}
+
+/// The game's rule for gold received (an event): it is the wallet's.
+pub fn credit(wallet: &mut Wallet, amount: u64) {
+    wallet.gold += amount;
 }
 
 /// The game's rule for one charge result: release the reserve, keep the
@@ -201,8 +234,10 @@ pub fn settle(wallet: &mut Wallet, reserve: Reserve, balance: Option<u64>) {
 }
 
 /// One way of writing the game: where its state lives and how its
-/// systems reach the call table. `systems` takes the tick's results
-/// first (`take_resolved::<Charge, Reserve>` → [`settle`]), then the
+/// systems reach the call and event tables. `systems` takes the tick's
+/// events first (`events.take::<GoldReceived>()` → [`credit`]: the
+/// owner's wallet, or every wallet for a room-wide one), then the
+/// results (`take_resolved::<Charge, Reserve>` → [`settle`]), then the
 /// transfer requests (`take_incoming::<TransferGold>` → [`decide`] →
 /// `calls.reply(..)`, or
 /// `calls.call(bank.charge(..)).owner(r.owner).with(Reserve(..)).answers(r.reply)`).
@@ -218,7 +253,13 @@ pub trait Style: Send + 'static {
     /// Does `owner` still exist?
     fn alive(&self, world: &Self::World, owner: Owner) -> bool;
     /// The tick's systems.
-    fn systems(&mut self, world: &mut Self::World, calls: &mut Calls, bank: &BankClient);
+    fn systems(
+        &mut self,
+        world: &mut Self::World,
+        calls: &mut Calls,
+        events: &mut Events,
+        bank: &BankClient,
+    );
     /// Every player's wallet, by player.
     fn wallets(&mut self, world: &mut Self::World) -> Vec<(PlayerId, Wallet)>;
 }
@@ -248,6 +289,8 @@ pub struct Trace {
     pub bank_calls: u32,
     /// The room's call counters at the end.
     pub counts: CallCounts,
+    /// The room's event counters at the end.
+    pub events: EventCounts,
 }
 
 /// [`GameLogic`] over a [`Style`]: everything a room needs that the
@@ -315,10 +358,13 @@ impl<S: Style> GameLogic<S::World> for StyleLogic<S> {
         a.clear();
     }
     fn update(&mut self, _w: &mut S::World, _c: &TickCtx) {
-        unreachable!("the room calls update_with_calls");
+        unreachable!("the room calls update_with_events");
     }
     fn boot_calls(&mut self, calls: &mut Calls) -> Result<(), BootError> {
         calls.accept::<TransferGold>()
+    }
+    fn boot_events(&mut self, events: &mut Events) -> Result<(), BootError> {
+        events.accept::<GoldReceived>()
     }
     fn call_owner(&self, w: &S::World, player: PlayerId) -> Option<Owner> {
         self.style.owner(w, player)
@@ -326,8 +372,17 @@ impl<S: Style> GameLogic<S::World> for StyleLogic<S> {
     fn owner_alive(&self, w: &S::World, owner: Owner) -> Option<bool> {
         Some(self.style.alive(w, owner))
     }
-    fn update_with_calls(&mut self, w: &mut S::World, ctx: &TickCtx, calls: &mut Calls) {
-        self.style.systems(w, calls, &self.bank);
+    fn update_with_calls(&mut self, _w: &mut S::World, _c: &TickCtx, _calls: &mut Calls) {
+        unreachable!("the room calls update_with_events");
+    }
+    fn update_with_events(
+        &mut self,
+        w: &mut S::World,
+        ctx: &TickCtx,
+        calls: &mut Calls,
+        events: &mut Events,
+    ) {
+        self.style.systems(w, calls, events, &self.bank);
         let _ = self.wallets.send((ctx.tick, self.style.wallets(w)));
     }
 }
@@ -362,9 +417,25 @@ fn answers(c: &mut SimClient, tick: u64, into: &mut Vec<(u64, u64, u64, Answer)>
     }
 }
 
-/// Play the scenario against a real room actor (TEST mode) running
-/// `style` over `world`, and return what it produced.
+/// Which scenario [`run`] plays.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scenario {
+    Calls,
+    Events,
+}
+
+/// Play the calls scenario against a real room actor (TEST mode)
+/// running `style` over `world`, and return what it produced.
 pub fn play<S: Style>(style: S, world: S::World) -> Trace {
+    run(style, world, Scenario::Calls)
+}
+
+/// Play the events scenario (see the crate docs) the same way.
+pub fn play_events<S: Style>(style: S, world: S::World) -> Trace {
+    run(style, world, Scenario::Events)
+}
+
+fn run<S: Style>(style: S, world: S::World, scenario: Scenario) -> Trace {
     let (client, mut bank) = Bank::new();
     let (wallets_tx, wallets) = smpsc::channel();
     let logic = StyleLogic {
@@ -379,14 +450,30 @@ pub fn play<S: Style>(style: S, world: S::World) -> Trace {
     };
     let mut room = SimRoom::new(config, world, Box::new(logic));
     let mut sim = Sim::new();
+    let publisher = sim.publisher("bank");
     let mut alice = room.join(1, "alice");
     let mut bob = room.join(2, "bob");
     let mut got = Vec::new();
     for t in 1..=5 {
-        if t == 2 {
-            transfer(&alice, 10, "bob", 100);
-            transfer(&alice, 11, "bob", 100); // the double click: BUSY
-            transfer(&bob, 20, "alice", 600); // more than bob has
+        match (scenario, t) {
+            (Scenario::Calls, 2) => {
+                transfer(&alice, 10, "bob", 100);
+                transfer(&alice, 11, "bob", 100); // the double click: BUSY
+                transfer(&bob, 20, "alice", 600); // more than bob has
+            }
+            (Scenario::Events, 2) => {
+                let bob_id = gsb_core::calls::Identity::new("bob");
+                publisher
+                    .push(&bob_id, &GoldReceived { amount: 200 })
+                    .expect("the sim router has room");
+                transfer(&bob, 20, "alice", 600); // paid by the gold received
+            }
+            (Scenario::Events, 4) => {
+                publisher
+                    .push_room(RoomId(5), &GoldReceived { amount: 7 })
+                    .expect("the sim router has room");
+            }
+            _ => {}
         }
         assert!(room.tick(&mut sim));
         bank.step();
@@ -399,5 +486,6 @@ pub fn play<S: Style>(style: S, world: S::World) -> Trace {
         charges: bank.charges,
         bank_calls: bank.calls,
         counts: room.counts(),
+        events: room.event_counts(),
     }
 }

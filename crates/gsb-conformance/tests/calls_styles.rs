@@ -1,14 +1,16 @@
 //! The same game three ways — no ECS, bevy_ecs (`gsb-bevy-ecs`), hecs
 //! (`gsb-hecs`) — against a real room actor: the traces are identical
-//! (`docs/SERVICES.md` §5.5, Faz 5).
+//! (`docs/SERVICES.md` §5.5, Faz 5), for the calls scenario and for the
+//! events one (`docs/EVENTS.md` §4.5, round e5).
 
 use std::collections::{BTreeMap, HashMap};
 
 use gsb_conformance::{
-    Answer, BUSY, BankClient, Charge, INSUFFICIENT, Reserve, Style, Trace, TransferGold, Wallet,
-    decide, play, settle,
+    Answer, BUSY, BankClient, Charge, GoldReceived, INSUFFICIENT, Reserve, Style, Trace,
+    TransferGold, Wallet, credit, decide, play, play_events, settle,
 };
 use gsb_core::calls::{Calls, Owner};
+use gsb_core::events::{Addressee, Events};
 use gsb_core::id::PlayerId;
 
 /// What a call's outcome confirms.
@@ -34,7 +36,23 @@ impl Style for Plain {
     fn alive(&self, w: &Self::World, o: Owner) -> bool {
         w.contains_key(&PlayerId(o.to_bits()))
     }
-    fn systems(&mut self, w: &mut Self::World, calls: &mut Calls, bank: &BankClient) {
+    fn systems(
+        &mut self,
+        w: &mut Self::World,
+        calls: &mut Calls,
+        events: &mut Events,
+        bank: &BankClient,
+    ) {
+        for e in events.take::<GoldReceived>() {
+            match e.to {
+                Addressee::Room => w.values_mut().for_each(|x| credit(x, e.body.amount)),
+                Addressee::Player(_) => {
+                    if let Some(x) = w.get_mut(&PlayerId(e.owner.to_bits())) {
+                        credit(x, e.body.amount);
+                    }
+                }
+            }
+        }
         for r in calls.take_resolved::<Charge, Reserve>() {
             if let Some(wallet) = w.get_mut(&PlayerId(r.owner.to_bits())) {
                 settle(wallet, r.ctx, balance(&r.outcome));
@@ -44,11 +62,12 @@ impl Style for Plain {
             let busy = calls.in_flight::<Charge>(r.owner);
             let wallet = w.get_mut(&PlayerId(r.owner.to_bits()));
             match decide(wallet, busy, r.body.amount) {
-                Ok(amount) => {
+                Ok(c) => {
+                    let reserve = Reserve(c.amount);
                     calls
-                        .call(bank.charge(amount))
+                        .call(bank.charge(c))
                         .owner(r.owner)
-                        .with(Reserve(amount))
+                        .with(reserve)
                         .answers(r.reply);
                 }
                 Err(e) => calls.reply(r.reply, Err(e)),
@@ -66,13 +85,29 @@ mod bevy {
     use super::*;
     use bevy_ecs::prelude::{Component, Entity, Query, Res, ResMut, Schedule, World};
     use bevy_ecs::schedule::{IntoScheduleConfigs, SingleThreadedExecutor};
-    use gsb_bevy_ecs::{EntityExt, GsbCalls, OwnerExt, Svc};
+    use gsb_bevy_ecs::{EntityExt, GsbCalls, GsbEvents, OwnerExt, Svc};
 
     #[derive(Component)]
     struct Player(PlayerId);
 
     #[derive(Component)]
     struct Purse(Wallet);
+
+    fn gold(mut events: ResMut<GsbEvents>, mut q: Query<&mut Purse>) {
+        for e in events.take::<GoldReceived>() {
+            match e.owner.entity() {
+                Some(x) => {
+                    if let Ok(mut purse) = q.get_mut(x) {
+                        credit(&mut purse.0, e.body.amount);
+                    }
+                }
+                // Room-wide (`Owner::ACTOR`): every purse.
+                None => q
+                    .iter_mut()
+                    .for_each(|mut purse| credit(&mut purse.0, e.body.amount)),
+            }
+        }
+    }
 
     fn settle_charges(mut calls: ResMut<GsbCalls>, mut q: Query<&mut Purse>) {
         for r in calls.take_resolved::<Charge, Reserve>() {
@@ -91,11 +126,12 @@ mod bevy {
             let busy = calls.in_flight::<Charge>(r.owner);
             let mut purse = r.owner.entity().and_then(|e| q.get_mut(e).ok());
             match decide(purse.as_mut().map(|p| &mut p.0), busy, r.body.amount) {
-                Ok(amount) => {
+                Ok(c) => {
+                    let reserve = Reserve(c.amount);
                     calls
-                        .call(bank.charge(amount))
+                        .call(bank.charge(c))
                         .owner(r.owner)
-                        .with(Reserve(amount))
+                        .with(reserve)
                         .answers(r.reply);
                 }
                 Err(e) => calls.reply(r.reply, Err(e)),
@@ -112,7 +148,7 @@ mod bevy {
         pub(super) fn new() -> Self {
             let mut schedule = Schedule::default();
             schedule.set_executor(SingleThreadedExecutor::new());
-            schedule.add_systems((settle_charges, transfers).chain());
+            schedule.add_systems((gold, settle_charges, transfers).chain());
             Self {
                 players: HashMap::new(),
                 schedule,
@@ -137,11 +173,19 @@ mod bevy {
         fn alive(&self, w: &World, o: Owner) -> bool {
             gsb_bevy_ecs::owner_alive(w, o)
         }
-        fn systems(&mut self, w: &mut World, calls: &mut Calls, bank: &BankClient) {
+        fn systems(
+            &mut self,
+            w: &mut World,
+            calls: &mut Calls,
+            events: &mut Events,
+            bank: &BankClient,
+        ) {
             if !w.contains_resource::<Svc<BankClient>>() {
                 w.insert_resource(Svc(bank.clone()));
             }
-            gsb_bevy_ecs::lend(w, calls, |w| self.schedule.run(w));
+            gsb_bevy_ecs::events::lend(w, events, |w| {
+                gsb_bevy_ecs::lend(w, calls, |w| self.schedule.run(w))
+            });
         }
         fn wallets(&mut self, w: &mut World) -> Vec<(PlayerId, Wallet)> {
             let mut out: Vec<_> = w
@@ -164,6 +208,18 @@ mod hecs_style {
 
     struct Player(PlayerId);
 
+    fn gold(w: &mut World, events: &mut Events) {
+        let rest = gsb_hecs::take_for::<GoldReceived, Wallet>(w, events, |wallet, e| {
+            credit(wallet, e.body.amount)
+        });
+        // Room-wide (`Owner::ACTOR`, no entity's): every wallet.
+        for e in rest.iter().filter(|e| e.to == Addressee::Room) {
+            for (_, wallet) in w.query_mut::<&mut Wallet>() {
+                credit(wallet, e.body.amount);
+            }
+        }
+    }
+
     fn settle_charges(w: &mut World, calls: &mut Calls) {
         for r in calls.take_resolved::<Charge, Reserve>() {
             if let Some(e) = r.owner.entity()
@@ -179,11 +235,12 @@ mod hecs_style {
             let busy = calls.in_flight::<Charge>(r.owner);
             let mut wallet = r.owner.entity().and_then(|e| w.get::<&mut Wallet>(e).ok());
             match decide(wallet.as_deref_mut(), busy, r.body.amount) {
-                Ok(amount) => {
+                Ok(c) => {
+                    let reserve = Reserve(c.amount);
                     calls
-                        .call(bank.charge(amount))
+                        .call(bank.charge(c))
                         .owner(r.owner)
-                        .with(Reserve(amount))
+                        .with(reserve)
                         .answers(r.reply);
                 }
                 Err(e) => calls.reply(r.reply, Err(e)),
@@ -213,7 +270,14 @@ mod hecs_style {
         fn alive(&self, w: &World, o: Owner) -> bool {
             gsb_hecs::owner_alive(w, o)
         }
-        fn systems(&mut self, w: &mut World, calls: &mut Calls, bank: &BankClient) {
+        fn systems(
+            &mut self,
+            w: &mut World,
+            calls: &mut Calls,
+            events: &mut Events,
+            bank: &BankClient,
+        ) {
+            gold(w, events);
             settle_charges(w, calls);
             transfers(w, calls, bank);
         }
@@ -276,5 +340,38 @@ fn the_same_game_gives_the_same_trace_without_an_ecs_on_bevy_ecs_and_on_hecs() {
     let bevy = play(bevy::Bevy::new(), bevy_ecs::world::World::new());
     assert_eq!(bevy, plain, "bevy_ecs");
     let hecs = play(hecs_style::Hecs::default(), hecs::World::new());
+    assert_eq!(hecs, plain, "hecs");
+}
+
+/// What every style must produce in the events scenario: bob's 200
+/// received pays his 600 in the same tick; the room-wide 7 reaches both.
+fn check_events(t: &Trace) {
+    assert_eq!((t.charges, t.bank_calls), (1, 1));
+    assert_eq!(t.answers, [(3, 2, 20, Answer::Done(100))]);
+    let (alice, bob) = (PlayerId(1), PlayerId(2));
+    assert_eq!(
+        t.wallets,
+        [
+            (1, vec![(alice, wallet(500, 0)), (bob, wallet(500, 0))]),
+            (2, vec![(alice, wallet(500, 0)), (bob, wallet(700, 600))]),
+            (3, vec![(alice, wallet(500, 0)), (bob, wallet(100, 0))]),
+            (4, vec![(alice, wallet(507, 0)), (bob, wallet(107, 0))]),
+            (5, vec![(alice, wallet(507, 0)), (bob, wallet(107, 0))]),
+        ]
+    );
+    let e = t.events;
+    assert_eq!(
+        (e.events_admitted, e.events_taken, e.events_untaken),
+        (2, 2, 0)
+    );
+}
+
+#[test]
+fn the_same_events_give_the_same_trace_without_an_ecs_on_bevy_ecs_and_on_hecs() {
+    let plain = play_events(Plain, BTreeMap::new());
+    check_events(&plain);
+    let bevy = play_events(bevy::Bevy::new(), bevy_ecs::world::World::new());
+    assert_eq!(bevy, plain, "bevy_ecs");
+    let hecs = play_events(hecs_style::Hecs::default(), hecs::World::new());
     assert_eq!(hecs, plain, "hecs");
 }
