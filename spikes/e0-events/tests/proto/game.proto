@@ -1,0 +1,52 @@
+// The worked examples' events and one request (docs/EVENTS.md §8),
+// declared with the proposed `(gsb.event)` option.
+syntax = "proto3";
+
+package game;
+
+import "gsb/options.proto";
+
+option (gsb.reserved_ops) = 2099;
+
+message GoldReceived {
+  option (gsb.event) = { op: 2001, to: WORLD };
+  string from = 1;
+  uint64 amount = 2;
+  uint64 balance = 3;
+  uint64 version = 4;
+}
+
+message ChatMessage {
+  option (gsb.event) = { op: 2002, to: CLIENT };
+  string channel = 1;
+  string from = 2;
+  string text = 3;
+}
+
+message FriendOnline {
+  option (gsb.event) = { op: 2003, to: CLIENT };
+  string who = 1;
+}
+
+message FriendOffline {
+  option (gsb.event) = { op: 2004, to: CLIENT };
+  string who = 1;
+}
+
+message BalanceChanged {
+  option (gsb.event) = { op: 2005, to: BOTH };
+  uint64 balance = 1;
+  uint64 version = 2;
+  string reason = 3;
+}
+
+message TransferGold { string to = 1; uint64 amount = 2; }
+message TransferDone { uint64 balance = 1; }
+message GameError { uint32 code = 1; }
+
+service Game {
+  rpc Transfer(TransferGold) returns (TransferDone) {
+    option (gsb.op) = 1001;
+    option (gsb.error) = "GameError";
+  }
+}

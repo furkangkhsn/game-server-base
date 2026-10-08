@@ -1,0 +1,21 @@
+// Every refusal at once (tests/codegen.rs).
+syntax = "proto3";
+
+package bad;
+
+import "gsb/options.proto";
+
+option (gsb.reserved_ops) = 2010;
+
+message Low       { option (gsb.event) = { op: 17, to: CLIENT }; }
+message Big       { option (gsb.event) = { op: 70000, to: CLIENT }; }
+message NoWhere   { option (gsb.event) = { op: 2011 }; }
+message Clash     { option (gsb.event) = { op: 1001, to: WORLD }; }
+message Retired   { option (gsb.event) = { op: 2010, to: BOTH }; }
+message Both      { option (gsb.event) = { op: 2012, to: WORLD }; }
+message Done      { }
+message Err       { }
+
+service S {
+  rpc Pay(Both) returns (Done) { option (gsb.op) = 1001; option (gsb.error) = "Err"; }
+}

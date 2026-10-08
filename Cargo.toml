@@ -27,8 +27,9 @@ members = [
 # Design spikes: standalone crates that prove a design without changing
 # the engine (rounds s0/s0b: docs/SERVICES.md; spikes/s0-calls is its own
 # small workspace with its proc-macro crate; round k0: docs/KIT-ECS.md,
-# spikes/k0-kit is its own small workspace too). Never workspace members.
-exclude = ["spikes/s0-calls", "spikes/k0-kit"]
+# spikes/k0-kit is its own small workspace too; round e0: docs/EVENTS.md,
+# spikes/e0-events). Never workspace members.
+exclude = ["spikes/s0-calls", "spikes/k0-kit", "spikes/e0-events"]
 
 [workspace.package]
 version = "0.1.0"

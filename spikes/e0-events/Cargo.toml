@@ -1,0 +1,31 @@
+# Round e0 design spike (docs/EVENTS.md): NOT a member of the gsb
+# workspace (the root Cargo.toml lists it under `exclude`); its own
+# one-crate workspace. It models the EVENT path — the router (the
+# registry's identity → location table), the connection actor's direct
+# CLIENT leg, the room/shard EVENTS phase with its own channel, the
+# client's gap detection, engine-originated presence, record/replay —
+# on its own minimal actors, and changes no engine behaviour.
+[package]
+name = "e0-events"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Bounded channels (try_send / try_recv need no runtime) for every actor;
+# the runtime only for the live presence test (one await per loop).
+tokio = { version = "1", default-features = false, features = ["sync", "rt", "macros", "time"] }
+bytes = "1"
+prost = { version = "0.14", default-features = false, features = ["derive", "std"] }
+
+[dev-dependencies]
+# The codegen test runs the vendored protoc the engine already builds
+# with (gsb-build) over the proposed `(gsb.event)` option.
+protoc-bin-vendored = "3"
+
+[build-dependencies]
+gsb-lint = { path = "../../crates/gsb-lint" }
