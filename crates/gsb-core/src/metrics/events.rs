@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(c.fields().map(|f| f.1), v);
         let mut sum = c;
         sum.add(&c);
-        assert_eq!(sum.events_world_not_here, 2 * EVENT_COUNT as u64);
+        assert_eq!(sum.events_tombstones_expired, 2 * EVENT_COUNT as u64);
         assert!(!c.is_zero() && EventCounts::default().is_zero());
         let r = RouterCounts::from_values([7; ROUTER_COUNT]);
         assert!(r.fields().iter().all(|f| f.1 == 7));
