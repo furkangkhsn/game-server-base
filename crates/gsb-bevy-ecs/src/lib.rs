@@ -11,11 +11,15 @@
 //!   ([`GsbCalls`], lent for the schedule's run by [`lend`]), service
 //!   clients as resources ([`Svc`]), `Owner ⇄ Entity` ([`OwnerExt`],
 //!   [`EntityExt`]) and the owner-alive test ([`owner_alive`]).
+//! - [`events`]: the event table as a resource ([`GsbEvents`], lent by
+//!   [`events::lend`] — nest it with [`lend`] to lend both tables).
 //!
 //! One binding crate per ECS (`docs/KIT-ECS.md` K10 (b)): the kit's
 //! bevy_ecs binding joins this crate as a `kit` module once the kit is
 //! ECS-agnostic, so a game picks its ECS once.
 
 pub mod calls;
+pub mod events;
 
 pub use calls::{EntityExt, GsbCalls, OwnerExt, Svc, lend, owner_alive};
+pub use events::GsbEvents;

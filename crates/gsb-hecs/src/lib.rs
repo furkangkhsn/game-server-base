@@ -8,11 +8,16 @@
 //!
 //! - [`calls`]: `Owner ⇄ Entity` ([`OwnerExt`], [`EntityExt`]) and the
 //!   owner-alive test ([`owner_alive`]).
+//! - [`events`]: an event to the component of the entity that owns it
+//!   ([`take_for`]); systems take `&mut Events` as they take
+//!   `&mut Calls`.
 //!
 //! One binding crate per ECS (`docs/KIT-ECS.md` K10 (b)): the kit's hecs
 //! binding joins this crate as a `kit` module once the kit is
 //! ECS-agnostic.
 
 pub mod calls;
+pub mod events;
 
 pub use calls::{EntityExt, OwnerExt, owner_alive};
+pub use events::take_for;
