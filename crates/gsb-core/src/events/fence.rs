@@ -187,7 +187,7 @@ impl Fences {
         let id = id.as_str();
         if !forwarded {
             if self.tombs.get(id).is_some_and(|t| !t.sealed) {
-                self.to_tomb(p, false, c);
+                self.by_tomb(p, false, c);
                 return Way::Kept;
             }
             if let Some(h) = self.holds.get_mut(id) {
@@ -204,7 +204,7 @@ impl Fences {
             return Way::Admit(p);
         }
         if self.tombs.contains_key(id) {
-            self.to_tomb(p, forwarded, c);
+            self.by_tomb(p, forwarded, c);
             return Way::Kept;
         }
         Way::NotHere
@@ -212,7 +212,7 @@ impl Fences {
 
     /// A leg for a tombstoned identity: pending behind the incoming fence
     /// (a direct leg while the chain rule waits), else handed on.
-    fn to_tomb(&mut self, p: WorldPush, forwarded: bool, c: &mut EventCounts) {
+    fn by_tomb(&mut self, p: WorldPush, forwarded: bool, c: &mut EventCounts) {
         let Addressee::Player(id) = &p.to else {
             return;
         };
@@ -247,7 +247,7 @@ impl Fences {
             Addressee::Room => false,
         };
         if away {
-            self.to_tomb(p, true, c);
+            self.by_tomb(p, true, c);
         } else {
             self.ready.push_back(p);
         }
