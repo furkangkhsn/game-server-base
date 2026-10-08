@@ -273,7 +273,7 @@ pub struct RoomSample {
 /// The registry's table gauges + cumulative control-plane counters. The
 /// registry emits one sample when a table changes (event-driven; the
 /// registry has no timer and no new await — the send is synchronous).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RegistrySample {
     /// Current room count.
     pub rooms: u32,

@@ -65,7 +65,7 @@ pub fn request(
         m.push(scalar(f.name, f.kind, f.help, (f.get)(report), at));
     }
     if let Some(reg) = &report.registry {
-        for f in &families::REGISTRY {
+        for f in families::REGISTRY.iter().chain(&families::ROUTER) {
             m.push(scalar(f.name, f.kind, f.help, (f.get)(reg), at));
         }
         let lost = reg.verdicts_lost.closes.iter();
@@ -73,7 +73,7 @@ pub fn request(
         let (name, help) = CLOSE_VERDICTS_LOST;
         m.push(sum(name, help, points.collect()));
     }
-    for f in &families::NET {
+    for f in families::NET.iter().chain(&families::PUSHES) {
         m.push(scalar(f.name, f.kind, f.help, (f.get)(&report.net), at));
     }
     let closes = report.net.server_closes.iter();
@@ -90,6 +90,7 @@ pub fn request(
         ));
     }
     services(&mut m, &report.services, at);
+    publishers(&mut m, &report.publishers, at);
 
     let rooms = &report.rooms;
     if !rooms.is_empty() {
@@ -147,6 +148,30 @@ pub fn request(
             }],
             schema_url: String::new(),
         }],
+    }
+}
+
+/// The publisher-scoped families (`docs/EVENTS.md` §9), as the
+/// exposition has them: only when publishers report; the publisher's name
+/// as the attribute.
+fn publishers(
+    m: &mut Vec<proto::Metric>,
+    publishers: &[crate::metrics::PublisherReport],
+    at: Stamp,
+) {
+    if publishers.is_empty() {
+        return;
+    }
+    for f in &families::PUBLISHER {
+        let points = publishers.iter().map(|p| {
+            int_point(
+                vec![attr("publisher", &p.publisher)],
+                (f.get)(&p.counts),
+                at,
+                true,
+            )
+        });
+        m.push(sum(f.name, f.help, points.collect()));
     }
 }
 

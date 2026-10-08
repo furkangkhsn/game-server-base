@@ -156,6 +156,9 @@ pub struct RoomReport {
     /// The call table's counters (`docs/SERVICES.md` §9,
     /// [`CallCounts`]), cumulative.
     pub calls: CallCounts,
+    /// The event table's and EVENTS phase's counters (`docs/EVENTS.md`
+    /// §9, [`crate::metrics::EventCounts`]), cumulative.
+    pub events: crate::metrics::EventCounts,
     /// The logic's own named counters (see [`RoomSample::logic`]), as
     /// the latest sample carried them.
     pub logic: LogicCounters,
@@ -229,6 +232,10 @@ pub struct RegistryReport {
     /// Counted by the collector from the rooms', the registry's and the
     /// connections' events.
     pub verdicts_lost: VerdictsLost,
+    /// The event router's counters (`docs/EVENTS.md` §9,
+    /// [`crate::metrics::RouterCounts`]), cumulative, from the registry's
+    /// latest sample.
+    pub events: crate::metrics::RouterCounts,
 }
 
 /// Network slice of a report (cumulative since startup).
@@ -308,6 +315,10 @@ pub struct NetReport {
     /// refused by [`crate::auth::TicketReason`], and the game's own
     /// checks by name. All zero on a local-auth server.
     pub tickets: TicketCounts,
+    /// The events' CLIENT legs the connection actors wrote as `PUSH`
+    /// frames, or lost by cause (cumulative, all connections;
+    /// `docs/EVENTS.md` §9, [`crate::metrics::PushCounts`]).
+    pub pushes: crate::metrics::PushCounts,
 }
 
 /// One periodic report: the server's current numeric state.
@@ -354,6 +365,10 @@ pub struct MetricReport {
     /// [`ServiceReport`]), in registration order; empty when the
     /// collector was handed none.
     pub services: Vec<ServiceReport>,
+    /// The publishing handles' own counters (`docs/EVENTS.md` §9, see
+    /// [`crate::metrics::PublisherReport`]), in minting order; empty when
+    /// the collector was handed none.
+    pub publishers: Vec<crate::metrics::PublisherReport>,
 }
 
 impl MetricReport {
@@ -401,10 +416,12 @@ impl MetricReport {
                 control_frames_unprocessed: 0,
                 server_closes: ServerCloses::default(),
                 tickets: TicketCounts::default(),
+                pushes: Default::default(),
             },
             actions_dropped_top: Vec::new(),
             transport: TransportCounters::default(),
             services: Vec::new(),
+            publishers: Vec::new(),
         }
     }
 }

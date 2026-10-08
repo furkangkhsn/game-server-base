@@ -17,6 +17,7 @@
 use crate::metrics::{MethodReport, MetricReport, RoomReport, ServiceCounts};
 
 mod calls;
+mod events;
 mod registry;
 mod room;
 mod server;
@@ -25,6 +26,7 @@ mod session;
 mod stop;
 mod transport;
 
+pub(super) use events::{PUBLISHER, PUSHES, ROUTER};
 pub(super) use registry::REGISTRY;
 pub(super) use server::NET;
 pub(super) use services::{METHOD, SERVICE};
@@ -133,6 +135,7 @@ pub(super) fn room() -> impl Iterator<Item = &'static RoomFamily> {
         .chain(session::SESSION.iter())
         .chain(stop::STOP.iter())
         .chain(calls::CALLS.iter())
+        .chain(events::EVENTS.iter())
 }
 
 /// The metrics channel's health (top of every exposition).

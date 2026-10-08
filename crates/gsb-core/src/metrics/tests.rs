@@ -264,8 +264,9 @@ fn accumulator_applies_events_and_computes_rates() {
     // The render is one line per scope and parseable key=value. No
     // attribution line: nothing was dropped by a LIVE connection.
     let lines = second.render();
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 5);
     assert!(lines[3].starts_with("gsb-metric scope=transport "));
+    assert!(lines[4].starts_with("gsb-metric scope=events "));
     assert!(lines[0].starts_with("gsb-metric scope=registry "));
     assert!(lines[1].starts_with("gsb-metric scope=room id=r1 "));
     assert!(lines[2].starts_with("gsb-metric scope=net "));

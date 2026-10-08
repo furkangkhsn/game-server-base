@@ -140,6 +140,16 @@
 //! transport families; and the deliberate HELP change of
 //! `gsb_room_replay_diverged_total` (a replay's CONTROL answer — a
 //! join's admission, a hold's release — that differs counts too, B175).
+//! Round e2's event path (`docs/EVENTS.md` §9): the event table's seven
+//! counters at the end of each room line (after the calls') and as
+//! `gsb_room_events_*_total` families (room 7 carries a few); a
+//! `scope=events` line after the transport line (the router's counters,
+//! then the connections' PUSH frames) and a `scope=publisher` line per
+//! publishing handle after the services'; the router's
+//! `gsb_events_*_total` families after the registry's, the
+//! `gsb_net_pushes_*_total` ones after the net scope's, and the
+//! `gsb_publisher_events_*_total` ones (label `publisher`) after the
+//! services'.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -148,10 +158,21 @@ use crate::conn::ServerClose;
 /// two rooms (the first sampled twice, so its rates are real numbers),
 /// connection traffic, one server close and one flooder.
 pub(super) fn golden_report() -> MetricReport {
-    let mut acc = MetricAccumulator::default().with_services(golden_services());
+    let mut acc = MetricAccumulator::default()
+        .with_services(golden_services())
+        .with_publishers(golden_publishers());
     let t0 = Instant::now();
     acc.apply(MetricsEvent::Registry(RegistrySample {
-        events: Default::default(),
+        events: crate::metrics::RouterCounts {
+            events_routed: 6,
+            events_offline: 1,
+            events_client_sent: 4,
+            events_client_parked: 1,
+            events_client_unsupported: 1,
+            events_world_sent: 3,
+            events_world_no_room: 1,
+            ..Default::default()
+        },
         rooms: 2,
         conns: 3,
         rooms_created: 2,
@@ -280,9 +301,18 @@ pub(super) fn golden_report() -> MetricReport {
     // The determinism counters (round q4, SERVICES.md §10).
     b.calls.replay_diverged = 1;
     b.calls.records_written = 3;
+    // The event table (round e2, EVENTS.md §9).
+    b.events.events_admitted = 3;
+    b.events.events_taken = 2;
+    b.events.events_untaken = 1;
+    b.events.events_world_not_here = 1;
     acc.apply(MetricsEvent::Room(b));
     acc.apply(MetricsEvent::Conn(ConnSample {
-        pushes: Default::default(),
+        pushes: crate::metrics::PushCounts {
+            pushes_written: 3,
+            pushes_dropped_outbound_full: 1,
+            ..Default::default()
+        },
         conn: ConnectionId(1),
         bytes_in: 400,
         bytes_out: 60,
@@ -308,7 +338,10 @@ pub(super) fn golden_report() -> MetricReport {
         tickets: Default::default(),
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
-        pushes: Default::default(),
+        pushes: crate::metrics::PushCounts {
+            pushes_dropped_unread: 1,
+            ..Default::default()
+        },
         conn: ConnectionId(2),
         bytes_in: 10,
         bytes_out: 0,
@@ -393,6 +426,29 @@ fn golden_services() -> Vec<(&'static str, std::sync::Arc<crate::calls::ServiceS
     vec![
         ("Economy", std::sync::Arc::new(economy)),
         ("bank", std::sync::Arc::new(bank)),
+    ]
+}
+
+/// Round e2's publishing handles: one with every counter distinct, one
+/// that never pushed — the `scope=publisher` lines and the
+/// `gsb_publisher_*` families.
+fn golden_publishers() -> Vec<crate::events::PublisherSource> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let bank = crate::events::PublisherStats::default();
+    bank.events_pushed.store(6, Relaxed);
+    bank.events_refused_router_full.store(2, Relaxed);
+    bank.events_refused_too_large.store(1, Relaxed);
+    vec![
+        (
+            "bank".into(),
+            crate::events::PublisherId(1),
+            std::sync::Arc::new(bank),
+        ),
+        (
+            "chat".into(),
+            crate::events::PublisherId(2),
+            std::sync::Arc::default(),
+        ),
     ]
 }
 

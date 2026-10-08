@@ -1,10 +1,13 @@
 gsb-metric scope=registry rooms=2 conns=3 opens=4 closes=1 joins=3 leaves=1 rooms_created=2 rooms_destroyed=0 rooms_died=0 join_ops_dropped=1 close_ops_dropped=0 match_results_dropped_full=2 match_results_dropped_closed=1 rooms_ended_uncounted=1 team_relays_dropped_full=4 team_relays_dropped_closed=5 joins_refused_closed=2 joins_unread=6 team_exports_unread=7 joins_unsent=8 close_verdicts_lost=5 close_verdict_lost_idle_timeout=0 close_verdict_lost_write_stall=0 close_verdict_lost_rel_dead=0 close_verdict_lost_violation_budget=0 close_verdict_lost_preauth_budget=0 close_verdict_lost_stream_rejected=0 close_verdict_lost_conn_cap=0 close_verdict_lost_unauth_cap=0 close_verdict_lost_superseded=0 close_verdict_lost_room_gone=0 close_verdict_lost_outbound_dead=0 close_verdict_lost_idle_input=2 close_verdict_lost_kicked=3 close_verdict_lost_unauth_source_cap=0 leave_verdicts_lost=1 detach_despawns_lost=5 unauth_source_moves_kept=9
-gsb-metric scope=room id=r1 steps=60 hz=30.00 step_budget_us=33333 step_min_us=40 step_mean_us=100.0 step_max_us=900 step_hist=[60,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=5 late_mean_us=20.0 late_max_us=70 lagged_events=0 lagged_ticks=0 dropped=2 dropped_s=2.0 sends_closed=1 keepalive_resends=0 snapshots=29 snapshots_withheld=4 snap_bytes_s=3000 snap_bytes_max=120 snap_overflows=0 snap_records=58 shipped_bytes=17700 shipped_s=9000 shipped_frames=87 private_frames=3 groups=1 members=2 max_group=2 joins=3 leaves=1 detached=0 resumes=0 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=0 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=0 migrations_in=0 migrations_failed=0 team_exports=0 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=0 team_imports=0 team_import_records=0 team_expired=0 actions_unread=3 actions_unbound=0 req_local=4 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=3 req_unread=2 req_unbound=0 req_to=0 req_late=0 req_undelivered=1 req_abandoned=0 req_pending=0 metrics_dropped=0 joins_unprocessed=0 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=0 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0 calls_issued=0 calls_sent=0 calls_refused_full=0 calls_refused_gone=0 calls_refused_share=0 calls_exported=0 calls_imported=0 results_ok=0 results_service_error=0 results_refused=0 results_timed_out=0 results_abandoned=0 results_late=0 responses_delivered=0 responses_unhandled=0 responses_owner_gone=0 answers_sent=0 requests_undecodable=0 requests_unbound=0 requests_forwarded=0 requests_answered=0 requests_untaken=0 requests_unanswered=0 requests_replied_late=0 replay_diverged=0 replay_undecodable=0 records_written=0 records_dropped=0
-gsb-metric scope=room id=r7 steps=15 hz=0.00 step_budget_us=33333 step_min_us=0 step_mean_us=0.0 step_max_us=0 step_hist=[0,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=0 late_mean_us=0.0 late_max_us=0 lagged_events=0 lagged_ticks=0 dropped=0 dropped_s=0.0 sends_closed=0 keepalive_resends=0 snapshots=0 snapshots_withheld=0 snap_bytes_s=0 snap_bytes_max=0 snap_overflows=0 snap_records=0 shipped_bytes=0 shipped_s=0 shipped_frames=0 private_frames=0 groups=0 members=0 max_group=0 joins=0 leaves=0 detached=1 resumes=2 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=6 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=2 migrations_in=0 migrations_failed=0 team_exports=9 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=1 team_imports=0 team_import_records=0 team_expired=0 actions_unread=0 actions_unbound=1 req_local=0 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=0 req_unread=0 req_unbound=1 req_to=0 req_late=0 req_undelivered=0 req_abandoned=1 req_pending=1 metrics_dropped=0 joins_unprocessed=1 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=2 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0 calls_issued=7 calls_sent=5 calls_refused_full=1 calls_refused_gone=0 calls_refused_share=1 calls_exported=0 calls_imported=0 results_ok=4 results_service_error=0 results_refused=2 results_timed_out=0 results_abandoned=0 results_late=0 responses_delivered=3 responses_unhandled=0 responses_owner_gone=1 answers_sent=2 requests_undecodable=0 requests_unbound=1 requests_forwarded=0 requests_answered=0 requests_untaken=1 requests_unanswered=0 requests_replied_late=0 replay_diverged=1 replay_undecodable=0 records_written=3 records_dropped=0
+gsb-metric scope=room id=r1 steps=60 hz=30.00 step_budget_us=33333 step_min_us=40 step_mean_us=100.0 step_max_us=900 step_hist=[60,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=5 late_mean_us=20.0 late_max_us=70 lagged_events=0 lagged_ticks=0 dropped=2 dropped_s=2.0 sends_closed=1 keepalive_resends=0 snapshots=29 snapshots_withheld=4 snap_bytes_s=3000 snap_bytes_max=120 snap_overflows=0 snap_records=58 shipped_bytes=17700 shipped_s=9000 shipped_frames=87 private_frames=3 groups=1 members=2 max_group=2 joins=3 leaves=1 detached=0 resumes=0 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=0 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=0 migrations_in=0 migrations_failed=0 team_exports=0 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=0 team_imports=0 team_import_records=0 team_expired=0 actions_unread=3 actions_unbound=0 req_local=4 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=3 req_unread=2 req_unbound=0 req_to=0 req_late=0 req_undelivered=1 req_abandoned=0 req_pending=0 metrics_dropped=0 joins_unprocessed=0 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=0 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0 calls_issued=0 calls_sent=0 calls_refused_full=0 calls_refused_gone=0 calls_refused_share=0 calls_exported=0 calls_imported=0 results_ok=0 results_service_error=0 results_refused=0 results_timed_out=0 results_abandoned=0 results_late=0 responses_delivered=0 responses_unhandled=0 responses_owner_gone=0 answers_sent=0 requests_undecodable=0 requests_unbound=0 requests_forwarded=0 requests_answered=0 requests_untaken=0 requests_unanswered=0 requests_replied_late=0 replay_diverged=0 replay_undecodable=0 records_written=0 records_dropped=0 events_admitted=0 events_no_handler=0 events_undecodable=0 events_unbound=0 events_taken=0 events_untaken=0 events_world_not_here=0
+gsb-metric scope=room id=r7 steps=15 hz=0.00 step_budget_us=33333 step_min_us=0 step_mean_us=0.0 step_max_us=0 step_hist=[0,0,0,0,0,0,0,0,0,0,0,0,0,0] late_min_us=0 late_mean_us=0.0 late_max_us=0 lagged_events=0 lagged_ticks=0 dropped=0 dropped_s=0.0 sends_closed=0 keepalive_resends=0 snapshots=0 snapshots_withheld=0 snap_bytes_s=0 snap_bytes_max=0 snap_overflows=0 snap_records=0 shipped_bytes=0 shipped_s=0 shipped_frames=0 private_frames=0 groups=0 members=0 max_group=0 joins=0 leaves=0 detached=1 resumes=2 resume_rejected_stale=0 detach_expired_despawn=0 detach_expired_ai=0 detach_forced=0 effects_applied=6 effects_forwarded=0 effects_orphaned=0 effects_dropped=0 effects_refused=0 migrations_out=2 migrations_in=0 migrations_failed=0 team_exports=9 team_export_drops_full=0 team_export_drops_closed=0 team_export_records=0 team_over_cap=0 team_over_budget=1 team_imports=0 team_import_records=0 team_expired=0 actions_unread=0 actions_unbound=1 req_local=0 req_ext=0 req_rej_malformed=0 req_rej_dup=0 req_rej_no_handler=0 req_rej_logic=0 req_rej_conn=0 req_rej_room=0 req_refused=0 req_unread=0 req_unbound=1 req_to=0 req_late=0 req_undelivered=0 req_abandoned=1 req_pending=1 metrics_dropped=0 joins_unprocessed=1 resumes_unprocessed=0 leaves_unprocessed=0 detaches_unprocessed=0 migrations_in_dropped=0 effects_unsent=2 effects_unapplied=0 team_imports_unapplied=0 border_updates_unapplied=0 calls_issued=7 calls_sent=5 calls_refused_full=1 calls_refused_gone=0 calls_refused_share=1 calls_exported=0 calls_imported=0 results_ok=4 results_service_error=0 results_refused=2 results_timed_out=0 results_abandoned=0 results_late=0 responses_delivered=3 responses_unhandled=0 responses_owner_gone=1 answers_sent=2 requests_undecodable=0 requests_unbound=1 requests_forwarded=0 requests_answered=0 requests_untaken=1 requests_unanswered=0 requests_replied_late=0 replay_diverged=1 replay_undecodable=0 records_written=3 records_dropped=0 events_admitted=3 events_no_handler=0 events_undecodable=0 events_unbound=0 events_taken=2 events_untaken=1 events_world_not_here=1
 gsb-metric scope=net bytes_in=410 bytes_out_room=17700 bytes_out_control=60 bytes_out_total=17760 frames_in=21 frames_out=3 actions_dropped=5 violations=1 input_rate_limited=9 actions_dropped_closed=2 requests_dropped_closed=1 requests_dropped_full=2 requests_no_room=1 hb_throttled_preauth=4 hb_throttled_authed=6 frames_out_closed=1 close_notices_dropped=1 requests_unprocessed=1 actions_unprocessed=2 control_frames_unprocessed=3 metrics_dropped=18 reports_torn_at_cut_grace=2 server_closes=1 server_close_idle_timeout=1 server_close_write_stall=0 server_close_rel_dead=0 server_close_violation_budget=0 server_close_preauth_budget=0 server_close_stream_rejected=0 server_close_conn_cap=0 server_close_unauth_cap=0 server_close_superseded=0 server_close_room_gone=0 server_close_outbound_dead=0 server_close_idle_input=0 server_close_kicked=0 server_close_unauth_source_cap=0
 gsb-metric scope=tickets accepted=2 rejected=2 reject_missing=0 reject_malformed=0 reject_unknown_key=0 reject_signature=0 reject_claims=0 reject_expired=1 reject_not_yet_valid=0 reject_lifetime=0 reject_audience=0 reject_replayed=0 reject_replay_unavailable=0 reject_game=1 reject_other=0 reject_timed_out=0 reject_validator_lost=0 game_season_pass=1
 gsb-metric scope=net actions_dropped_top=c1:5
 gsb-metric scope=transport udp_requests_dropped_full=11 udp_actions_dropped_full=2 udp_control_frames_dropped_full=3 udp_acks_not_forwarded=4 udp_datagrams_oversized=5 udp_datagrams_malformed=6 udp_bad_cookies=7 udp_frags_refused=8 udp_sessions_dropped_accept_full=9 udp_frames_dropped_oversized=10 udp_control_frames_abandoned=11 udp_frames_drained=12 ws_close_frames_dropped=13 ws_pongs_dropped=14 handshakes_refused=15 handshakes_timed_out=16 handshakes_failed=17 metrics_dropped=18 stream_frames_unwritten=19 stream_batches_unwritten=20 stream_requests_dropped_closed=21 stream_actions_dropped_closed=22 stream_control_frames_dropped_closed=23 ws_control_frames_unwritten=24 ws_frames_dropped_after_close=25 udp_game_datagrams_send_failed=26 udp_control_datagrams_send_failed=27 udp_acks_send_failed=28 udp_challenges_send_failed=29 udp_requests_dropped_closed=30 udp_actions_dropped_closed=31 udp_control_frames_dropped_closed=32 udp_datagrams_no_session=33 udp_frames_unsent=34 writer_verdicts_deferred=35 handshakes_cut_closed=36 handshakes_unaccepted_closed=37 udp_sessions_dropped_accept_gone=38 udp_sessions_unaccepted_closed=39 ws_teardown_closes_unsent_closed=40 ws_teardown_closes_unsent_stalled=41 ws_close_frames_dropped_closed=42 ws_pongs_dropped_closed=43 udp_control_retransmits_timeout=44 handshakes_refused_per_source=45 handshakes_retried_per_source=46 ops_http_conns_refused=47 ops_http_writes_timed_out=48 udp_datagrams_dropped_kernel=49 udp_game_announces_received=50 udp_game_probes_sent=51 udp_game_probes_send_failed=52 udp_game_probes_unanswered=53 udp_game_reports_received=54 udp_game_reports_late=55 udp_game_reports_invalid=56 udp_game_reports_clamped=57 udp_game_reports_not_forwarded=58 udp_game_datagrams_reported_sent=59 udp_game_datagrams_reported_lost=60 udp_game_rtt_samples=61 udp_game_rtt_sum_us=62 udp_game_probes_open_at_end=63 ops_http_routes_timed_out=64 idle_windows_restarted_late=65 udp_game_frames_queued_paced=66 udp_game_frames_dropped_paced=67 udp_game_frames_unsent_paced=68 udp_game_paced_episodes=69 udp_game_paced_rate_cuts=70 udp_cids_assigned=71 udp_entropy_draws_failed=72 udp_cid_unknown=73 udp_path_validations_started=74 udp_path_challenges_sent=75 udp_path_challenges_send_failed=76 udp_path_amplification_capped=77 udp_path_address_in_use=78 udp_path_responses_unmatched=79 udp_path_changes_not_forwarded=80 udp_path_validations_timed_out=81 udp_path_validations_superseded=82 udp_path_validations_open_at_end=83 udp_migrations=84 udp_migrations_port_only=85 udp_proofs_refused_per_source=86 udp_pending_source_moves_kept=87 udp_proofs_refused_budget=88 udp_proofs_refused_plaintext=89 udp_handshakes_malformed=90 udp_handshakes_failed_decrypt=91 udp_handshakes_failed_internal=92 udp_datagrams_unsealed=93 seal_integrity_limit=94 seal_malformed=95 seal_too_old=96 seal_replayed=97 seal_wrong_phase=98 seal_forged=99 udp_sessions_ended_seal_limit=100 udp_path_candidates_not_newest=101 udp_acks_not_queued=102 udp_path_challenges_not_queued=103 udp_rekeys=104 udp_rekeys_unconfirmed=105 udp_stateless_resets_sent=106 udp_stateless_resets_rate_limited=107 udp_stateless_resets_send_failed=108 udp_game_paced_drains=109
+gsb-metric scope=events events_routed=6 events_unread=0 events_offline=1 events_client_sent=4 events_client_parked=1 events_client_unsupported=1 events_client_refused_conn_full=0 events_client_refused_conn_gone=0 events_world_sent=3 events_world_no_room=1 events_world_refused_room_full=0 events_world_refused_room_gone=0 pushes_written=3 pushes_dropped_outbound_full=1 pushes_dropped_outbound_gone=0 pushes_dropped_unread=1
+gsb-metric scope=publisher name=bank id=1 events_pushed=6 events_refused_router_full=2 events_refused_router_gone=0 events_refused_too_large=1
+gsb-metric scope=publisher name=chat id=2 events_pushed=0 events_refused_router_full=0 events_refused_router_gone=0 events_refused_too_large=0
 gsb-metric scope=service name=Economy calls_received=20 calls_timed_out=19 calls_shed=18 calls_failed=17 calls_abandoned=16 replies_undeliverable_full=15 replies_undeliverable_gone=14
 gsb-metric scope=service_method service=Economy method=buy calls=14 latency_us_total=7000 latency_us_mean=500.0 latency_us_max=1200
 gsb-metric scope=service_method service=Economy method=refund calls=0 latency_us_total=0 latency_us_mean=0.0 latency_us_max=0
@@ -85,6 +88,42 @@ gsb_registry_detach_despawns_lost_total 5
 # HELP gsb_registry_unauth_source_moves_kept_total Unauthenticated connections whose transport moved them to a new source (an rUDP migration) while that source held its max_unauth_conns_per_source: the per-source count stayed at the old source, cumulative.
 # TYPE gsb_registry_unauth_source_moves_kept_total counter
 gsb_registry_unauth_source_moves_kept_total 9
+# HELP gsb_events_routed_total Pushes the event router took from its mailbox, cumulative.
+# TYPE gsb_events_routed_total counter
+gsb_events_routed_total 6
+# HELP gsb_events_unread_total Pushes still in the event router's mailbox when it stopped, never routed, cumulative.
+# TYPE gsb_events_unread_total counter
+gsb_events_unread_total 0
+# HELP gsb_events_offline_total Identity-addressed push recipients with no authenticated session and nothing parked, cumulative.
+# TYPE gsb_events_offline_total counter
+gsb_events_offline_total 1
+# HELP gsb_events_client_sent_total Event CLIENT legs handed to a connection actor, cumulative.
+# TYPE gsb_events_client_sent_total counter
+gsb_events_client_sent_total 4
+# HELP gsb_events_client_parked_total Event CLIENT legs for a parked identity (no live session), lost, cumulative.
+# TYPE gsb_events_client_parked_total counter
+gsb_events_client_parked_total 1
+# HELP gsb_events_client_unsupported_total Event CLIENT legs for a session whose client did not announce PUSH, lost, cumulative.
+# TYPE gsb_events_client_unsupported_total counter
+gsb_events_client_unsupported_total 1
+# HELP gsb_events_client_refused_conn_full_total Event CLIENT legs a connection actor's full inbox refused, lost, cumulative.
+# TYPE gsb_events_client_refused_conn_full_total counter
+gsb_events_client_refused_conn_full_total 0
+# HELP gsb_events_client_refused_conn_gone_total Event CLIENT legs for a connection actor that was gone, lost, cumulative.
+# TYPE gsb_events_client_refused_conn_gone_total counter
+gsb_events_client_refused_conn_gone_total 0
+# HELP gsb_events_world_sent_total Event WORLD legs handed to a room's or shard's event mailbox, cumulative.
+# TYPE gsb_events_world_sent_total counter
+gsb_events_world_sent_total 3
+# HELP gsb_events_world_no_room_total Event WORLD legs for an identity in no room (or a room-wide leg for an unknown room), lost, cumulative.
+# TYPE gsb_events_world_no_room_total counter
+gsb_events_world_no_room_total 1
+# HELP gsb_events_world_refused_room_full_total Event WORLD legs a room's full event mailbox refused, lost, cumulative.
+# TYPE gsb_events_world_refused_room_full_total counter
+gsb_events_world_refused_room_full_total 0
+# HELP gsb_events_world_refused_room_gone_total Event WORLD legs whose room had ended, lost, cumulative.
+# TYPE gsb_events_world_refused_room_gone_total counter
+gsb_events_world_refused_room_gone_total 0
 # HELP gsb_registry_close_verdicts_lost_total Session-close verdicts (a room's kick or input-idle close, any server verdict) the server's stop kept from their connection, by the reason it would have booked in gsb_net_server_closes_total: still queued in the room, refused by the stopped registry, unread in its mailbox, or left in the connection's inbox behind the stop's notice (the client got ERROR 14 instead), cumulative.
 # TYPE gsb_registry_close_verdicts_lost_total counter
 gsb_registry_close_verdicts_lost_total{reason="idle_timeout"} 0
@@ -161,6 +200,18 @@ gsb_net_actions_unprocessed_total 2
 # HELP gsb_net_control_frames_unprocessed_total Base-band frames other than RPC requests (auth, join, leave, heartbeat, undefined) a connection received but never processed because the server ended its session first, cumulative.
 # TYPE gsb_net_control_frames_unprocessed_total counter
 gsb_net_control_frames_unprocessed_total 3
+# HELP gsb_net_pushes_written_total PUSH frames (event CLIENT legs) queued on a connection's outbound channel, cumulative.
+# TYPE gsb_net_pushes_written_total counter
+gsb_net_pushes_written_total 3
+# HELP gsb_net_pushes_dropped_outbound_full_total PUSH frames a connection's full outbound channel refused (a slow client), lost, cumulative.
+# TYPE gsb_net_pushes_dropped_outbound_full_total counter
+gsb_net_pushes_dropped_outbound_full_total 1
+# HELP gsb_net_pushes_dropped_outbound_gone_total PUSH frames for a connection whose writer was gone, lost, cumulative.
+# TYPE gsb_net_pushes_dropped_outbound_gone_total counter
+gsb_net_pushes_dropped_outbound_gone_total 0
+# HELP gsb_net_pushes_dropped_unread_total Event CLIENT legs still in a connection actor's inbox when its session ended, lost, cumulative.
+# TYPE gsb_net_pushes_dropped_unread_total counter
+gsb_net_pushes_dropped_unread_total 1
 # HELP gsb_net_server_closes_total Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
 # TYPE gsb_net_server_closes_total counter
 gsb_net_server_closes_total{reason="idle_timeout"} 1
@@ -567,6 +618,22 @@ gsb_service_method_latency_us_total{service="Economy",method="refund"} 0
 # TYPE gsb_service_method_latency_us_max gauge
 gsb_service_method_latency_us_max{service="Economy",method="buy"} 1200
 gsb_service_method_latency_us_max{service="Economy",method="refund"} 0
+# HELP gsb_publisher_events_pushed_total Pushes the event router's mailbox took from this publisher, cumulative.
+# TYPE gsb_publisher_events_pushed_total counter
+gsb_publisher_events_pushed_total{publisher="bank"} 6
+gsb_publisher_events_pushed_total{publisher="chat"} 0
+# HELP gsb_publisher_events_refused_router_full_total Pushes refused at the handle: the event router's mailbox was full, cumulative.
+# TYPE gsb_publisher_events_refused_router_full_total counter
+gsb_publisher_events_refused_router_full_total{publisher="bank"} 2
+gsb_publisher_events_refused_router_full_total{publisher="chat"} 0
+# HELP gsb_publisher_events_refused_router_gone_total Pushes refused at the handle: the event router was gone, cumulative.
+# TYPE gsb_publisher_events_refused_router_gone_total counter
+gsb_publisher_events_refused_router_gone_total{publisher="bank"} 0
+gsb_publisher_events_refused_router_gone_total{publisher="chat"} 0
+# HELP gsb_publisher_events_refused_too_large_total Pushes refused at the handle: the encoded event exceeded max_event_bytes, cumulative.
+# TYPE gsb_publisher_events_refused_too_large_total counter
+gsb_publisher_events_refused_too_large_total{publisher="bank"} 1
+gsb_publisher_events_refused_too_large_total{publisher="chat"} 0
 # HELP gsb_room_hz Measured room step rate (Δsteps/s over the last sample interval).
 # TYPE gsb_room_hz gauge
 gsb_room_hz{room="r1"} 30
@@ -1041,3 +1108,31 @@ gsb_room_records_written_total{room="r7"} 3
 # TYPE gsb_room_records_dropped_total counter
 gsb_room_records_dropped_total{room="r1"} 0
 gsb_room_records_dropped_total{room="r7"} 0
+# HELP gsb_room_events_admitted_total Event WORLD legs that entered the room's event table (decoded, owner resolved), cumulative.
+# TYPE gsb_room_events_admitted_total counter
+gsb_room_events_admitted_total{room="r1"} 0
+gsb_room_events_admitted_total{room="r7"} 3
+# HELP gsb_room_events_no_handler_total Event WORLD legs of an op the room never accepted, dropped, cumulative.
+# TYPE gsb_room_events_no_handler_total counter
+gsb_room_events_no_handler_total{room="r1"} 0
+gsb_room_events_no_handler_total{room="r7"} 0
+# HELP gsb_room_events_undecodable_total Event WORLD legs whose body did not decode as the accepted type, dropped, cumulative.
+# TYPE gsb_room_events_undecodable_total counter
+gsb_room_events_undecodable_total{room="r1"} 0
+gsb_room_events_undecodable_total{room="r7"} 0
+# HELP gsb_room_events_unbound_total Event WORLD legs for a member bound to no owner, dropped, cumulative.
+# TYPE gsb_room_events_unbound_total counter
+gsb_room_events_unbound_total{room="r1"} 0
+gsb_room_events_unbound_total{room="r7"} 0
+# HELP gsb_room_events_taken_total Events the room's game took from its event table, cumulative.
+# TYPE gsb_room_events_taken_total counter
+gsb_room_events_taken_total{room="r1"} 0
+gsb_room_events_taken_total{room="r7"} 2
+# HELP gsb_room_events_untaken_total Events nobody took by the end of their tick, dropped, cumulative.
+# TYPE gsb_room_events_untaken_total counter
+gsb_room_events_untaken_total{room="r1"} 0
+gsb_room_events_untaken_total{room="r7"} 1
+# HELP gsb_room_events_world_not_here_total Event WORLD legs for an identity that was no member of the room (or shard) by its EVENTS phase, dropped, cumulative.
+# TYPE gsb_room_events_world_not_here_total counter
+gsb_room_events_world_not_here_total{room="r1"} 0
+gsb_room_events_world_not_here_total{room="r7"} 1

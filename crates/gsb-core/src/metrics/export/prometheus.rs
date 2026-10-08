@@ -46,13 +46,13 @@ impl MetricReport {
         scalar(&mut out, &families::METRICS_DROPPED, self);
         scalar(&mut out, &families::REPORTS_TORN, self);
         if let Some(reg) = &self.registry {
-            for f in &families::REGISTRY {
+            for f in families::REGISTRY.iter().chain(&families::ROUTER) {
                 scalar(&mut out, f, reg);
             }
             let lost = &reg.verdicts_lost.closes;
             closes::render(&mut out, families::CLOSE_VERDICTS_LOST, lost);
         }
-        for f in &families::NET {
+        for f in families::NET.iter().chain(&families::PUSHES) {
             scalar(&mut out, f, &self.net);
         }
         closes::render(&mut out, families::SERVER_CLOSES, &self.net.server_closes);
@@ -61,6 +61,7 @@ impl MetricReport {
             scalar(&mut out, f, &self.transport);
         }
         services(&mut out, &self.services);
+        publishers(&mut out, &self.publishers);
 
         let rooms = &self.rooms;
         if rooms.is_empty() {
@@ -105,6 +106,26 @@ fn header(out: &mut String, name: &str, kind: &str, help: &str) {
 fn scalar<T>(out: &mut String, f: &Scalar<T>, from: &T) {
     header(out, f.name, f.kind.word(), f.help);
     let _ = writeln!(out, "{} {}", f.name, (f.get)(from));
+}
+
+/// The publisher-scoped families (`docs/EVENTS.md` §9), only when
+/// publishers report: a sample per publishing handle.
+fn publishers(out: &mut String, publishers: &[crate::metrics::PublisherReport]) {
+    if publishers.is_empty() {
+        return;
+    }
+    for f in &families::PUBLISHER {
+        header(out, f.name, "counter", f.help);
+        for p in publishers {
+            let _ = writeln!(
+                out,
+                "{}{{publisher=\"{}\"}} {}",
+                f.name,
+                p.publisher,
+                (f.get)(&p.counts)
+            );
+        }
+    }
 }
 
 /// The service-scoped families (B164), only when services report: a

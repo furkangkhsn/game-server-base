@@ -50,6 +50,30 @@ gsb_registry_detach_despawns_lost sum t=2 mono=true unit="" n=1 | Detaches that 
   [] 1000..2000 int 5
 gsb_registry_unauth_source_moves_kept sum t=2 mono=true unit="" n=1 | Unauthenticated connections whose transport moved them to a new source (an rUDP migration) while that source held its max_unauth_conns_per_source: the per-source count stayed at the old source, cumulative.
   [] 1000..2000 int 9
+gsb_events_routed sum t=2 mono=true unit="" n=1 | Pushes the event router took from its mailbox, cumulative.
+  [] 1000..2000 int 6
+gsb_events_unread sum t=2 mono=true unit="" n=1 | Pushes still in the event router's mailbox when it stopped, never routed, cumulative.
+  [] 1000..2000 int 0
+gsb_events_offline sum t=2 mono=true unit="" n=1 | Identity-addressed push recipients with no authenticated session and nothing parked, cumulative.
+  [] 1000..2000 int 1
+gsb_events_client_sent sum t=2 mono=true unit="" n=1 | Event CLIENT legs handed to a connection actor, cumulative.
+  [] 1000..2000 int 4
+gsb_events_client_parked sum t=2 mono=true unit="" n=1 | Event CLIENT legs for a parked identity (no live session), lost, cumulative.
+  [] 1000..2000 int 1
+gsb_events_client_unsupported sum t=2 mono=true unit="" n=1 | Event CLIENT legs for a session whose client did not announce PUSH, lost, cumulative.
+  [] 1000..2000 int 1
+gsb_events_client_refused_conn_full sum t=2 mono=true unit="" n=1 | Event CLIENT legs a connection actor's full inbox refused, lost, cumulative.
+  [] 1000..2000 int 0
+gsb_events_client_refused_conn_gone sum t=2 mono=true unit="" n=1 | Event CLIENT legs for a connection actor that was gone, lost, cumulative.
+  [] 1000..2000 int 0
+gsb_events_world_sent sum t=2 mono=true unit="" n=1 | Event WORLD legs handed to a room's or shard's event mailbox, cumulative.
+  [] 1000..2000 int 3
+gsb_events_world_no_room sum t=2 mono=true unit="" n=1 | Event WORLD legs for an identity in no room (or a room-wide leg for an unknown room), lost, cumulative.
+  [] 1000..2000 int 1
+gsb_events_world_refused_room_full sum t=2 mono=true unit="" n=1 | Event WORLD legs a room's full event mailbox refused, lost, cumulative.
+  [] 1000..2000 int 0
+gsb_events_world_refused_room_gone sum t=2 mono=true unit="" n=1 | Event WORLD legs whose room had ended, lost, cumulative.
+  [] 1000..2000 int 0
 gsb_registry_close_verdicts_lost sum t=2 mono=true unit="" n=14 | Session-close verdicts (a room's kick or input-idle close, any server verdict) the server's stop kept from their connection, by the reason it would have booked in gsb_net_server_closes_total: still queued in the room, refused by the stopped registry, unread in its mailbox, or left in the connection's inbox behind the stop's notice (the client got ERROR 14 instead), cumulative.
   [reason=idle_timeout] 1000..2000 int 0
   [reason=write_stall] 1000..2000 int 0
@@ -105,6 +129,14 @@ gsb_net_actions_unprocessed sum t=2 mono=true unit="" n=1 | Game-band frames a c
   [] 1000..2000 int 2
 gsb_net_control_frames_unprocessed sum t=2 mono=true unit="" n=1 | Base-band frames other than RPC requests (auth, join, leave, heartbeat, undefined) a connection received but never processed because the server ended its session first, cumulative.
   [] 1000..2000 int 3
+gsb_net_pushes_written sum t=2 mono=true unit="" n=1 | PUSH frames (event CLIENT legs) queued on a connection's outbound channel, cumulative.
+  [] 1000..2000 int 3
+gsb_net_pushes_dropped_outbound_full sum t=2 mono=true unit="" n=1 | PUSH frames a connection's full outbound channel refused (a slow client), lost, cumulative.
+  [] 1000..2000 int 1
+gsb_net_pushes_dropped_outbound_gone sum t=2 mono=true unit="" n=1 | PUSH frames for a connection whose writer was gone, lost, cumulative.
+  [] 1000..2000 int 0
+gsb_net_pushes_dropped_unread sum t=2 mono=true unit="" n=1 | Event CLIENT legs still in a connection actor's inbox when its session ended, lost, cumulative.
+  [] 1000..2000 int 1
 gsb_net_server_closes sum t=2 mono=true unit="" n=14 | Sessions the server ended on its own initiative, by reason (client-initiated closes are not counted), cumulative.
   [reason=idle_timeout] 1000..2000 int 1
   [reason=write_stall] 1000..2000 int 0
@@ -388,6 +420,18 @@ gsb_service_method_latency_us sum t=2 mono=true unit="" n=2 | Summed service-sid
 gsb_service_method_latency_us_max gauge unit="" n=2 | The largest service-side latency of one of the method's calls, microseconds, since startup.
   [service=Economy,method=buy] 0..2000 int 1200
   [service=Economy,method=refund] 0..2000 int 0
+gsb_publisher_events_pushed sum t=2 mono=true unit="" n=2 | Pushes the event router's mailbox took from this publisher, cumulative.
+  [publisher=bank] 1000..2000 int 6
+  [publisher=chat] 1000..2000 int 0
+gsb_publisher_events_refused_router_full sum t=2 mono=true unit="" n=2 | Pushes refused at the handle: the event router's mailbox was full, cumulative.
+  [publisher=bank] 1000..2000 int 2
+  [publisher=chat] 1000..2000 int 0
+gsb_publisher_events_refused_router_gone sum t=2 mono=true unit="" n=2 | Pushes refused at the handle: the event router was gone, cumulative.
+  [publisher=bank] 1000..2000 int 0
+  [publisher=chat] 1000..2000 int 0
+gsb_publisher_events_refused_too_large sum t=2 mono=true unit="" n=2 | Pushes refused at the handle: the encoded event exceeded max_event_bytes, cumulative.
+  [publisher=bank] 1000..2000 int 1
+  [publisher=chat] 1000..2000 int 0
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0
@@ -721,6 +765,27 @@ gsb_room_records_written sum t=2 mono=true unit="" n=2 | Input-log records a rec
 gsb_room_records_dropped sum t=2 mono=true unit="" n=2 | Input-log records a recording room's full or gone sink refused (lost), cumulative.
   [room=r1] 1000..2000 int 0
   [room=r7] 1000..2000 int 0
+gsb_room_events_admitted sum t=2 mono=true unit="" n=2 | Event WORLD legs that entered the room's event table (decoded, owner resolved), cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 3
+gsb_room_events_no_handler sum t=2 mono=true unit="" n=2 | Event WORLD legs of an op the room never accepted, dropped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_events_undecodable sum t=2 mono=true unit="" n=2 | Event WORLD legs whose body did not decode as the accepted type, dropped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_events_unbound sum t=2 mono=true unit="" n=2 | Event WORLD legs for a member bound to no owner, dropped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 0
+gsb_room_events_taken sum t=2 mono=true unit="" n=2 | Events the room's game took from its event table, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 2
+gsb_room_events_untaken sum t=2 mono=true unit="" n=2 | Events nobody took by the end of their tick, dropped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
+gsb_room_events_world_not_here sum t=2 mono=true unit="" n=2 | Event WORLD legs for an identity that was no member of the room (or shard) by its EVENTS phase, dropped, cumulative.
+  [room=r1] 1000..2000 int 0
+  [room=r7] 1000..2000 int 1
 gsb_room_logic_kills sum t=2 mono=true unit="" n=1 | Players felled, cumulative.
   [room=r1] 1000..2000 int 3
 gsb_room_logic_fights_peak gauge unit="" n=1 | The logic's own high-water mark.

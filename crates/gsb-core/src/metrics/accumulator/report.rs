@@ -114,6 +114,7 @@ impl MetricAccumulator {
                 metrics_dropped: latest.metrics_dropped,
                 stop: latest.stop,
                 calls: latest.calls,
+                events: latest.events,
                 logic: latest.logic,
             });
             acc.prev = Some(latest);
@@ -189,6 +190,7 @@ impl MetricAccumulator {
                 joins_unsent: self.joins_unsent,
                 verdicts_lost: self.verdicts_lost,
                 unauth_source_moves_kept: r.unauth_source_moves_kept,
+                events: r.events,
             }),
             // (registry report intentionally carries no metrics_dropped: the
             // registry's drop count is cumulative in its sample and is folded
@@ -216,6 +218,7 @@ impl MetricAccumulator {
                 control_frames_unprocessed: self.conn_control_frames_unprocessed,
                 server_closes: self.conn_server_closes,
                 tickets: self.conn_tickets,
+                pushes: self.conn_pushes,
             },
             actions_dropped_top,
             transport: self.transport,
@@ -223,6 +226,15 @@ impl MetricAccumulator {
                 .services
                 .iter()
                 .map(|(name, stats)| ServiceReport::read(name, stats))
+                .collect(),
+            publishers: self
+                .publishers
+                .iter()
+                .map(|(name, id, stats)| crate::metrics::PublisherReport {
+                    publisher: name.to_string(),
+                    id: id.0,
+                    counts: stats.counts(),
+                })
                 .collect(),
             rooms,
         }

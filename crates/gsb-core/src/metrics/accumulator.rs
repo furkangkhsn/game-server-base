@@ -41,6 +41,9 @@ pub struct MetricAccumulator {
     /// The hosted services whose stats each report reads (B164; see
     /// [`Self::with_services`]), in registration order.
     services: Vec<(&'static str, std::sync::Arc<crate::calls::ServiceStats>)>,
+    /// The publishing handles whose counters each report reads (see
+    /// [`Self::with_publishers`]), in minting order.
+    publishers: Vec<crate::events::PublisherSource>,
     /// Live rooms plus destroyed rooms still inside their short
     /// report-window linger (see `ROOM_GONE_GRACE_REPORTS`): a destroyed
     /// room's entry is dropped when its windows run down, so this map is
@@ -93,6 +96,8 @@ pub struct MetricAccumulator {
     conn_server_closes: ServerCloses,
     /// Ticket-auth outcomes (B21; summed deltas).
     conn_tickets: TicketCounts,
+    /// The connections' PUSH frames (`docs/EVENTS.md` §9; summed deltas).
+    conn_pushes: crate::metrics::PushCounts,
     /// Cumulative input-action drops per connection (the sender's
     /// attribution: which connection's own input was lost to its full
     /// action channel). The collector owns this state — the connection
@@ -140,6 +145,15 @@ impl MetricAccumulator {
         services: Vec<(&'static str, std::sync::Arc<crate::calls::ServiceStats>)>,
     ) -> Self {
         self.services = services;
+        self
+    }
+
+    /// Read these publishing handles' counters into every report (the
+    /// `publishers` slice, the `gsb_publisher_*` families;
+    /// `docs/EVENTS.md` §9). Atomic loads at report time; nothing is
+    /// sent.
+    pub fn with_publishers(mut self, publishers: Vec<crate::events::PublisherSource>) -> Self {
+        self.publishers = publishers;
         self
     }
 
@@ -276,6 +290,7 @@ impl MetricAccumulator {
                     self.conn_server_closes.add(reason);
                 }
                 self.conn_tickets.add_all(&c.tickets);
+                self.conn_pushes.add(&c.pushes);
                 if c.last {
                     // The final flush is the connection actor's LAST
                     // emission (its deltas fold above first — a closing

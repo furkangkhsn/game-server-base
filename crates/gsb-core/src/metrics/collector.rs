@@ -143,6 +143,14 @@ impl MetricsCollector {
         self
     }
 
+    /// Read these publishing handles' counters into every report (see
+    /// [`MetricAccumulator::with_publishers`]): the server hands it the
+    /// handles its game minted.
+    pub fn with_publishers(mut self, publishers: Vec<crate::events::PublisherSource>) -> Self {
+        self.acc = std::mem::take(&mut self.acc).with_publishers(publishers);
+        self
+    }
+
     /// Hand every report to `exporters` as well (in this order, before
     /// the sink). The collector stays the one place export happens; an
     /// exporter only ever sees the folded report (see [`Exporter`]).

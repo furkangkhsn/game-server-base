@@ -173,6 +173,10 @@ impl MetricReport {
             for (k, v) in r.calls.fields() {
                 let _ = write!(line, " {k}={v}");
             }
+            // The event table's counters (EVENTS.md §9): the same rule.
+            for (k, v) in r.events.fields() {
+                let _ = write!(line, " {k}={v}");
+            }
             // The logic's own counters (F9), after every core key: one
             // `logic_<name>=<value>` each, in the order the logic put
             // them. Nothing at all for a logic that declares none.
@@ -252,6 +256,29 @@ impl MetricReport {
             let _ = write!(line, " {k}={v}");
         }
         lines.push(line);
+        // The event path (EVENTS.md §9): the router's counters (the
+        // registry's latest sample; zeros before it) and the connections'
+        // PUSH frames, one stable key each, zeros included.
+        let mut line = String::from("gsb-metric scope=events");
+        let router = self.registry.map(|r| r.events).unwrap_or_default();
+        for (k, v) in router.fields() {
+            let _ = write!(line, " {k}={v}");
+        }
+        for (k, v) in self.net.pushes.fields() {
+            let _ = write!(line, " {k}={v}");
+        }
+        lines.push(line);
+        // The publishing handles: one line each (none without any).
+        for p in &self.publishers {
+            let mut line = format!(
+                "gsb-metric scope=publisher name={} id={}",
+                p.publisher, p.id
+            );
+            for (k, v) in p.counts.fields() {
+                let _ = write!(line, " {k}={v}");
+            }
+            lines.push(line);
+        }
         // The hosted services (B164): one line per service, then one per
         // method (none without services).
         for svc in &self.services {
