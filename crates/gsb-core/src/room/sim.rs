@@ -15,6 +15,7 @@
 //! for _ in 0..10 { room.tick(&mut sim); }
 //! ```
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
@@ -23,9 +24,10 @@ use bytes::Bytes;
 use prost::Message;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use crate::calls::Request;
+use crate::calls::{Identity, Request};
 use crate::channel::{FrameBatch, Mailbox};
 use crate::determinism::Sim;
+use crate::events::{Addressee, Dest, EventIn, PublisherId, Target, WorldPush};
 use crate::id::{ConnectionId, EntityId, PlayerId};
 use crate::metrics::CallCounts;
 use crate::room::actor::RoomActor;
@@ -65,6 +67,11 @@ pub struct SimRoom<W, G = (), Sp = ()> {
     t0: Instant,
     tick: u64,
     hashes: Vec<Option<u64>>,
+    /// The sim pushes this room has routed (an index into them).
+    pushes_seen: usize,
+    /// The WORLD legs' numbers: per (publisher, addressee) — `None` the
+    /// room-wide one — from 1, as the router numbers them.
+    seqs: HashMap<(PublisherId, Option<Identity>), u64>,
 }
 
 /// A scripted client of a [`SimRoom`]: what it sends goes into its
@@ -147,6 +154,8 @@ where
             t0,
             tick: 0,
             hashes: Vec::new(),
+            pushes_seen: 0,
+            seqs: HashMap::new(),
         }
     }
 
@@ -200,10 +209,77 @@ where
         });
     }
 
+    /// Route the WORLD legs `sim`'s publishers pushed since the last
+    /// call into this room's event mailbox (its next step's EVENTS), as
+    /// the registry's router would: a push to an identity reaches the
+    /// room when a member (live or parked) has it, a push to this room
+    /// or to everyone reaches it room-wide; each leg numbered per
+    /// (publisher, addressee). CLIENT-only events and other rooms'
+    /// identities are not this room's. [`Self::tick`] calls it first; a
+    /// live-timing run ([`Self::tick_at`]) calls it before each step.
+    /// Panics when the room's event mailbox (`RoomConfig::event_capacity`)
+    /// is full — a script that outruns its room.
+    pub fn deliver(&mut self, sim: &mut Sim) {
+        let pushes = sim.pushes();
+        let new = pushes.get(self.pushes_seen..).unwrap_or_default();
+        self.pushes_seen = pushes.len();
+        if new.is_empty() {
+            return;
+        }
+        let room = self.actor.config.id;
+        let mailbox = self.actor.events.mailbox();
+        for p in new {
+            if p.dest() == Dest::Client {
+                continue;
+            }
+            let member = |id: &Identity| {
+                self.actor
+                    .conns
+                    .values()
+                    .any(|rc| !rc.identity.is_empty() && rc.identity == id.as_str())
+            };
+            let legs: Vec<Option<Identity>> = match p.target() {
+                Target::One(id) => member(id).then(|| Some(id.clone())).into_iter().collect(),
+                Target::Many(ids) => ids
+                    .iter()
+                    .filter(|id| member(id))
+                    .map(|id| Some(id.clone()))
+                    .collect(),
+                Target::Room(r) if *r == room => vec![None],
+                Target::Room(_) => Vec::new(),
+                Target::All => vec![None],
+            };
+            for to in legs {
+                let seq = self.seqs.entry((p.publisher(), to.clone())).or_insert(0);
+                *seq += 1;
+                let leg = WorldPush {
+                    to: match to {
+                        Some(id) => Addressee::Player(id),
+                        None => Addressee::Room,
+                    },
+                    publisher: p.publisher(),
+                    seq: *seq,
+                    op: p.op(),
+                    body: p.body().clone(),
+                };
+                mailbox
+                    .try_send(EventIn::Push(leg))
+                    .expect("the room's event mailbox has room");
+            }
+        }
+    }
+
+    /// The room's event table counters.
+    pub fn event_counts(&self) -> crate::metrics::EventCounts {
+        self.actor.events.counts()
+    }
+
     /// One fixed-`dt` step (`dt` = the room's period, exactly), its hash
     /// kept, then the services run ([`Sim::step`]: answers due land at
-    /// the next step's RESPONSES). `false` when the room stopped.
+    /// the next step's RESPONSES). The sim's pushes are routed first
+    /// ([`Self::deliver`]). `false` when the room stopped.
     pub fn tick(&mut self, sim: &mut Sim) -> bool {
+        self.deliver(sim);
         let period = self.actor.config.period().as_nanos() as u64;
         let at = self.t0 + Duration::from_nanos(period.saturating_mul(self.tick + 1));
         let keep = self.tick_at(at);

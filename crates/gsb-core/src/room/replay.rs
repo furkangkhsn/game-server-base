@@ -37,8 +37,8 @@ use std::time::{Duration, Instant};
 
 use crate::calls::Calls;
 use crate::determinism::{Input, InputLog, RoomRng};
-use crate::id::{ConnectionId, PlayerId};
 use crate::events::{Addressee, Events};
+use crate::id::{ConnectionId, PlayerId};
 use crate::metrics::{CallCounts, EventCounts};
 use crate::room::{
     Action, IdleClock, IdleView, KickQueue, Parts, RoomConfig, RoomConn, RoomCounters, RoomLogic,

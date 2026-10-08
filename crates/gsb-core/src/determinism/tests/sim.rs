@@ -20,6 +20,7 @@ fn room(seed: u64, bank: Route<BankMsg>, inv: Route<InvMsg>) -> SimRoom<World> {
             bank,
             inv,
             rolls: 0,
+            publisher: None,
         }),
     )
 }
@@ -294,6 +295,7 @@ fn the_table_deadline_runs_on_the_sim_clock() {
             bank,
             inv,
             rolls: 0,
+            publisher: None,
         }),
     );
     let mut alice = room.join(1, "alice");

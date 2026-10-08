@@ -14,6 +14,13 @@
 //! }));
 //! // a call issued at tick T's FLUSH is answered at tick T + 3's RESPONSES
 //! ```
+//!
+//! Events (`docs/EVENTS.md` §11, round e5): [`Sim::publisher`] mints a
+//! publishing handle whose pushes the sim keeps; each
+//! [`SimRoom`](crate::determinism::SimRoom) step routes the WORLD legs
+//! pushed since its last step into its own event mailbox — a push made
+//! before step `T` (by the test, a fake service, a thread, or the room
+//! itself during step `T - 1`) is in step `T`'s EVENTS.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -25,7 +32,21 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use crate::calls::{Dispatch, Envelope, Mail, Route, Served, ServiceDef, ServiceId};
-use crate::channel::Inbox;
+use crate::channel::{Inbox, Mailbox};
+use crate::events::{Publisher, Publishers, Push};
+use crate::registry::RegistryMsg;
+
+/// The sim router's mailbox (a push beyond it is refused at the handle,
+/// `RouterFull`, as live).
+pub const SIM_ROUTER_CAPACITY: usize = 4096;
+
+/// The sim's stand-in for the registry's router: the mint, its mailbox,
+/// and every push taken from it (the rooms keep their own cursor).
+struct SimRouter {
+    mint: Publishers,
+    inbox: Inbox<RegistryMsg>,
+    pushes: Vec<Push>,
+}
 
 /// A handler's future.
 pub type HandlerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -150,6 +171,7 @@ impl<M: Send + 'static, H: Handler<M>> SimService for Svc<M, H> {
 #[derive(Default)]
 pub struct Sim {
     services: Vec<Box<dyn SimService>>,
+    router: Option<SimRouter>,
 }
 
 impl Sim {
@@ -222,6 +244,38 @@ impl Sim {
         for s in &mut self.services {
             s.step(now);
         }
+    }
+
+    /// A publishing handle named `name` (one id per name, from 1, as the
+    /// server's mint): what it pushes reaches every [`SimRoom`](crate::determinism::SimRoom)
+    /// stepped with this sim at its next step's EVENTS (WORLD legs; the
+    /// CLIENT legs are not delivered in TEST mode). `Clone + Send`: a
+    /// fake service, a test thread or a room may push.
+    pub fn publisher(&mut self, name: &str) -> Publisher {
+        let router = self.router.get_or_insert_with(|| {
+            let (tx, inbox): (Mailbox<RegistryMsg>, _) =
+                crate::channel::channel(SIM_ROUTER_CAPACITY);
+            SimRouter {
+                mint: Publishers::new(tx, crate::events::DEFAULT_MAX_EVENT_BYTES),
+                inbox,
+                pushes: Vec::new(),
+            }
+        });
+        router.mint.publisher(name)
+    }
+
+    /// Every push taken so far (the router's mailbox drained into it
+    /// first), in push order.
+    pub(crate) fn pushes(&mut self) -> &[Push] {
+        let Some(r) = &mut self.router else {
+            return &[];
+        };
+        while let Ok(msg) = r.inbox.try_recv() {
+            if let RegistryMsg::Push(p) = msg {
+                r.pushes.push(p);
+            }
+        }
+        &r.pushes
     }
 
     /// "The service died": its mailbox closes (later calls: `Gone`) and

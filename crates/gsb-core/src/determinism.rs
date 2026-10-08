@@ -39,7 +39,7 @@ pub use crate::room::sim::{SimClient, SimRoom};
 pub use hash::StateHasher;
 pub(crate) use hash::fold;
 pub use rng::{Rng, RoomRng, fresh_seed};
-pub use sim::{Delay, Handler, Sim};
+pub use sim::{Delay, Handler, SIM_ROUTER_CAPACITY, Sim};
 
 #[cfg(feature = "record")]
 pub use crate::room::replay::{Replay, ReplayReport, ReplayTick};

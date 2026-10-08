@@ -5,6 +5,7 @@
 //! answered by a bank call (`.owner().with().answers()`), and a dice roll
 //! from the room's generator every tick.
 
+mod events;
 mod game;
 #[cfg(feature = "record")]
 mod record;

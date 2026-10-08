@@ -38,6 +38,7 @@ fn nowhere() -> Shop {
         bank: Route::new("bank", 1).0,
         inv: Route::new("inventory", 1).0,
         rolls: 0,
+        publisher: None,
     }
 }
 
@@ -122,6 +123,7 @@ fn live() -> Live {
             bank,
             inv,
             rolls: 0,
+            publisher: None,
         }),
     );
     let (recorder, mut inbox) = Recorder::channel(1 << 14, "shop-1");
@@ -345,6 +347,7 @@ fn the_writer_thread_writes_what_the_room_records() {
             bank,
             inv,
             rolls: 0,
+            publisher: None,
         }),
     );
     let (recorder, inbox) = Recorder::channel(64, "shop-1");
@@ -387,6 +390,7 @@ fn sim_run(ticks: u64) -> (Arc<InputLog>, Vec<Option<u64>>, Codecs) {
             bank,
             inv,
             rolls: 0,
+            publisher: None,
         }),
     );
     let (recorder, mut inbox) = Recorder::channel(1 << 10, "shop-1");

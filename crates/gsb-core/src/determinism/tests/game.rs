@@ -7,6 +7,7 @@ use prost::Message;
 
 use crate::calls::{Ask, BootError, CallSpec, Calls, Envelope, Route};
 use crate::determinism::StateHasher;
+use crate::events::{Addressee, Dest, Event, Events, Publisher, WorldEvent};
 use crate::id::{ConnectionId, PlayerId};
 use crate::room::{Action, Admission, GameLogic, RoomLogic, TickCtx};
 
@@ -44,6 +45,21 @@ impl crate::calls::Call for Buy {
 impl crate::calls::Request for Buy {
     const OP: u16 = 1101;
 }
+
+// ---- the events ------------------------------------------------------------------
+
+/// Gold from outside the room (a bank, a gift — round e5): a player's
+/// own, or every player's when room-wide.
+#[derive(Clone, PartialEq, prost::Message)]
+pub(super) struct GoldReceived {
+    #[prost(uint64, tag = "1")]
+    pub amount: u64,
+}
+impl Event for GoldReceived {
+    const OP: u16 = 1201;
+    const TO: Dest = Dest::World;
+}
+impl WorldEvent for GoldReceived {}
 
 // ---- the services' calls ---------------------------------------------------------
 
@@ -124,6 +140,11 @@ pub(super) struct Shop {
     pub inv: Route<InvMsg>,
     /// The sum of every roll of the room's dice.
     pub rolls: u64,
+    /// The room's own publishing handle (E10): every confirmed charge
+    /// pays one gold of cashback to the whole room, pushed as a
+    /// [`GoldReceived`] — it comes back at a later step's EVENTS. A
+    /// replay builds the room with a detached handle.
+    pub publisher: Option<Publisher>,
 }
 
 impl GameLogic<World> for Shop {
@@ -228,6 +249,9 @@ impl GameLogic<World> for Shop {
                 p.reserved -= r.ctx.0;
                 if let Ok(b) = &r.outcome {
                     p.gold = b.gold;
+                    if let Some(pb) = &self.publisher {
+                        let _ = pb.push_room(ctx.room, &GoldReceived { amount: 1 });
+                    }
                 }
             }
         }
@@ -264,6 +288,29 @@ impl GameLogic<World> for Shop {
                 calls.call(spec).owner(owner);
             }
         }
+    }
+    fn boot_events(&mut self, events: &mut Events) -> Result<(), BootError> {
+        events.accept::<GoldReceived>()
+    }
+    /// The events first: gold received this tick pays this tick's buys.
+    fn update_with_events(
+        &mut self,
+        w: &mut World,
+        ctx: &TickCtx,
+        calls: &mut Calls,
+        events: &mut Events,
+    ) {
+        for e in events.take::<GoldReceived>() {
+            match e.to {
+                Addressee::Room => w.values_mut().for_each(|p| p.gold += e.body.amount),
+                Addressee::Player(_) => {
+                    if let Some(p) = w.get_mut(&PlayerId(e.owner.0)) {
+                        p.gold += e.body.amount;
+                    }
+                }
+            }
+        }
+        self.update_with_calls(w, ctx, calls);
     }
     fn state_hash(&mut self, w: &mut World) -> Option<u64> {
         HASHED.with(|n| n.set(n.get() + 1));
