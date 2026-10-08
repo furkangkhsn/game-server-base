@@ -5,6 +5,40 @@ Tamamlanan geliştirme turlarının donmuş, tarih-sıralı kaydı (en yeni
 dokümanları: DESIGN / CROSS-SHARD / DISTRIBUTED / SECURITY / OPS /
 TRAIT-ARCHITECTURE / RECONNECT.
 
+## e0–e6 — Olaylar: sistemin bize ittikleri (`docs/EVENTS.md`)
+
+- **Tasarım (e0, kullanıcı kararları 2026-10-09):** cevaplar ve olaylar ayrı
+  sistemler. Hedef `.proto`'da olay tipiyle (`(gsb.event) = { op, to:
+  WORLD|CLIENT|BOTH }`); tick CONTROL → RESPONSES → EVENTS → READ; odanın
+  kendi olay kutusu (istemci girdisiyle paylaşılmaz); motor yalnız kimliğe,
+  odaya, herkese yönlendirir (kanallar oyunun servisi, `push_many`); en fazla
+  bir kez + her kayıp sayılır, (yayıncı, kimlik, bacak) başına sıra
+  numarası; motor olayları servislere abonelikle.
+- **e1 — sözleşme ve tel:** `gsb_protocol::event`, `gsb-build` olay üretimi
+  ve istek/olay ortak op uzayı, `Push` (`stream = 5`), `Auth.features = 4`
+  + `FEATURE_PUSH`, `PUSH = 17` (eklemeli, `PROTOCOL_VERSION` 1).
+- **e2 — yönlendirme:** `gsb_core::events` (`Events` tablosu, `Publisher`),
+  registry'de `EventRoutes`, oda ve shard'da EVENTS fazı, CLIENT bacağı
+  bağlantı aktörüyle odayı atlar; sayaçlar → metrikler.
+- **e3 — konum değişiklikleri:** shard göçünde mezar taşı, bekletme, mühür,
+  çit ve zincir kuralı; A→B→A için yeni öncelik kuralı; park/devam/oda
+  değişimi/oda ölümü sayılı. Gerçek shard aktörleriyle en kötü sırada 1..n.
+- **e4 — motor olayları:** `EngineEvent` (registry'nin tablosundan türetilir),
+  `#[gsb(engine_events)]`, `Presence` sorgusu, demo arkadaş servisi.
+- **e5 — determinizm ve bağlayıcılar:** `Input::Events` (etiket 18), tekrarda
+  ayrık yayıncı, `Sim::publisher`, bevy_ecs/hecs olay bağlayıcıları, kit
+  iletimi, üç biçimli olay senaryosu, demo `ItemGranted`.
+- **e6 — istemci ve ölçüm:** `gsb_client::events` (tipli, boşluk algılama,
+  yeni akış), loadgen sohbet/varlık senaryosu. Ölçüm: 188 bin istemci
+  bacağı/sn'de katılma p99 ≤ +2,5 ms, `RouterFull` 0 → yönlendirici
+  registry'de kalır (E2).
+- Loadgen metrik teli GSNV → GSNY (GSNW e2, GSNX e3, GSNY e4).
+
+Testler 2180 → 2302 (`otlp` ile 2320; `record` ile 1234), 23 ignored
+(4 `#[ignore]` + 19 derlenmeyen doc örneği, B223). Her turda ebeveyn
+mutasyonu; e5'te sağ kalan (ayrık yayıncının boyut sınırı) için test
+eklendi. Tam kapılar yeşil, gsb-core'da ECS bağımlılığı 0.
+
 ## s0–q6 — Servis çağrıları ve istek sistemi; k0 — ECS-bağımsız kit tasarımı (`docs/SERVICES.md`, `docs/KIT-ECS.md`)
 
 - **Tasarım (kullanıcıyla, 2026-10-04…07; s0, s0b):** motor servis

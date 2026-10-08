@@ -77,15 +77,18 @@ baseline'sız atılır) — `still` yük profiliyle ölçüm: kayıt/tick 67-77�
 az (hareketsizlik oranıyla artan kazanç), bant/conn 6-7× az, adım p50
 ~2× (hücre fark taraması), bütçe aşımı %0 (aşağıda, "Kapatılanlar
 (delta yayın + input sıralama turu)").
-Test sayısı: bugün itibarıyla **2180** (2180/2180 yeşil, 14 ignored — 10 derlenmeyen doc örneği + doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası;
+Test sayısı: bugün itibarıyla **2302** (2302/2302 yeşil, 23 ignored — 19 derlenmeyen doc örneği + doctest + elle koşan tıkanıklık ölçümü + B110 el sıkışma sondası + demux CPU sondası;
 tarihsel ilerleme 58 → ... → 294 → 314 → 319 → 327 → 340 → 344 → 356 →
-388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 → 1710 → 1722 → 1728 → 1746 → 1753 → 1777 → 1811 → 1846 → 1891 → 1900 → 1916 → 1958 → 1980 → 1991 → 2034 → 2044 → 2052 → 2053 için `docs/CHANGELOG.md` başlığına bakınız).
+388 → 409 → 411 → 419 → 433 → 439 → 454 → 478 → 497 → 521 → 534 → 537 → 551 → 579 → 586 → 609 → 623 → 641 → 657 → 664 → 670 → 687 → 704 → 713 → 722 → 740 → 776 → 818 → 821 → 827 → 847 → 865 → 869 → 893 → 905 → 920 → 928 → 952 → 979 → 988 → 1015 → 1024 → 1049 → 1071 → 1077 → 1091 → 1107 → 1124 → 1131 → 1161 → 1192 → 1216 → 1220 → 1225 → 1234 → 1237 → 1267 → 1269 → 1275 → 1286 → 1296 → 1309 → 1318 → 1320 → 1347 → 1350 → 1353 → 1379 → 1381 → 1403 → 1405 → 1412 → 1425 → 1427 → 1431 → 1442 → 1447 → 1455 → 1458 → 1459 → 1461 → 1477 → 1490 → 1506 → 1510 → 1521 → 1537 → 1548 → 1566 → 1601 → 1609 → 1617 → 1620 → 1638 → 1659 → 1676 → 1679 → 1710 → 1722 → 1728 → 1746 → 1753 → 1777 → 1811 → 1846 → 1891 → 1900 → 1916 → 1958 → 1980 → 1991 → 2034 → 2044 → 2052 → 2053 → 2180 için `docs/CHANGELOG.md` başlığına bakınız).
 Güncel iş sırası ve tüm bırakılanlar: **`docs/BACKLOG.md`**.
-Son tur: **s0–q6 — servis çağrıları ve istek sistemi** — `Calls` tablosu,
+Son tur: **e0–e6 — olaylar** — `.proto`'da hedefli olaylar, kimliğe
+yönlendirme, EVENTS fazı, göç çiti, motor olayları, tipli istemci,
+kayıt/tekrar; ölçüm: yönlendirici registry'de kalır.
+Önceki tur: **s0–q6 — servis çağrıları ve istek sistemi** — `Calls` tablosu,
 `#[gsb_core::service]`, tower sunucusu, `.proto` istekleri (`gsb-build`),
 tipli istemci, determinizm (kayıt/tekrar/TEST), bevy_ecs/hecs
 bağlayıcıları; k0: ECS-bağımsız kit tasarımı (`docs/KIT-ECS.md`).
-Önceki tur: **f104 — B104 kapandı** — kullanıcının ölçümü `overall: PASS
+Daha önce: **f104 — B104 kapandı** — kullanıcının ölçümü `overall: PASS
 (6 of 6)`; `udp_congestion` varsayılanı artık `"pace"`, `"off"` açık
 vazgeçiş.
 Daha önce: **r5 — tıkanıklık tepkisi tur 5 (B142)** — sonda ufku 4 sn,
