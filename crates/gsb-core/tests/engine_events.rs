@@ -324,7 +324,12 @@ async fn a_full_subscriber_is_counted_per_name() {
         keep.push(Client::login(&server, c as u64 + 1, n).await);
     }
     let mut seq = 0;
-    hear(&mut fast, &mut seq, &[online("a"), online("b"), online("c")]).await;
+    hear(
+        &mut fast,
+        &mut seq,
+        &[online("a"), online("b"), online("c")],
+    )
+    .await;
     let counts = |name: &str| {
         sources
             .iter()

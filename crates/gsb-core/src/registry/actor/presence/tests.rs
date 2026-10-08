@@ -222,3 +222,80 @@ async fn presence_pages_and_lookups_come_from_the_table() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(presence.of(&[id("bob")]).await, Err(PresenceRefused::Gone));
 }
+
+/// A registry that is not running (the test calls its arms between
+/// `presence_watch` and `presence_settle`, as its loop does), offering
+/// engine events to one subscriber.
+fn idle_registry() -> (Registry<(), (), (), ()>, EngineReceiver) {
+    let (ticker, _task) = Ticker::spawn(60.0, 64).expect("valid tick rate");
+    let factory: RoomFactory<(), (), (), ()> =
+        Arc::new(|_id, _cfg| unreachable!("no room is created here"));
+    let (tx, rx) = channel::<RegistryMsg>(8);
+    let (metrics, _metrics) = mpsc::channel(64);
+    let mut subs = EngineSubscribers::new();
+    let notices = subs.subscribe("all", Interest::ALL, 16);
+    let reg =
+        Registry::new(rx, tx, factory, ticker, metrics, None, None, None).with_engine_events(subs);
+    (reg, notices)
+}
+
+/// An authenticated row of `identity` in `room` (`detached`: its
+/// transport is gone), with an inbox when the transport is up.
+fn row(identity: &str, room: u64, detached: bool) -> crate::registry::ConnInfo {
+    let (inbox, _rx) = channel::<ConnIn>(8);
+    crate::registry::ConnInfo {
+        room: Some(RoomId(room)),
+        entity: Some(7),
+        inbox: (!detached).then_some(inbox),
+        identity: identity.into(),
+        authed: true,
+        detached,
+        ..Default::default()
+    }
+}
+
+/// A room that ends a membership with a park while the connection is
+/// still open (`CloseConn { parked }`, its close follows): the row keeps
+/// its inbox but is no longer live — the identity is parked at once.
+#[tokio::test]
+async fn a_park_the_room_asks_for_is_parked_before_the_transport_closes() {
+    let (mut reg, mut notices) = idle_registry();
+    reg.insert_row(ConnectionId(3), row("alice", 1, false));
+    let req = crate::registry::CloseRequest {
+        conn: ConnectionId(3),
+        room: RoomId(1),
+        entity: 7,
+        parked: true,
+        cause: crate::conn::ServerClose::IdleInput,
+        reason: "idle".into(),
+    };
+    let watch = reg.presence_watch(&RegistryMsg::CloseConn(req.clone()));
+    reg.on_close_conn(req);
+    reg.presence_settle(watch);
+    let n = notices.try_recv().expect("a notice");
+    assert_eq!(
+        n.event,
+        EngineEvent::Parked {
+            identity: id("alice"),
+            room: Some(RoomId(1)),
+        }
+    );
+}
+
+/// An identity with a live membership in one room and a park in another
+/// is where its live membership is (the WORLD legs' choice).
+#[test]
+fn a_live_membership_wins_over_a_parked_one() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let (mut reg, _notices) = idle_registry();
+        reg.insert_row(ConnectionId(9), row("bob", 2, true));
+        reg.insert_row(ConnectionId(4), row("bob", 1, false));
+        assert_eq!(reg.view_of("bob"), v(true, Some(1)));
+        reg.insert_row(ConnectionId(2), row("carl", 2, true));
+        assert_eq!(reg.view_of("carl"), v(false, Some(2)));
+    });
+}
