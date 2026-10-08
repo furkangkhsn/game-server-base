@@ -769,6 +769,26 @@ async fn a_shard_migration_keeps_every_leg_in_order() {
         ),
         (1, 0, 0, 44)
     );
+    // Late or foreign reports change nothing: an older count, another
+    // incarnation of the room, an identity with no membership there.
+    let stale = |generation, identity: &str, mig| RegistryMsg::Relocated {
+        room: GRID,
+        generation,
+        identity: identity.into(),
+        shard: 1,
+        mig,
+    };
+    for msg in [stale(0, "bob", 1), stale(9, "bob", 5), stale(0, "eve", 5)] {
+        server.reg.send(msg).await.expect("registry alive");
+    }
+    bank.push(&id("bob"), &GoldReceived { balance: 1 })
+        .expect("taken");
+    let got = server.took(1).await;
+    assert_eq!((got[0].shard, got[0].seq), (0, 45), "still shard 0");
+    let (r, _) = server
+        .counts_until(|r, _| r.events_routed == 45)
+        .await;
+    assert_eq!((r.events_relocations, r.events_relocations_stale, r.events_seals_sent), (1, 3, 1));
 }
 
 /// Park and resume: the CLIENT leg pushed while bob is parked is counted
