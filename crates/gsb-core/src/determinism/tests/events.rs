@@ -97,6 +97,7 @@ fn a_sim_publisher_reaches_the_room_at_the_next_step() {
     assert_eq!((gold(&room, 1), gold(&room, 2)), (1205, 505), "at step 4");
     let c = room.event_counts();
     assert_eq!((c.events_admitted, c.events_taken), (2, 2), "{c:?}");
+    assert_eq!(c.events_world_not_here, 0, "no leg for a non-member");
     for _ in 0..3 {
         room.tick(&mut sim);
     }
