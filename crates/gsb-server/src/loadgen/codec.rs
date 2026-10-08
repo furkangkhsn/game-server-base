@@ -322,9 +322,8 @@ mod services;
 /// `docs/EVENTS.md` §9): each room's event table after its call-table
 /// counters, the router's after the registry section, the connections'
 /// PUSH frames after the server closes, and the publishing handles
-/// after the services (`codec/events.rs`). (Round e2 changed the
-/// layout; the magic below moves to GSNW when the round merges.)
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E56;
+/// after the services (`codec/events.rs`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E57;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
