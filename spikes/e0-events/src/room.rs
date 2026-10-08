@@ -174,6 +174,10 @@ struct Tomb {
     awaiting_in: Option<u64>,
     /// The router's seal for `mig_out` arrived.
     sealed: bool,
+    /// While `awaiting_in`: this shard's OWN direct legs for the player
+    /// (held before it left, or arriving after) — newer than whatever the
+    /// previous source still forwards, so they wait for its fence.
+    pending: Vec<Delivered>,
 }
 
 struct Hold {
@@ -238,6 +242,7 @@ pub struct Room<G: Game> {
     tick: u64,
     counts: RoomCounts,
     record: Option<Vec<TickRecord>>,
+    fencing: bool,
 }
 
 impl<G: Game> Room<G> {
@@ -263,6 +268,7 @@ impl<G: Game> Room<G> {
                 tick: 0,
                 counts: RoomCounts::default(),
                 record: None,
+                fencing: true,
             },
             RoomHandles {
                 control,
@@ -294,6 +300,12 @@ impl<G: Game> Room<G> {
             });
         }
         (rooms, handles)
+    }
+
+    /// Turn the FIFO fence off (the negative control: without it a
+    /// migration reorders a publisher's events).
+    pub fn fencing(&mut self, on: bool) {
+        self.fencing = on;
     }
 
     /// Record every step (hashes included).
@@ -529,6 +541,7 @@ impl<G: Game> Room<G> {
             mig,
         };
         match self.router.as_ref().map(|r| r.try_send(report)) {
+            Some(Ok(())) if !self.fencing => {}
             Some(Ok(())) => {
                 // Hold the router's direct legs until the source's fence.
                 sh.holds.insert(
@@ -556,8 +569,9 @@ impl<G: Game> Room<G> {
         let Some(sh) = &mut self.shard else { return };
         let mig = sh.migs.remove(who).unwrap_or(0) + 1;
         let target = sh.neighbors[to as usize].clone();
-        // The MigrateIn FIRST on the FIFO; then what an unfinished incoming
-        // fence still held, in order.
+        // The MigrateIn FIRST on the FIFO. An unfinished incoming fence's
+        // held legs stay HERE (pending) until that fence arrives: what
+        // the previous source still forwards is older (chained moves).
         let _ = target.try_send(Control::MigrateIn {
             identity: who.clone(),
             conn: m.conn,
@@ -565,16 +579,10 @@ impl<G: Game> Room<G> {
             mig,
             carried,
         });
-        let mut awaiting_in = None;
-        if let Some(h) = sh.holds.remove(who) {
-            awaiting_in = Some(h.mig);
-            for d in h.held {
-                match target.try_send(Control::Forward(d)) {
-                    Ok(()) => self.counts.forwarded += 1,
-                    Err(_) => self.counts.forward_refused += 1,
-                }
-            }
-        }
+        let (awaiting_in, pending) = match sh.holds.remove(who) {
+            Some(h) => (Some(h.mig), h.held),
+            None => (None, Vec::new()),
+        };
         sh.tombs.insert(
             who.clone(),
             Tomb {
@@ -583,6 +591,7 @@ impl<G: Game> Room<G> {
                 until: self.tick + TOMB_TTL,
                 awaiting_in,
                 sealed: false,
+                pending,
             },
         );
     }
@@ -590,9 +599,19 @@ impl<G: Game> Room<G> {
     fn sweep(&mut self) {
         let tick = self.tick;
         let Some(sh) = &mut self.shard else { return };
-        let before = sh.tombs.len();
-        sh.tombs.retain(|_, t| t.until > tick);
-        self.counts.tombstones_expired += (before - sh.tombs.len()) as u64;
+        let dead: Vec<Identity> = sh.tombs.iter().filter(|(_, t)| t.until <= tick).map(|(k, _)| k.clone()).collect();
+        for who in dead {
+            self.counts.tombstones_expired += 1;
+            if let Some(t) = sh.tombs.remove(&who) {
+                // Best effort: what still waited goes on.
+                for d in t.pending {
+                    match sh.neighbors[t.to as usize].try_send(Control::Forward(d)) {
+                        Ok(()) => self.counts.forwarded += 1,
+                        Err(_) => self.counts.forward_refused += 1,
+                    }
+                }
+            }
+        }
         let late: Vec<Identity> = sh.holds.iter().filter(|(_, h)| tick - h.since > FENCE_TTL).map(|(k, _)| k.clone()).collect();
         for who in late {
             self.counts.fence_timeouts += 1;
@@ -623,10 +642,17 @@ impl<G: Game> Room<G> {
             && t.awaiting_in == Some(mig)
         {
             t.awaiting_in = None;
+            let to = sh.neighbors[t.to as usize].clone();
+            for d in std::mem::take(&mut t.pending) {
+                match to.try_send(Control::Forward(d)) {
+                    Ok(()) => self.counts.forwarded += 1,
+                    Err(_) => self.counts.forward_refused += 1,
+                }
+            }
             if t.sealed {
-                let (to, out) = (t.to, t.mig_out);
+                let out = t.mig_out;
                 sh.tombs.remove(&identity);
-                let _ = sh.neighbors[to as usize].try_send(Control::Fence { identity, mig: out });
+                let _ = to.try_send(Control::Fence { identity, mig: out });
             }
             return;
         }
@@ -686,9 +712,18 @@ impl<G: Game> Room<G> {
             self.events.admit(d.op, &d.body, d.to.clone(), m.owner, d.publisher, d.seq);
             return;
         }
-        if let Some(sh) = &self.shard
-            && let Some(t) = sh.tombs.get(&who)
+        if let Some(sh) = &mut self.shard
+            && let Some(t) = sh.tombs.get_mut(&who)
         {
+            if !forwarded && t.awaiting_in.is_some() {
+                if t.pending.len() >= HOLD_CAP {
+                    self.counts.fence_overflow += 1;
+                } else {
+                    t.pending.push(d);
+                    self.counts.fence_held += 1;
+                }
+                return;
+            }
             match sh.neighbors[t.to as usize].try_send(Control::Forward(d)) {
                 Ok(()) => self.counts.forwarded += 1,
                 Err(TrySendError::Full(_) | TrySendError::Closed(_)) => self.counts.forward_refused += 1,
