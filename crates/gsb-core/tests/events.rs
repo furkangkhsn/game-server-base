@@ -653,3 +653,81 @@ async fn a_new_life_is_a_new_stream_from_one() {
     assert_eq!(got[0].seq, 1);
     assert_ne!(got[0].stream, stream, "a new stream");
 }
+
+/// The connection's side of the ledger: a CLIENT leg its full outbound
+/// refuses, one for a gone writer, and one still in its inbox when the
+/// session ends are each counted under their own name (the final
+/// sample), never written.
+#[tokio::test]
+async fn a_connection_counts_every_push_it_cannot_write() {
+    let push = |seq| ConnIn::Push {
+        publisher: gsb_core::events::PublisherId(1),
+        stream: 1,
+        seq,
+        op: 2002,
+        body: bytes::Bytes::from_static(b"x"),
+    };
+    let closed = || ConnIn::Closed {
+        reason: "test".into(),
+    };
+    // An outbound already full: the first leg is refused; the one queued
+    // behind the session's end is never read.
+    let full = conn_pushes(false, vec![push(1), closed(), push(2)]).await;
+    assert_eq!(
+        (
+            full.pushes_written,
+            full.pushes_dropped_outbound_full,
+            full.pushes_dropped_unread
+        ),
+        (0, 1, 1)
+    );
+    // A writer already gone.
+    let gone = conn_pushes(true, vec![push(1), closed()]).await;
+    assert_eq!(
+        (gone.pushes_written, gone.pushes_dropped_outbound_gone),
+        (0, 1)
+    );
+}
+
+/// Run a connection actor over `inbox` (all queued before it starts) with
+/// a one-slot outbound that is full — or whose writer is `gone` — and
+/// sum the PUSH counters of its samples.
+async fn conn_pushes(gone: bool, inbox: Vec<ConnIn>) -> PushCounts {
+    let (inbox_tx, inbox_rx) = channel::<ConnIn>(16);
+    let (out_tx, out) = channel::<FrameBatch>(1);
+    let (metrics_tx, mut metrics) = mpsc::channel::<MetricsEvent>(64);
+    // No registry: its mailbox has no reader (the actor's notices fail).
+    let (reg, _) = channel::<RegistryMsg>(1);
+    for msg in inbox {
+        inbox_tx.try_send(msg).expect("room in the inbox");
+    }
+    // The writer's end: dropped (gone), or kept for the run with its one
+    // slot taken (full).
+    let _writer = if gone {
+        drop(out);
+        None
+    } else {
+        out_tx.try_send(Vec::new()).expect("fill the one slot");
+        Some(out)
+    };
+    let actor = ConnectionActor::new(
+        ConnectionId(1),
+        SocketAddr::from(([127, 0, 0, 1], 44_001)),
+        Arc::new(base_table()),
+        reg,
+        inbox_rx,
+        out_tx,
+        metrics_tx,
+        None,
+    );
+    tokio::time::timeout(WAIT, actor.run())
+        .await
+        .expect("the actor ends");
+    let mut pushes = PushCounts::default();
+    while let Ok(ev) = metrics.try_recv() {
+        if let MetricsEvent::Conn(s) = ev {
+            pushes.add(&s.pushes);
+        }
+    }
+    pushes
+}
