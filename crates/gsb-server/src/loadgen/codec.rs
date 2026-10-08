@@ -106,6 +106,9 @@ mod services;
 ///   u32 n_publishers
 ///   per publisher (minting order): u32 name_len  [u8] name  u32 id
 ///     [u64; PUBLISHER_COUNT] counts (PublisherCounts::fields order)
+///   u32 n_engine_subscribers
+///   per subscriber name (subscription order): u32 name_len  [u8] name
+///     [u64; ENGINE_COUNT] counts (EngineCounts::fields order)
 /// ```
 ///
 /// Both directions live in this binary (the server's `--serve` mode and
@@ -325,6 +328,9 @@ mod services;
 /// after the services (`codec/events.rs`).
 /// GSNX = the GSNW layout with the migration fence's counters (round
 /// e3): nine more per room's event table, four more in the router's.
+/// Round e4 appends the engine-event subscribers after the publishing
+/// handles (`codec/events.rs`, `docs/EVENTS.md` §5.4); the magic moves
+/// to the next free one (GSNY) when the round merges.
 pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E58;
 
 /// Little-endian writer (the encode side of the format above).
@@ -512,6 +518,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     }
     services::encode(&mut w, &r.services);
     events::encode(&mut w, &r.publishers);
+    events::encode_engine(&mut w, &r.engine_subscribers);
     let mut frame = Vec::with_capacity(8 + w.0.len());
     frame.extend_from_slice(&METRICS_MAGIC.to_le_bytes());
     frame.extend_from_slice(&(w.0.len() as u32).to_le_bytes());
@@ -784,6 +791,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
     let transport = TransportCounters::from_values(values);
     let services = services::decode(&mut r)?;
     let publishers = events::decode(&mut r)?;
+    let engine_subscribers = events::decode_engine(&mut r)?;
     if !r.done() {
         return None;
     }
@@ -804,5 +812,6 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         transport,
         services,
         publishers,
+        engine_subscribers,
     })
 }

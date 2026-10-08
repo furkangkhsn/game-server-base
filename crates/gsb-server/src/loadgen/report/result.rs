@@ -673,7 +673,8 @@ pub(crate) fn print_report(
         calls_segment(room.as_ref().map(|r| &r.calls)),
         services_segment(server_reports),
         // The event path (round e2; every key always present but the
-        // publishers', named by the game's handles).
+        // publishers' and the engine-event subscribers', named by the
+        // game's handles and subscriptions).
         events_segment(room.as_ref().map(|r| &r.events), server_reports),
         // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
         // addition; every key before it keeps its place and format).

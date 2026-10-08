@@ -600,8 +600,8 @@ fn the_service_counts_survive_the_wire() {
 /// The event path's counters (round e2) cross the wire: each room's
 /// event table in its slot (folding as a SUM), the router's after the
 /// registry section, the connections' PUSH frames after the server
-/// closes, and the publishing handles after the services; a truncated
-/// publisher record is refused.
+/// closes, the publishing handles after the services and the engine-event
+/// subscribers (round e4) after them; a truncated record is refused.
 #[test]
 fn the_event_counts_survive_the_wire() {
     use gsb_core::metrics::{
@@ -641,6 +641,16 @@ fn the_event_counts_survive_the_wire() {
             ..Default::default()
         },
     ];
+    sent.engine_subscribers = vec![
+        gsb_core::metrics::EngineSubscriberReport {
+            subscriber: "Friends".into(),
+            counts: gsb_core::metrics::EngineCounts::from_values([5, 2, 1]),
+        },
+        gsb_core::metrics::EngineSubscriberReport {
+            subscriber: "audit".into(),
+            ..Default::default()
+        },
+    ];
     let frame = encode_report(&sent);
     let got = decode_report(&frame[8..]).expect("decodes");
     for (a, b) in sent.rooms.iter().zip(&got.rooms) {
@@ -652,6 +662,7 @@ fn the_event_counts_survive_the_wire() {
     );
     assert_eq!(got.net.pushes, sent.net.pushes);
     assert_eq!(got.publishers, sent.publishers);
+    assert_eq!(got.engine_subscribers, sent.engine_subscribers);
     assert_eq!(got.services, sent.services, "its neighbour intact");
     let folded = fold_rooms(&sent).expect("three rows");
     assert_eq!(folded.events.events_taken, 14 + 5, "summed over rows");

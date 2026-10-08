@@ -201,6 +201,7 @@ async fn start_inner(
         services: Vec::new(),
         hosted: gsb_core::calls::Services::new(),
         publishers: gsb_core::events::Publishers::new(reg_tx.clone(), cfg.max_event_bytes),
+        engine: gsb_core::events::EngineSubscribers::new(),
         #[cfg(feature = "record")]
         record,
     });
@@ -215,6 +216,7 @@ async fn start_inner(
             .with_exporters(exporters)
             .with_services(registry.service_stats.clone())
             .with_publishers(registry.publisher_stats.clone())
+            .with_engine_subscribers(registry.engine_stats.clone())
             .run(),
     );
 

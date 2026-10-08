@@ -1,10 +1,14 @@
 //! The publishing handles' counters (round e2, `docs/EVENTS.md` §9) on
-//! the metrics wire: after the services, the report's last part, its own
-//! encode/decode pair. (The room's, the router's and the connections'
+//! the metrics wire: after the services, its own encode/decode pair —
+//! and the engine-event subscribers' (round e4, §5.4) after them, the
+//! report's last part. (The room's, the router's and the connections'
 //! event counters ride their own sections: fixed arrays, in the
 //! counters' order.)
 
-use gsb_core::metrics::{PUBLISHER_COUNT, PublisherCounts, PublisherReport};
+use gsb_core::metrics::{
+    ENGINE_COUNT, EngineCounts, EngineSubscriberReport, PUBLISHER_COUNT, PublisherCounts,
+    PublisherReport,
+};
 
 use super::{R, W};
 
@@ -36,6 +40,36 @@ pub(super) fn decode(r: &mut R<'_>) -> Option<Vec<PublisherReport>> {
             publisher,
             id,
             counts: PublisherCounts::from_values(values),
+        });
+    }
+    Some(out)
+}
+
+pub(super) fn encode_engine(w: &mut W, subs: &[EngineSubscriberReport]) {
+    w.u32(subs.len() as u32);
+    for e in subs {
+        w.u32(e.subscriber.len() as u32);
+        w.0.extend_from_slice(e.subscriber.as_bytes());
+        for (_, v) in e.counts.fields() {
+            w.u64(v);
+        }
+    }
+}
+
+/// `None` on a truncated or non-UTF-8 record.
+pub(super) fn decode_engine(r: &mut R<'_>) -> Option<Vec<EngineSubscriberReport>> {
+    let n = r.u32()?;
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let len = usize::try_from(r.u32()?).ok()?;
+        let subscriber = String::from_utf8(r.take(len)?.to_vec()).ok()?;
+        let mut values = [0u64; ENGINE_COUNT];
+        for v in &mut values {
+            *v = r.u64()?;
+        }
+        out.push(EngineSubscriberReport {
+            subscriber,
+            counts: EngineCounts::from_values(values),
         });
     }
     Some(out)

@@ -129,6 +129,9 @@ pub struct RegistryParts {
     /// The publishing handles minted so far (`docs/EVENTS.md` §5.1; see
     /// [`Self::publisher`]).
     pub(crate) publishers: gsb_core::events::Publishers,
+    /// The engine-event subscribers registered so far (`docs/EVENTS.md`
+    /// §5.4; see [`Self::engine_events`] and [`Self::service`]).
+    pub(crate) engine: gsb_core::events::EngineSubscribers,
     /// What the registry records (`[record]`, feature `record`; B170).
     #[cfg(feature = "record")]
     pub(crate) record: Option<gsb_core::registry::RecordPlan>,
@@ -171,6 +174,9 @@ impl RegistryParts {
     {
         self.hosted.service(served, setup)?;
         self.services.extend(self.hosted.take_stops());
+        for s in self.hosted.take_engine_subscriptions() {
+            self.engine.add(s.name, s.interest, s.tx);
+        }
         Ok(self)
     }
 
@@ -204,6 +210,39 @@ impl RegistryParts {
     /// ```
     pub fn publisher(&mut self, name: &str) -> gsb_core::events::Publisher {
         self.publishers.publisher(name)
+    }
+
+    /// Subscribe a plain receiver to the engine's events
+    /// (`docs/EVENTS.md` §5.4): `interest`'s [`EngineEvent`]s — an
+    /// identity online, offline, in or out of a room, parked, resumed —
+    /// numbered per subscriber, into a channel of `cap`. The registry
+    /// never waits for it: a full or gone receiver loses the event,
+    /// counted under `name` (`gsb_engine_events_*_total{subscriber}`).
+    /// A `#[gsb_core::service]` with a `#[gsb(engine_events)]` method
+    /// subscribes through [`Self::service`]'s setup instead
+    /// (`|s| s.engine_events(Interest::PRESENCE)`).
+    ///
+    /// ```ignore
+    /// let mut rx = parts.engine_events("presence-audit", Interest::ONLINE | Interest::OFFLINE, 1024);
+    /// tokio::spawn(async move { while let Some(n) = rx.recv().await { audit(n).await } });
+    /// ```
+    ///
+    /// [`EngineEvent`]: gsb_core::events::EngineEvent
+    pub fn engine_events(
+        &mut self,
+        name: &str,
+        interest: gsb_core::events::Interest,
+        cap: usize,
+    ) -> gsb_core::events::EngineReceiver {
+        self.engine.subscribe(name, interest, cap)
+    }
+
+    /// The presence query handle (`docs/EVENTS.md` §20 E12): who is
+    /// online now, paged, answered by the registry from its own table —
+    /// what a restarted service (or one that saw a gap in its engine
+    /// events) re-reads when it first needs it.
+    pub fn presence(&self) -> gsb_core::events::Presence {
+        gsb_core::events::Presence::new(self.self_mailbox.clone())
     }
 
     /// Register a hand-written game service for an explicit stop
@@ -240,6 +279,8 @@ impl RegistryParts {
         )
         .with_rooms_hold(self.rooms_hold)
         .with_unauth_per_source(self.max_unauth_per_source);
+        let engine_stats = self.engine.sources();
+        let registry = registry.with_engine_events(self.engine);
         // The input logs `[record]` asks for (B170).
         #[cfg(feature = "record")]
         let registry = match self.record {
@@ -252,6 +293,7 @@ impl RegistryParts {
             services: self.services,
             service_stats: self.hosted.stats().to_vec(),
             publisher_stats: self.publishers.sources(),
+            engine_stats,
         }
     }
 }
@@ -268,6 +310,9 @@ pub struct RegistryTask {
     /// The publishing handles the module minted, for the metrics
     /// collector (`docs/EVENTS.md` §9).
     pub(crate) publisher_stats: Vec<gsb_core::events::PublisherSource>,
+    /// The engine-event subscribers, for the metrics collector
+    /// (`docs/EVENTS.md` §5.4).
+    pub(crate) engine_stats: Vec<gsb_core::events::EngineSubscriberSource>,
 }
 
 /// Errors of game selection and of the game modules themselves

@@ -32,7 +32,8 @@ pub(crate) fn services_segment(reports: &[MetricReport]) -> String {
 /// the room line's keys; summed over shards), then the router's and the
 /// connections' PUSH counters from the latest report (the `scope=events`
 /// line's keys), then per publishing handle ` pub_<name>_<counter>=<n>`
-/// (none for a game that minted none).
+/// (none for a game that minted none), then per engine-event subscriber
+/// ` sub_<name>_<counter>=<n>` (none without one, round e4).
 pub(crate) fn events_segment(events: Option<&EventCounts>, reports: &[MetricReport]) -> String {
     let mut seg: String = events
         .copied()
@@ -53,6 +54,14 @@ pub(crate) fn events_segment(events: Option<&EventCounts>, reports: &[MetricRepo
     for p in last.map(|r| r.publishers.as_slice()).unwrap_or_default() {
         for (k, v) in p.counts.fields() {
             seg.push_str(&format!(" pub_{}_{k}={v}", p.publisher));
+        }
+    }
+    for e in last
+        .map(|r| r.engine_subscribers.as_slice())
+        .unwrap_or_default()
+    {
+        for (k, v) in e.counts.fields() {
+            seg.push_str(&format!(" sub_{}_{k}={v}", e.subscriber));
         }
     }
     seg
@@ -85,7 +94,9 @@ mod tests {
 
     /// The event path's keys: the room's event table, the router's and
     /// the connections' counters always present (zeros without a
-    /// report), then one `pub_<name>_<counter>=` per publisher counter.
+    /// report), then one `pub_<name>_<counter>=` per publisher counter
+    /// and one `sub_<name>_<counter>=` per engine-event subscriber
+    /// counter.
     #[test]
     fn every_event_counter_is_a_key_and_publishers_are_named() {
         use gsb_core::metrics::{
@@ -115,6 +126,13 @@ mod tests {
                 ..Default::default()
             },
         }];
+        r.engine_subscribers = vec![gsb_core::metrics::EngineSubscriberReport {
+            subscriber: "Friends".into(),
+            counts: gsb_core::metrics::EngineCounts {
+                engine_events_refused_full: 4,
+                ..Default::default()
+            },
+        }];
         let ev = EventCounts {
             events_untaken: 2,
             ..Default::default()
@@ -125,11 +143,12 @@ mod tests {
             " events_offline=3 ",
             " pushes_written=7 ",
             " pub_bank_events_pushed=9 ",
+            " sub_Friends_engine_events_refused_full=4",
         ] {
             assert!(seg.contains(key), "{key} in {seg}");
         }
         assert!(
-            seg.ends_with(" pub_bank_events_refused_too_large=0"),
+            seg.ends_with(" sub_Friends_engine_events_refused_gone=0"),
             "{seg}"
         );
     }
