@@ -694,3 +694,27 @@ async fn a_forward_behind_a_deferred_migration_waits_with_it() {
     assert_eq!(rig.took(Gold::OP), [(1, 1), (1, 2), (1, 3)]);
     assert_eq!(rig.counts(1).events_world_not_here, 0);
 }
+
+/// A forwarded leg is older than any direct leg the target holds: it is
+/// taken at once, never held behind the fence — here before the router
+/// even learnt the move.
+#[tokio::test]
+async fn a_forwarded_leg_is_never_held() {
+    let mut rig = rig().await;
+    rig.moves(0, 1);
+    rig.tick(0).await;
+    rig.tick(1).await;
+    rig.tick(1).await; // installed, hold open; the router not told yet
+    rig.push::<Gold>(3); // → A → forwarded
+    rig.tick(0).await;
+    rig.tick(1).await;
+    assert_eq!(rig.took(Gold::OP), [(1, 1), (1, 2), (1, 3)], "not held");
+    rig.pump(); // now: seal A
+    rig.push::<Gold>(2); // 4, 5 direct, held until A's fence
+    rig.tick(1).await;
+    assert_eq!(rig.took(Gold::OP), []);
+    rig.tick(0).await;
+    rig.tick(1).await;
+    assert_eq!(rig.took(Gold::OP), [(1, 4), (1, 5)]);
+    assert_eq!(rig.counts(1).events_fence_timeouts, 0);
+}
