@@ -23,6 +23,7 @@ use std::time::Duration;
 use gsb_core::calls::Identity;
 use gsb_core::channel::{FrameBatch, Mailbox, channel};
 use gsb_core::conn::{ConnIn, ConnectionActor};
+use gsb_core::events::Event;
 use gsb_core::events::{DEFAULT_MAX_EVENT_BYTES, Publisher, Publishers};
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{MetricsEvent, PushCounts, RouterCounts};
@@ -30,7 +31,6 @@ use gsb_core::registry::{BuiltRoom, Registry, RegistryMsg, RoomFactory};
 use gsb_core::room::{RoomConfig, RoomLogic};
 use gsb_core::shard::ShardLogic;
 use gsb_core::ticker::Ticker;
-use gsb_core::events::Event;
 use gsb_protocol::{FEATURE_PUSH, base, base_table, op};
 use prost::Message;
 use tokio::sync::mpsc;
@@ -785,10 +785,15 @@ async fn a_shard_migration_keeps_every_leg_in_order() {
         .expect("taken");
     let got = server.took(1).await;
     assert_eq!((got[0].shard, got[0].seq), (0, 45), "still shard 0");
-    let (r, _) = server
-        .counts_until(|r, _| r.events_routed == 45)
-        .await;
-    assert_eq!((r.events_relocations, r.events_relocations_stale, r.events_seals_sent), (1, 3, 1));
+    let (r, _) = server.counts_until(|r, _| r.events_routed == 45).await;
+    assert_eq!(
+        (
+            r.events_relocations,
+            r.events_relocations_stale,
+            r.events_seals_sent
+        ),
+        (1, 3, 1)
+    );
 }
 
 /// Park and resume: the CLIENT leg pushed while bob is parked is counted
@@ -823,7 +828,11 @@ async fn a_resumed_client_sees_the_gap_its_park_left() {
     bank.push(&id("bob"), &GoldReceived { balance: 70 })
         .expect("taken");
     let got = server.took(1).await;
-    assert_eq!((got[0].shard, got[0].seq), (1, 1), "the parked entity's room took it");
+    assert_eq!(
+        (got[0].shard, got[0].seq),
+        (1, 1),
+        "the parked entity's room took it"
+    );
     // Bob comes back: a new session of the identity while its park row
     // holds the numbers (the CLIENT leg needs no room).
     let mut back = Client::login(&server, 2, "bob", FEATURE_PUSH, None).await;
@@ -842,7 +851,10 @@ async fn a_resumed_client_sees_the_gap_its_park_left() {
         })
         .await;
     assert!(r.events_client_parked >= 1);
-    assert_eq!(got[0].stream, first[0].stream, "the same stream: a gap, not a restart");
+    assert_eq!(
+        got[0].stream, first[0].stream,
+        "the same stream: a gap, not a restart"
+    );
 }
 
 /// A room change (leave → join): a WORLD leg between the rooms is
@@ -881,7 +893,11 @@ async fn a_room_change_counts_the_leg_between_rooms() {
     bank.push(&id("bob"), &GoldReceived { balance: 3 })
         .expect("taken");
     let got = server.took(1).await;
-    assert_eq!((got[0].shard, got[0].seq), (2, 3), "the new room, a gap of one");
+    assert_eq!(
+        (got[0].shard, got[0].seq),
+        (2, 3),
+        "the new room, a gap of one"
+    );
     server.took_nothing().await;
 }
 
@@ -917,7 +933,10 @@ async fn a_rebuilt_room_is_reached_through_its_new_mailbox() {
     bank.push(&id("carl"), &GoldReceived { balance: 2 })
         .expect("taken");
     let got = server.took(1).await;
-    assert_eq!((got[0].shard, got[0].op, got[0].to.as_deref()), (2, GoldReceived::OP, Some("carl")));
+    assert_eq!(
+        (got[0].shard, got[0].op, got[0].to.as_deref()),
+        (2, GoldReceived::OP, Some("carl"))
+    );
 }
 
 /// BACKLOG B197: a row the room parked through `CloseConn` keeps its

@@ -579,7 +579,10 @@ where
             mig,
         };
         let taken = self.registry.as_ref().is_some_and(|r| {
-            matches!(crate::channel::try_send(r, report), crate::channel::TrySend::Sent)
+            matches!(
+                crate::channel::try_send(r, report),
+                crate::channel::TrySend::Sent
+            )
         });
         if !taken {
             // The router keeps sending to the source, whose tombstone

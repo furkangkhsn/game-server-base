@@ -13,7 +13,7 @@ use crate::calls::{BootError, Calls, Identity};
 use crate::conn::ConnIn;
 use crate::events::route::{EventRoutes, Live, Locate, Located, Place};
 use crate::events::{
-    ClientEvent, Dest, Event, EventIn, Events, Push, PublisherId, Target, WorldEvent,
+    ClientEvent, Dest, Event, EventIn, Events, PublisherId, Push, Target, WorldEvent,
 };
 use crate::metrics::EventCounts;
 use crate::registry::RegistryMsg;
@@ -671,7 +671,10 @@ async fn a_full_hold_and_a_stray_seal_are_counted() {
     let n = crate::events::HOLD_CAP + 5;
     rig.push::<Gold>(n); // direct to shard 1, held
     rig.tick(1).await;
-    assert_eq!(rig.counts(1).events_fence_held, crate::events::HOLD_CAP as u64);
+    assert_eq!(
+        rig.counts(1).events_fence_held,
+        crate::events::HOLD_CAP as u64
+    );
     assert_eq!(rig.counts(1).events_fence_overflow, 5);
     rig.tick(0).await; // the fence
     rig.tick(1).await;
@@ -753,10 +756,7 @@ async fn a_ping_pong_keeps_fifo_through_the_unsealed_tombstone() {
     for _ in 0..3 {
         rig.round([0, 1, 2]).await;
     }
-    assert_eq!(
-        rig.took(Gold::OP),
-        [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]
-    );
+    assert_eq!(rig.took(Gold::OP), [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]);
     let c = rig.total();
     assert_eq!((c.events_fence_timeouts, c.events_fence_lost), (0, 0));
 }

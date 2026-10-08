@@ -57,8 +57,8 @@ mod tests;
 
 pub use gsb_protocol::event::{ClientEvent, Dest, Event, WorldEvent};
 
-pub use fence::{FENCE_TTL, HOLD_CAP, TOMB_TTL};
 pub(crate) use fence::Relay;
+pub use fence::{FENCE_TTL, HOLD_CAP, TOMB_TTL};
 pub use inbound::Forwarded;
 pub(crate) use inbound::{EventIn, Inbound, WorldPush};
 pub use publisher::{

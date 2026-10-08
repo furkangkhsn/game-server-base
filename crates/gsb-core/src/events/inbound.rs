@@ -127,8 +127,7 @@ impl Inbound {
             match msg {
                 EventIn::Push(p) => self.enter(p, false, &mut members, conns, calls, owner_of),
                 EventIn::Seal { identity, mig } => {
-                    self.fences
-                        .seal(&identity, mig, self.table.counts_mut());
+                    self.fences.seal(&identity, mig, self.table.counts_mut());
                 }
             }
         }

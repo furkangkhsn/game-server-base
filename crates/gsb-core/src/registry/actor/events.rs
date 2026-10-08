@@ -149,7 +149,9 @@ where
                 info.mig = mig;
             }
         }
-        let door = old.filter(|&o| o != shard).and_then(|o| entry.events.get(o));
+        let door = old
+            .filter(|&o| o != shard)
+            .and_then(|o| entry.events.get(o));
         self.routes.relocated(door, identity, mig);
     }
 
