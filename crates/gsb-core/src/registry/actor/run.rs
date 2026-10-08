@@ -28,6 +28,9 @@ where
     pub async fn run(mut self) {
         debug!("registry actor started");
         while let Some(msg) = self.inbox.recv().await {
+            // What this message may change of an identity's presence
+            // (engine events, `presence.rs`): nothing without subscribers.
+            let watch = self.presence_watch(&msg);
             match msg {
                 RegistryMsg::CreateRoom { config, reply } => {
                     self.on_create_room(config, reply).await
@@ -114,6 +117,7 @@ where
                     shard,
                     mig,
                 } => self.on_relocated(room, generation, &identity, shard, mig),
+                RegistryMsg::Presence(ask) => self.on_presence(ask),
                 RegistryMsg::ConnPeerChanged { conn, source } => {
                     self.on_conn_peer_changed(conn, source)
                 }
@@ -239,6 +243,7 @@ where
                     break;
                 }
             }
+            self.presence_settle(watch);
         }
         debug!("registry actor stopped");
     }

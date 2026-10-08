@@ -38,16 +38,23 @@
 //! router actor later (EVENTS §12, "measure, then split") changes no
 //! routing code.
 //!
+//! Engine events (presence, round e4): [`EngineEvent`]s the registry
+//! derives from its own table, offered to subscribed services
+//! ([`EngineSubscribers`], `#[gsb(engine_events)]`), and the
+//! [`Presence`] query (§20 E12) a restarted service re-reads them with.
+//!
 //! A shard migration keeps every (publisher, identity, leg) order: the
 //! source keeps a tombstone and hands stragglers on over the shard FIFO,
 //! the router seals the source once it learns the move (`Relocated`),
 //! and the target holds the router's direct legs until the source's
 //! fence (round e3, `docs/EVENTS.md` §7.3; [`TOMB_TTL`], [`FENCE_TTL`],
-//! [`HOLD_CAP`]). Engine events (presence) are round e4; the input log,
-//! replay and the ECS bindings e5; the client e6.
+//! [`HOLD_CAP`]). The input log, replay
+//! and the ECS bindings are round e5; the client e6.
 
+mod engine;
 mod fence;
 mod inbound;
+mod presence;
 mod publisher;
 pub(crate) mod route;
 mod table;
@@ -57,10 +64,19 @@ mod tests;
 
 pub use gsb_protocol::event::{ClientEvent, Dest, Event, WorldEvent};
 
+pub use engine::{
+    EngineEvent, EngineNotice, EngineReceiver, EngineSubscriberSource, EngineSubscriberStats,
+    EngineSubscribers, Interest,
+};
 pub(crate) use fence::Relay;
 pub use fence::{FENCE_TTL, HOLD_CAP, TOMB_TTL};
 pub use inbound::Forwarded;
 pub(crate) use inbound::{EventIn, Inbound, WorldPush};
+pub use presence::{
+    MAX_PRESENCE_PAGE, Presence, PresenceAsk, PresenceEntry, PresencePage, PresenceRefused,
+    PresenceState,
+};
+pub(crate) use presence::{PresenceAnswer, PresenceQuery};
 pub use publisher::{
     DEFAULT_MAX_EVENT_BYTES, Publisher, PublisherId, PublisherSource, PublisherStats, Publishers,
     Push, PushRefused, Target,

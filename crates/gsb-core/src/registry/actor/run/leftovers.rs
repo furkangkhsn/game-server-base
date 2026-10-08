@@ -108,6 +108,8 @@ where
                 RegistryMsg::CreateRoom { .. }
                 | RegistryMsg::DestroyRoom { .. }
                 | RegistryMsg::RoomStatus { .. }
+                // A question, not a fact: its reply drops with it.
+                | RegistryMsg::Presence(_)
                 | RegistryMsg::DespawnPlayer { .. }
                 | RegistryMsg::ConnClosed { .. }
                 | RegistryMsg::Authed { .. }

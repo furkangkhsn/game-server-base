@@ -124,8 +124,8 @@ pub use calls::{CALL_COUNT, CallCounts};
 pub use closes::ServerCloses;
 pub use collector::{CUT_GRACE, FINAL_REPORT_GRACE, MetricSink, MetricsCollector};
 pub use events::{
-    EVENT_COUNT, EventCounts, PUBLISHER_COUNT, PUSH_COUNT, PublisherCounts, PublisherReport,
-    PushCounts, ROUTER_COUNT, RouterCounts,
+    ENGINE_COUNT, EVENT_COUNT, EngineCounts, EngineSubscriberReport, EventCounts, PUBLISHER_COUNT,
+    PUSH_COUNT, PublisherCounts, PublisherReport, PushCounts, ROUTER_COUNT, RouterCounts,
 };
 pub use export::Exporter;
 #[cfg(feature = "otlp")]

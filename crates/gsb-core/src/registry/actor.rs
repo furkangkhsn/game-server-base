@@ -20,6 +20,7 @@ mod dispatch;
 pub(in crate::registry) mod events;
 mod leave;
 mod players;
+mod presence;
 mod room_ops;
 mod rooms;
 mod run;
@@ -97,6 +98,10 @@ pub struct Registry<W, G, St, Sp> {
     ids: HashMap<String, Vec<ConnectionId>>,
     /// When a push last refreshed the metrics sample (`events.rs`).
     push_sampled_at: Option<std::time::Instant>,
+    /// The engine-event subscribers (`docs/EVENTS.md` §5.4, round e4;
+    /// `presence.rs`): offered what each message changed of an
+    /// identity's presence.
+    engine: crate::events::EngineSubscribers,
     /// Global monotonic join-epoch counter, minted here at dispatch (see
     /// the `RoomOp::Join::epoch` doc: per-connection counters made every
     /// resume after an identity's first trip the staleness guard once).
@@ -220,6 +225,7 @@ where
             routes: Default::default(),
             ids: HashMap::new(),
             push_sampled_at: None,
+            engine: Default::default(),
             metrics,
             max_connections,
             max_unauth_conns,

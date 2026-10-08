@@ -155,6 +155,11 @@ pub enum RegistryMsg {
         shard: usize,
         mig: u64,
     },
+    /// A presence question (`docs/EVENTS.md` §20 E12, round e4; built by
+    /// [`crate::events::Presence`]): answered in place from the
+    /// connection table, never awaited. Left unread at the stop, its
+    /// reply drops (the asker sees `PresenceRefused::Gone`).
+    Presence(crate::events::PresenceAsk),
     /// Shut everything down: notify connections, destroy all rooms.
     Shutdown,
 

@@ -13,6 +13,9 @@
 //!   connection's sample).
 //! - [`EventCounts`] — a room's or shard's event table and its EVENTS
 //!   phase.
+//! - [`EngineCounts`] — an engine-event subscriber's (round e4), per
+//!   subscriber name (atomics the registry bumps, read like the
+//!   publishers').
 //!
 //! Ledgers (identity-addressed pushes; `docs/EVENTS.md` §9):
 //!
@@ -209,6 +212,31 @@ event_counts! {
     }
 }
 
+event_counts! {
+    /// One engine-event subscriber's counters (`docs/EVENTS.md` §5.4;
+    /// per subscriber NAME).
+    EngineCounts, ENGINE_COUNT {
+        /// Engine events its channel took.
+        engine_events_sent,
+        /// Engine events refused: its channel was full (the number was
+        /// spent: the subscriber sees the gap).
+        engine_events_refused_full,
+        /// Engine events refused: it was gone (its receiver dropped, its
+        /// task ended).
+        engine_events_refused_gone,
+    }
+}
+
+/// One engine-event subscriber's slice of a report.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EngineSubscriberReport {
+    /// The subscriber's name (`RegistryParts::engine_events(name, ..)`,
+    /// a hosted service's trait name).
+    pub subscriber: String,
+    /// Its counters (cumulative).
+    pub counts: EngineCounts,
+}
+
 /// One publisher's slice of a report.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PublisherReport {
@@ -242,5 +270,7 @@ mod tests {
         assert_eq!(p.pushes_dropped_unread, 3);
         let q = PublisherCounts::from_values([1, 2, 3, 4]);
         assert_eq!(q.events_refused_too_large, 4);
+        let e = EngineCounts::from_values([1, 2, 3]);
+        assert_eq!(e.fields().map(|f| f.1), [1, 2, 3]);
     }
 }
