@@ -8,6 +8,17 @@
 > açılmaz; açık kalanlar §20'de numaralı sorular olarak, her biri
 > öneriyle.
 >
+> **e1 uygulandı (2026-10-08):** sözleşme ve tel, yönlendirme yok —
+> `gsb_protocol::event` (`Event`, `WorldEvent`, `ClientEvent`, `Dest`);
+> `gsb/options.proto`'da `Destination`, `EventOptions`, `(gsb.event)`
+> 50004, `(gsb.reserved_ops)` 50005; `gsb-build` olay planı, üretimi ve
+> isteklerle ortak tek op uzayı denetimleri; `base.proto`'da `Push`
+> (`stream = 5` dahil, §20 E5), `Auth.features = 4` + `Feature` enum'u
+> (`FEATURE_PUSH = 1`), `op::base::PUSH = 17`; `PROTOCOL_VERSION`
+> değişmedi (eklemeli). Demo örneği `ItemGranted` (1007, BOTH). Ayrıntı
+> ve sapmalar §21 "e1 — uygulanan biçim". §20'deki öneriler kullanıcıca
+> kabul edildi.
+>
 > Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
 **Tek paragraf özet.** Olay, sunucu kodunun (bir servis, bir admin görevi,
@@ -1186,6 +1197,45 @@ desen); yük altında yönlendirici/registry maliyeti; dosya biçimi
 (`impl Event` + işaretçiler); `base.proto`: `Push`, `Auth.features = 4`,
 `op::base::PUSH = 17` (+ `wire_contract.rs` kilitleri). Demo/kit
 `.proto`'suna bir örnek olay.
+
+**e1 — uygulanan biçim (2026-10-08).** Plandaki her madde girdi;
+tasarımdan farklar ve netleştirmeler:
+
+- **`FEATURE_PUSH` bir `.proto` enum'u:** `base.proto`'da `enum Feature
+  { FEATURE_NONE = 0; FEATURE_PUSH = 1; }` — değerler bit **maskesi**
+  (1, 2, 4 …), indis değil; her istemci dili sabiti üretir (ErrorCode'un
+  gerekçesi). Rust'ta `gsb_protocol::FEATURE_PUSH: u64 = 1`
+  (`Feature::Push`'tan). Bilinmeyen bitler yok sayılır.
+- **`Push.stream = 5` (§20 E5):** satırın enkarnasyonu; aynı `stream`
+  içinde `seq` boşluk gösterir, `stream` değişince istemci tüm
+  yayıncıların sayacını sıfırlar. Yorum "gönderilen itmede asla 0"
+  der — e2 akış numarasını 1'den başlatmalı.
+- **`Push` taban tabloda kayıtlı** (`base_table()`): sunucu kodlar,
+  istemci çözer. İstemciden gelen 17 yine sert ihlal: bağlantı aktörü
+  taban bandındaki bilinmeyen gelen op'u tablo sorusundan önce reddeder
+  (değişmedi).
+- **Bugünkü istemci `features: 0` gönderir** (`gsb_client::session`):
+  PUSH okuyamadığı için biti e6'da açar.
+- **`gsb-build`:** olaylar servis kancasının dosya başına `finalize`'ında
+  yazılır (prost-build'in mesaj kancası yok); `finalize` çağrı sayısı
+  dosya sayısına eşit değilse build reddedilir (impl'ler sessizce
+  düşmesin). Ret adları: istekler `pkg.Servis.Metot`, olaylar
+  `pkg.Mesaj`; aynı op'ta önce istekler sahiplenir. Yeni `Problem`
+  kolları: `EventMissingOp`, `EventMissingDestination` (`op: 0` ve
+  `DESTINATION_UNSPECIFIED` proto3'te kodlanmaz, eksik sayılır),
+  `EventEngineRange`, `EventTooLarge`, `EventReservedOp`,
+  `EventIsRequest`; `DuplicateOp` iki uzayı birlikte kapsar. İç içe
+  mesajda olay desteklenir (`outer::Inner`). Olay sözleşmesinin yolu
+  `Builder::event_contract_path` (varsayılan `::gsb_protocol::event`).
+  `gsb_core::events` yeniden dışa açımı e2'ye kaldı (orada `Events`
+  tablosuyla birlikte).
+- **Demo:** `ItemGranted { kind, version }` (op 1007 = `gsb_demo::op::
+  ITEM_GRANTED`, `to: BOTH`); kilit `wire_contract.rs`
+  (`the_generated_event_contract_matches_the_demo_ops`).
+- **Kilitler** (`gsb-demo/tests/wire_contract.rs`): `Push`'un beş alan
+  numarası, `PUSH = 17`, `FEATURE_PUSH = 1`, `PROTOCOL_VERSION = 1`,
+  `Auth.features = 4`'ün eklemeli olduğu (alanı bilmeyen okuyucu çözer;
+  `features = 0` baytları değiştirmez). Mevcut kilitler değişmedi.
 
 **e2 — çekirdek yönlendirme.** `gsb_core::events` (`Events` tablosu,
 `Publisher`, `Push`, `PushRefused`, sayaçlar); registry'de `Identity →

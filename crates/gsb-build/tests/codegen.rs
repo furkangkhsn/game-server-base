@@ -382,3 +382,20 @@ fn an_event_refusal_reads_well() {
         "{e}"
     );
 }
+
+/// An empty `(gsb.event) = {}` is still an event declaration (protoc
+/// encodes the option): both halves are reported missing, not ignored.
+#[test]
+fn an_empty_event_option_is_refused() {
+    assert_eq!(
+        problems("event_empty"),
+        [
+            Problem::EventMissingDestination {
+                event: "fixture.bad.Blank".into(),
+            },
+            Problem::EventMissingOp {
+                event: "fixture.bad.Blank".into(),
+            },
+        ]
+    );
+}

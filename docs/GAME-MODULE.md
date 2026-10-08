@@ -389,6 +389,27 @@ ve `Result<TransferDone, RequestError<GameError>>` alır. Örnek: gsb-demo'nun
 `DemoRequests` servisi (`AbilityUse`, 1005) ve
 `gsb-server/tests/typed_requests.rs`.
 
+**Olaylar (tur e1, `docs/EVENTS.md` §4.1).** Sunucunun kimse sormadan
+ittiği tipli mesajlar aynı dosyada, mesajın **kendi** seçeneğiyle
+bildirilir; `gsb-build` her biri için `impl Event` (`OP`, `TO`) ve hedef
+işaretçilerini (`WorldEvent`: WORLD/BOTH, `ClientEvent`: CLIENT/BOTH)
+dosyanın modülüne yazar:
+
+```proto
+option (gsb.reserved_ops) = 2099;                  // dosya düzeyi: servissiz dosyanın emekli op'ları
+
+message GoldReceived {
+  option (gsb.event) = { op: 2001, to: WORLD };    // WORLD | CLIENT | BOTH
+  uint64 amount = 1;
+}
+```
+
+İstekler ve olaylar **tek op uzayını** paylaşır: ikisinin aldığı aynı op,
+`op`'suz ya da `to`'suz olay, motor aralığında / 16 biti aşan / ayrılmış
+op, hem rpc isteği hem olay olan mesaj build'de reddedilir. Yönlendirme
+(`Publisher`, odanın `Events` tablosu, `PUSH` karesi) henüz yok (EVENTS
+§21 e2); örnek: gsb-demo'nun `ItemGranted`'ı (1007, BOTH).
+
 ### 4.7 Deterministik mantık (tur q4)
 
 Bir odanın mantığı tekrar oynatılabilir olsun diye (`docs/SERVICES.md`
