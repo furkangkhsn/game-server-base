@@ -23,8 +23,9 @@ use crate::channel::Inbox;
 use crate::conn::ServerClose;
 use crate::determinism::{
     Arrival, Codecs, FORMAT_VERSION, Input, InputLog, LogHeader, RecordMsg, Recorded,
-    RecordedAction, RecordedOutcome, TickRecord,
+    RecordedAction, RecordedEvent, RecordedOutcome, TickRecord,
 };
+use crate::events::PublisherId;
 use crate::id::{ConnectionId, PlayerId};
 use crate::room::{DisconnectCause, ExpireTo};
 
@@ -303,6 +304,9 @@ const SYSTEMS: u8 = 14;
 const END_TICK: u8 = 15;
 const SESSION_PARK: u8 = 16;
 const SESSION_MOVE: u8 = 17;
+/// Additive (round e5): a reader of an older log never meets it, so
+/// `FORMAT_VERSION` stays (the q5 rule for tags 16, 17).
+const EVENTS: u8 = 18;
 
 fn input(e: &mut Enc, i: &Input, codecs: &Codecs, stats: &mut WriterStats) {
     match i {
@@ -444,6 +448,24 @@ fn input(e: &mut Enc, i: &Input, codecs: &Codecs, stats: &mut WriterStats) {
             e.u64(*wire_id);
             e.u16(*op);
             e.bytes(payload);
+        }
+        Input::Events(list) => {
+            e.u8(EVENTS);
+            e.u64(list.len() as u64);
+            for ev in list {
+                match &ev.to {
+                    Some(id) => {
+                        e.u8(1);
+                        e.str(id.as_str());
+                    }
+                    None => e.u8(0),
+                }
+                e.u64(ev.owner.0);
+                e.u64(u64::from(ev.publisher.0));
+                e.u64(ev.seq);
+                e.u16(ev.op);
+                e.bytes(&ev.payload);
+            }
         }
         Input::Actions(list) => {
             e.u8(ACTIONS);
@@ -596,6 +618,24 @@ fn read_input(d: &mut Dec<'_>) -> Option<Input> {
             op: d.u16()?,
             payload: d.bytes()?,
         },
+        EVENTS => {
+            let n = d.u64()?;
+            let mut list = Vec::new();
+            for _ in 0..n {
+                list.push(RecordedEvent {
+                    to: match d.u8()? {
+                        0 => None,
+                        _ => Some(Identity::new(&d.str()?)),
+                    },
+                    owner: Owner(d.u64()?),
+                    publisher: PublisherId(u32::try_from(d.u64()?).ok()?),
+                    seq: d.u64()?,
+                    op: d.u16()?,
+                    payload: d.bytes()?,
+                });
+            }
+            Input::Events(list)
+        }
         ACTIONS => {
             let n = d.u64()?;
             let mut list = Vec::new();

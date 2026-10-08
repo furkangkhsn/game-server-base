@@ -9,6 +9,15 @@
 //! one: the first tick that differs is reported (the anti-cheat verify:
 //! replay a match, compare).
 //!
+//! The EVENTS the log carries (`Input::Events`, `docs/EVENTS.md` §11)
+//! enter a replay's own event table at their recorded place, with their
+//! recorded owners — no router, no publisher. A recorded event the
+//! replaying table does not admit (no `accept` for its op, a body that
+//! does not decode) counts `replay_diverged` and reports its tick. A
+//! room that publishes is built for its replay with a detached handle
+//! ([`Publisher::detached`](crate::events::Publisher::detached)): its
+//! pushes are output, not input — they go nowhere.
+//!
 //! The CONTROL answers the log carries — a join's admission, a hold's
 //! `may_release` — are compared with the replay's own: a different one
 //! counts `replay_diverged` and reports its tick like a hash would
@@ -29,7 +38,8 @@ use std::time::{Duration, Instant};
 use crate::calls::Calls;
 use crate::determinism::{Input, InputLog, RoomRng};
 use crate::id::{ConnectionId, PlayerId};
-use crate::metrics::CallCounts;
+use crate::events::{Addressee, Events};
+use crate::metrics::{CallCounts, EventCounts};
 use crate::room::{
     Action, IdleClock, IdleView, KickQueue, Parts, RoomConfig, RoomConn, RoomCounters, RoomLogic,
     TickCtx, call_table,
@@ -43,6 +53,7 @@ pub struct Replay<W, G = (), Sp = ()> {
     world: W,
     logic: Box<dyn RoomLogic<W, GroupKey = G, Strip = Sp>>,
     calls: Calls,
+    events: Events,
     config: RoomConfig,
     m: RoomCounters,
     queued: HashMap<ConnectionId, Vec<RpcReply>>,
@@ -79,6 +90,8 @@ pub struct ReplayReport {
     /// The replaying table's counters (`replay_diverged`,
     /// `replay_undecodable` among them).
     pub counts: CallCounts,
+    /// The replaying event table's counters.
+    pub events: EventCounts,
 }
 
 impl<W, G, Sp> Replay<W, G, Sp>
@@ -98,12 +111,17 @@ where
         let mut logic = logic;
         let (mut calls, _boot) = call_table(&config, config.id.0, seed, &mut *logic);
         calls.set_replay();
+        let mut events = Events::sharing_ops(&calls);
+        if let Err(e) = logic.boot_events(&mut events) {
+            tracing::error!(error = %e, "replay: event table boot registration failed");
+        }
         Self {
             log,
             next: 0,
             world,
             logic,
             calls,
+            events,
             config,
             m: RoomCounters::default(),
             queued: HashMap::new(),
@@ -130,6 +148,11 @@ where
         *self.calls.counts()
     }
 
+    /// The replaying event table's counters.
+    pub fn event_counts(&self) -> EventCounts {
+        *self.events.counts()
+    }
+
     /// The first recorded tick whose hash differed so far.
     pub fn first_divergent(&self) -> Option<u64> {
         self.first_divergent
@@ -143,6 +166,7 @@ where
             hashes: self.hashes.clone(),
             first_divergent: self.first_divergent,
             counts: self.counts(),
+            events: self.event_counts(),
         }
     }
 
@@ -156,6 +180,7 @@ where
             world,
             logic,
             calls,
+            events,
             config,
             m,
             queued,
@@ -245,6 +270,17 @@ where
                         .read(*conn, *player, from, *owner, *wire_id, *op, payload);
                     p.drain_outbox();
                 }
+                Input::Events(list) => {
+                    for e in list {
+                        let to = match &e.to {
+                            Some(id) => Addressee::Player(id.clone()),
+                            None => Addressee::Room,
+                        };
+                        if !events.admit(e.op, &e.payload, to, e.owner, e.publisher, e.seq) {
+                            diverged += 1;
+                        }
+                    }
+                }
                 Input::Actions(list) => {
                     let mut actions: Vec<Action> = list
                         .iter()
@@ -274,10 +310,13 @@ where
                     p.handle(std::slice::from_ref(&req), &mut **logic, world, &ctx);
                 }
                 Input::Systems => {
-                    logic.update_with_calls(world, &ctx, p.calls);
+                    logic.update_with_events(world, &ctx, p.calls, events);
                     p.calls.flush();
                 }
-                Input::EndTick => p.end_tick(),
+                Input::EndTick => {
+                    p.end_tick();
+                    events.end_tick();
+                }
             }
         }
         let mut answers: Vec<(ConnectionId, RpcReply)> = Vec::new();

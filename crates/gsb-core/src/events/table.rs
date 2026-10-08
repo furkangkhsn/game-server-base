@@ -137,6 +137,10 @@ pub struct Events {
     accepts: HashMap<u16, (TypeId, &'static str, Decode)>,
     arrived: Vec<Slot>,
     counts: EventCounts,
+    /// While the room records (feature `record`): what EVENTS admitted
+    /// this tick, for the input log (`docs/EVENTS.md` §11).
+    #[cfg(feature = "record")]
+    rec: Option<Vec<crate::determinism::RecordedEvent>>,
 }
 
 impl std::fmt::Debug for Events {
@@ -274,26 +278,41 @@ impl Events {
     }
 
     /// EVENTS: one delivered WORLD leg enters the table (the caller
-    /// resolved its owner and checked [`Self::handles`]). An undecodable
-    /// body is counted and dropped.
+    /// resolved its owner). An op no `accept` claims, or an undecodable
+    /// body, is counted and dropped. `true`: admitted — and, while the
+    /// room records, kept for the input log.
     pub(crate) fn admit(
         &mut self,
         op: u16,
-        body: &[u8],
+        body: &bytes::Bytes,
         to: Addressee,
         owner: Owner,
         from: PublisherId,
         seq: u64,
-    ) {
+    ) -> bool {
         let Some((type_id, _, decode)) = self.accepts.get(&op) else {
             self.counts.events_no_handler += 1;
-            return;
+            return false;
         };
-        let Ok(body) = decode(body) else {
+        let Ok(decoded) = decode(body) else {
             self.counts.events_undecodable += 1;
-            return;
+            return false;
         };
         self.counts.events_admitted += 1;
+        #[cfg(feature = "record")]
+        if let Some(rec) = &mut self.rec {
+            rec.push(crate::determinism::RecordedEvent {
+                to: match &to {
+                    Addressee::Player(id) => Some(id.clone()),
+                    Addressee::Room => None,
+                },
+                owner,
+                publisher: from,
+                seq,
+                op,
+                payload: body.clone(),
+            });
+        }
         self.arrived.push(Slot {
             op,
             type_id: *type_id,
@@ -301,8 +320,24 @@ impl Events {
             owner,
             from,
             seq,
-            body,
+            body: decoded,
         });
+        true
+    }
+
+    /// Start keeping what EVENTS admits (the room's recorder starts it).
+    #[cfg(feature = "record")]
+    pub(crate) fn start_recording(&mut self) {
+        self.rec.get_or_insert_with(Vec::new);
+    }
+
+    /// What EVENTS admitted since the last call (empty unless recording).
+    #[cfg(feature = "record")]
+    pub(crate) fn take_recorded(&mut self) -> Vec<crate::determinism::RecordedEvent> {
+        match &mut self.rec {
+            Some(r) => std::mem::take(r),
+            None => Vec::new(),
+        }
     }
 
     /// Tick end: what nobody took is dropped and counted.

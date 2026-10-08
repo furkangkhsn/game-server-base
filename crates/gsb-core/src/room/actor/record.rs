@@ -30,6 +30,7 @@ where
         let start = RecordMsg::Start(header, self.calls.codecs().clone());
         self.send_record(&recorder, start);
         self.calls.start_recording();
+        self.events.table.start_recording();
         self.recorder = Some(recorder);
     }
 

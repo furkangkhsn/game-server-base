@@ -80,6 +80,16 @@ where
             self.events
                 .drain(&self.conns, &self.calls, &|p| logic.call_owner(world, p));
         }
+        // What EVENTS admitted is the tick's input (`docs/EVENTS.md` §11:
+        // recorded with its owner, like a READ; a no-op unless recording).
+        #[cfg(feature = "record")]
+        {
+            let admitted = self.events.table.take_recorded();
+            if !admitted.is_empty() {
+                self.calls
+                    .note(|| crate::determinism::Input::Events(admitted));
+            }
+        }
 
         let mut actions = self.phase_read(t.at);
 

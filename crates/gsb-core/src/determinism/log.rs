@@ -5,8 +5,9 @@
 //! call that ended, with its type and a copy of its outcome; the late
 //! ones by key), the READ (the requests the table took, the actions and
 //! the requests `ingest` and `handle_request` saw) and the phase markers
-//! (SYSTEMS, the tick's end) — plus `dt` and the tick's state hash.
-//! (EVENTS: a later round; [`Input`] is `#[non_exhaustive]` for it.)
+//! (SYSTEMS, the tick's end), the EVENTS the table admitted
+//! (`docs/EVENTS.md` §11: with their owner resolved, like a READ) — plus
+//! `dt` and the tick's state hash.
 //!
 //! Recorded at the logic boundary, not the transport: a refused,
 //! congested or malformed input never reached the logic and is not in
@@ -23,6 +24,7 @@ use crate::calls::{
     Call, CallError, CallKey, Erased, Identity, Outcome, Owner, Refusal, WireMessage,
 };
 use crate::channel::{Inbox, Mailbox};
+use crate::events::PublisherId;
 use crate::id::{ConnectionId, EntityId, PlayerId, RoomId};
 use crate::room::{DisconnectCause, ExpireTo, RoomConfig};
 
@@ -158,6 +160,25 @@ pub struct RecordedAction {
     pub payload: Bytes,
 }
 
+/// One WORLD leg the event table admitted at EVENTS (`docs/EVENTS.md`
+/// §11): what the game could take, its owner resolved. A replay puts it
+/// into the same table — no router, no publisher, no service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedEvent {
+    /// The addressee: a player by identity, `None` for the whole room.
+    pub to: Option<Identity>,
+    /// The owner the addressee was bound to ([`Owner::ACTOR`] room-wide).
+    pub owner: Owner,
+    /// The publisher.
+    pub publisher: PublisherId,
+    /// The WORLD leg's sequence number.
+    pub seq: u64,
+    /// The event's op.
+    pub op: u16,
+    /// Its encoded body.
+    pub payload: Bytes,
+}
+
 /// One input to the room's logic, in the order the room processed it.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -266,6 +287,9 @@ pub enum Input {
         /// The payload.
         payload: Bytes,
     },
+    /// EVENTS: the WORLD legs the event table admitted this tick, in
+    /// drain order (only when there were any; file tag 18).
+    Events(Vec<RecordedEvent>),
     /// CONVERT: `ingest` with these actions.
     Actions(Vec<RecordedAction>),
     /// One request `handle_request` saw (past the congestion gate).

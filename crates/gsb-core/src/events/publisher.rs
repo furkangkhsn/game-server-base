@@ -62,6 +62,29 @@ pub struct Push {
     pub(crate) body: Bytes,
 }
 
+impl Push {
+    /// The publisher.
+    pub fn publisher(&self) -> PublisherId {
+        self.publisher
+    }
+    /// Who it is addressed to.
+    pub fn target(&self) -> &Target {
+        &self.to
+    }
+    /// The event's op.
+    pub fn op(&self) -> u16 {
+        self.op
+    }
+    /// The event type's destination (its legs).
+    pub fn dest(&self) -> Dest {
+        self.dest
+    }
+    /// The encoded body.
+    pub fn body(&self) -> &Bytes {
+        &self.body
+    }
+}
+
 impl std::fmt::Debug for Push {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Push")
@@ -125,6 +148,10 @@ pub struct PublisherStats {
     /// Bodies encoded (not a metric: the proof that a fan-out encodes
     /// once).
     pub(crate) encodes: AtomicU64,
+    /// Pushes a detached handle took and sent nowhere (not a metric: a
+    /// replay's output — the proof that a replayed room published
+    /// nothing).
+    pub(crate) detached: AtomicU64,
 }
 
 impl PublisherStats {
@@ -143,6 +170,12 @@ impl PublisherStats {
     pub fn encodes(&self) -> u64 {
         self.encodes.load(Relaxed)
     }
+
+    /// How many pushes a [detached](Publisher::detached) handle took and
+    /// sent nowhere (`0` for a routed one).
+    pub fn detached(&self) -> u64 {
+        self.detached.load(Relaxed)
+    }
 }
 
 /// A publishing handle (`docs/EVENTS.md` §5.1). `Clone`, cheap; every
@@ -151,13 +184,15 @@ impl PublisherStats {
 /// `gsb-server`) and handed to a service's constructor, a room's factory,
 /// an admin task.
 ///
-/// A replay's detached handle (pushes go nowhere, uncounted: a room's
-/// pushes are its output, not its input — §5.1, §11) is round e5.
+/// A replay builds a publishing room with a [detached](Self::detached)
+/// handle: its pushes go nowhere (a room's pushes are its output, not
+/// its input — §5.1, §11).
 #[derive(Clone)]
 pub struct Publisher {
     id: PublisherId,
     name: Arc<str>,
-    router: Mailbox<RegistryMsg>,
+    /// `None`: detached.
+    router: Option<Mailbox<RegistryMsg>>,
     stats: Arc<PublisherStats>,
     max_event_bytes: usize,
 }
@@ -173,6 +208,28 @@ impl std::fmt::Debug for Publisher {
 }
 
 impl Publisher {
+    /// A handle connected to nothing, for a REPLAY (`docs/EVENTS.md`
+    /// §5.1, §11, §20 E10): a room that publishes is rebuilt for its
+    /// replay with this one. Every push is encoded and size-checked as
+    /// a routed handle's would be (`TooLarge` the same), then dropped:
+    /// `Ok`, no router, no metric — only [`PublisherStats::detached`]
+    /// counts it. What the room received in the recorded run comes from
+    /// the log, never from its own pushes.
+    pub fn detached(id: PublisherId, name: &str) -> Self {
+        Self {
+            id,
+            name: Arc::from(name),
+            router: None,
+            stats: Arc::default(),
+            max_event_bytes: DEFAULT_MAX_EVENT_BYTES,
+        }
+    }
+
+    /// Whether this handle is [detached](Self::detached).
+    pub fn is_detached(&self) -> bool {
+        self.router.is_none()
+    }
+
     /// Its id (the PUSH frame's `publisher`).
     pub fn id(&self) -> PublisherId {
         self.id
@@ -237,6 +294,10 @@ impl Publisher {
                 max: self.max_event_bytes,
             });
         }
+        let Some(router) = &self.router else {
+            self.stats.detached.fetch_add(1, Relaxed);
+            return Ok(());
+        };
         let push = Push {
             publisher: self.id,
             to,
@@ -244,7 +305,7 @@ impl Publisher {
             dest: E::TO,
             body,
         };
-        match crate::channel::try_send(&self.router, RegistryMsg::Push(push)) {
+        match crate::channel::try_send(router, RegistryMsg::Push(push)) {
             TrySend::Sent => {
                 self.stats.events_pushed.fetch_add(1, Relaxed);
                 Ok(())
@@ -296,7 +357,7 @@ impl Publishers {
         let p = Publisher {
             id,
             name: Arc::from(name),
-            router: self.router.clone(),
+            router: Some(self.router.clone()),
             stats: Arc::default(),
             max_event_bytes: self.max_event_bytes,
         };

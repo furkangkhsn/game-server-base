@@ -48,7 +48,7 @@ pub use file::{ReadError, WriterStats, read_log, spawn_writer, write_log};
 #[cfg(feature = "record")]
 pub use log::{
     Arrival, Codecs, FORMAT_VERSION, Input, InputLog, LogHeader, RecordMsg, Recorded,
-    RecordedAction, RecordedOutcome, Recorder, TickRecord,
+    RecordedAction, RecordedEvent, RecordedOutcome, Recorder, TickRecord,
 };
 #[cfg(feature = "record")]
 pub(crate) use log::{Codec, decode_with, encode_with};
