@@ -75,8 +75,13 @@ where
                 let lost = info.room.filter(|&r| r != room);
                 info.room = Some(room);
                 info.entity = Some(entity);
-                // Where the member's WORLD legs go (`docs/EVENTS.md` §6.3).
+                // Where the member's WORLD legs go (`docs/EVENTS.md` §6.3);
+                // a new membership has migrated nowhere yet (a resume
+                // takes the parked row's count below).
                 info.shard = shard;
+                if fresh {
+                    info.mig = 0;
+                }
                 (fresh, lost)
             }
             None => (false, None),
@@ -121,7 +126,13 @@ where
                     .map(|(c, _)| *c)
                     .collect();
                 for old in stale_keys {
-                    self.release_row(old);
+                    // The parked membership's migration count goes on with
+                    // the session that resumed it (§7.3: a late report of
+                    // an older crossing stays stale).
+                    let mig = self.release_row(old).map_or(0, |i| i.mig);
+                    if let Some(info) = self.conns.get_mut(&conn) {
+                        info.mig = info.mig.max(mig);
+                    }
                     released += 1;
                     debug!(
                         %old,

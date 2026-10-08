@@ -18,6 +18,7 @@ use bytes::Bytes;
 
 use crate::calls::{Calls, Owner};
 use crate::channel::{Inbox, Mailbox, channel};
+use crate::events::fence::{Fences, Way};
 use crate::events::{Addressee, Events, PublisherId};
 use crate::id::PlayerId;
 use crate::metrics::EventCounts;
@@ -33,14 +34,23 @@ pub(crate) struct WorldPush {
     pub(crate) body: Bytes,
 }
 
-/// What a room's (or shard's) event mailbox carries. One arm today; the
-/// migration fence's `Seal` (round e3) rides the same FIFO, behind every
-/// leg sent before it.
+/// What a room's (or shard's) event mailbox carries: the WORLD legs and
+/// the migration fence's seal, which rides the same FIFO behind every leg
+/// the router sent before it (`docs/EVENTS.md` §7.3).
 #[derive(Debug)]
 pub(crate) enum EventIn {
     /// A WORLD leg.
     Push(WorldPush),
+    /// The router moved `identity` away from this shard (its migration
+    /// `mig`): nothing more for it comes here — the shard answers with
+    /// its fence once what it still had is handed on.
+    Seal { identity: String, mig: u64 },
 }
+
+/// A WORLD leg one shard hands another for a member that migrated
+/// (`ShardMsg::Forward`, `docs/EVENTS.md` §7.3): opaque outside the core.
+#[derive(Debug)]
+pub struct Forwarded(pub(crate) WorldPush);
 
 /// An actor's event inbox and table.
 pub(crate) struct Inbound {
@@ -53,6 +63,8 @@ pub(crate) struct Inbound {
     capacity: usize,
     /// The table the game takes from.
     pub(crate) table: Events,
+    /// The migration fence (shards; a single room's stays empty).
+    pub(crate) fences: Fences,
 }
 
 impl Inbound {
@@ -64,6 +76,7 @@ impl Inbound {
             rx,
             capacity: capacity.max(1),
             table,
+            fences: Fences::default(),
         }
     }
 
@@ -86,7 +99,10 @@ impl Inbound {
     /// (`GameLogic::call_owner`; `None` → `events_unbound`) — then
     /// decoded as its accepted type (`events_no_handler`,
     /// `events_undecodable`). A parked member (detached row) is a member:
-    /// its legs are delivered (§20 E1).
+    /// its legs are delivered (§20 E1). On a shard the migration fence
+    /// routes first (`fence.rs`, §7.3): the legs CONTROL let in go ahead
+    /// of the mailbox; a leg for a member that crossed away is handed on
+    /// or held, a seal answered with the fence.
     ///
     /// Cost when quiet: one empty `try_recv`, no allocation. The identity
     /// → member index is built once per tick that has a player-addressed
@@ -99,37 +115,74 @@ impl Inbound {
         owner_of: &dyn Fn(PlayerId) -> Option<Owner>,
     ) {
         let mut members: Option<HashMap<&str, PlayerId>> = None;
+        // The legs CONTROL let in (forwarded by a neighbour, released by
+        // a fence) are older than the mailbox's: first.
+        while let Some(p) = self.fences.ready.pop_front() {
+            self.enter(p, true, &mut members, conns, calls, owner_of);
+        }
         for _ in 0..self.capacity {
             let Ok(msg) = self.rx.try_recv() else {
                 return;
             };
-            let EventIn::Push(p) = msg;
-            if !self.table.handles(p.op) {
-                self.table.counts_mut().events_no_handler += 1;
-                continue;
-            }
-            let owner = match &p.to {
-                Addressee::Room => Owner::ACTOR,
-                Addressee::Player(identity) => {
-                    let index = members.get_or_insert_with(|| member_index(conns));
-                    let Some(&player) = index.get(identity.as_str()) else {
-                        self.table.counts_mut().events_world_not_here += 1;
-                        continue;
-                    };
-                    let bound = conns
-                        .get(&player)
-                        .and_then(|rc| calls.bound(rc.conn))
-                        .or_else(|| owner_of(player));
-                    let Some(owner) = bound else {
-                        self.table.counts_mut().events_unbound += 1;
-                        continue;
-                    };
-                    owner
+            match msg {
+                EventIn::Push(p) => self.enter(p, false, &mut members, conns, calls, owner_of),
+                EventIn::Seal { identity, mig } => {
+                    self.fences
+                        .seal(&identity, mig, self.table.counts_mut());
                 }
-            };
-            self.table
-                .admit(p.op, &p.body, p.to, owner, p.publisher, p.seq);
+            }
         }
+    }
+
+    /// One leg: routed by the fence (`fence.rs`), then — when it is this
+    /// actor's — owned and admitted.
+    fn enter<'c, G>(
+        &mut self,
+        p: WorldPush,
+        forwarded: bool,
+        members: &mut Option<HashMap<&'c str, PlayerId>>,
+        conns: &'c HashMap<PlayerId, RoomConn<G>>,
+        calls: &Calls,
+        owner_of: &dyn Fn(PlayerId) -> Option<Owner>,
+    ) {
+        let index = &mut *members;
+        let member = |id: &str| {
+            index
+                .get_or_insert_with(|| member_index(conns))
+                .contains_key(id)
+        };
+        let p = match self
+            .fences
+            .route(p, forwarded, member, self.table.counts_mut())
+        {
+            Way::Admit(p) => p,
+            Way::NotHere => {
+                self.table.counts_mut().events_world_not_here += 1;
+                return;
+            }
+            Way::Kept => return,
+        };
+        let owner = match &p.to {
+            Addressee::Room => Owner::ACTOR,
+            Addressee::Player(identity) => {
+                let index = members.get_or_insert_with(|| member_index(conns));
+                let Some(&player) = index.get(identity.as_str()) else {
+                    self.table.counts_mut().events_world_not_here += 1;
+                    return;
+                };
+                let bound = conns
+                    .get(&player)
+                    .and_then(|rc| calls.bound(rc.conn))
+                    .or_else(|| owner_of(player));
+                let Some(owner) = bound else {
+                    self.table.counts_mut().events_unbound += 1;
+                    return;
+                };
+                owner
+            }
+        };
+        self.table
+            .admit(p.op, &p.body, p.to, owner, p.publisher, p.seq);
     }
 
     /// BROADCAST: what nobody took this tick is dropped and counted.

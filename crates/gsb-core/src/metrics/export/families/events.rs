@@ -62,6 +62,51 @@ pub(super) const EVENTS: [RoomFamily; EVENT_COUNT] = [
         "Event WORLD legs for an identity that was no member of the room (or shard) by its EVENTS phase, dropped, cumulative.",
         |r| r.events.events_world_not_here,
     ),
+    counter(
+        "gsb_room_events_forwarded_total",
+        "Event WORLD legs a shard handed on to the shard its member migrated to (a transfer, not an ending), cumulative.",
+        |r| r.events.events_forwarded,
+    ),
+    counter(
+        "gsb_room_events_forward_refused_total",
+        "Event WORLD legs a migration's tombstone could not hand on (the target shard's link full or closed), dropped, cumulative.",
+        |r| r.events.events_forward_refused,
+    ),
+    counter(
+        "gsb_room_events_fence_held_total",
+        "Event WORLD legs held behind a migration's fence, cumulative.",
+        |r| r.events.events_fence_held,
+    ),
+    counter(
+        "gsb_room_events_fence_released_total",
+        "Held event WORLD legs a migration's fence (or its timeout) released, cumulative.",
+        |r| r.events.events_fence_released,
+    ),
+    counter(
+        "gsb_room_events_fence_overflow_total",
+        "Event WORLD legs dropped because a migration fence's hold was full, cumulative.",
+        |r| r.events.events_fence_overflow,
+    ),
+    counter(
+        "gsb_room_events_fence_timeouts_total",
+        "Migration fences that never came in time (held legs released without the order guarantee), cumulative.",
+        |r| r.events.events_fence_timeouts,
+    ),
+    counter(
+        "gsb_room_events_fence_lost_total",
+        "Migration seals and fences nobody waited for, cumulative.",
+        |r| r.events.events_fence_lost,
+    ),
+    counter(
+        "gsb_room_events_relocations_refused_total",
+        "Shard migration reports (Relocated) the registry's mailbox refused, cumulative.",
+        |r| r.events.events_relocations_refused,
+    ),
+    counter(
+        "gsb_room_events_tombstones_expired_total",
+        "Migration tombstones that expired, cumulative.",
+        |r| r.events.events_tombstones_expired,
+    ),
 ];
 
 const fn router(
@@ -138,6 +183,26 @@ pub(in crate::metrics::export) const ROUTER: [Scalar<RegistryReport>; ROUTER_COU
         "gsb_events_world_refused_room_gone_total",
         "Event WORLD legs whose room had ended, lost, cumulative.",
         |r| r.events.events_world_refused_room_gone,
+    ),
+    router(
+        "gsb_events_relocations_total",
+        "Shard migrations that moved an identity's event WORLD legs to its new shard, cumulative.",
+        |r| r.events.events_relocations,
+    ),
+    router(
+        "gsb_events_relocations_stale_total",
+        "Shard migration reports the event router did not apply (stale count, ended room, no membership), cumulative.",
+        |r| r.events.events_relocations_stale,
+    ),
+    router(
+        "gsb_events_seals_sent_total",
+        "Migration seals sent to a migration's source shard, cumulative.",
+        |r| r.events.events_seals_sent,
+    ),
+    router(
+        "gsb_events_seals_refused_total",
+        "Migration seals the source shard's event mailbox refused, cumulative.",
+        |r| r.events.events_seals_refused,
     ),
 ];
 

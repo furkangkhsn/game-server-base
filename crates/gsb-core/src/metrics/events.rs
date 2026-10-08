@@ -22,8 +22,11 @@
 //!   refused_room_full, refused_room_gone}`;
 //! - `client_sent = pushes_written + pushes_dropped_outbound_full +
 //!   pushes_dropped_outbound_gone + pushes_dropped_unread + (in flight)`;
-//! - `world_sent = admitted + no_handler + undecodable + unbound +
-//!   world_not_here + (in flight)`; `admitted = taken + untaken`.
+//! - `world_sent + forwarded = admitted + no_handler + undecodable +
+//!   unbound + world_not_here + forward_refused + fence_overflow + (held,
+//!   in flight)`, the event counts summed over a room's actors (a
+//!   forwarded leg is ended once more, by the shard it was handed to);
+//!   `admitted = taken + untaken`.
 
 /// Declares a counter set and its whole-set operations (the
 /// [`CallCounts`](crate::metrics::CallCounts) pattern: a field added to
@@ -88,9 +91,40 @@ event_counts! {
         /// the next tick).
         events_untaken,
         /// WORLD legs for an identity that is no member of this actor
-        /// (it left, or migrated, between routing and this EVENTS):
-        /// dropped.
+        /// and that it keeps no tombstone for (it left the room, or a
+        /// migration's tombstone expired, between routing and this
+        /// EVENTS): dropped.
         events_world_not_here,
+        /// WORLD legs a shard handed on to the shard its member migrated
+        /// to (the tombstone, `docs/EVENTS.md` §7.3) — a transfer, not an
+        /// ending: the receiving shard ends the leg.
+        events_forwarded,
+        /// WORLD legs a tombstone could not hand on (the target shard's
+        /// link full or closed): dropped.
+        events_forward_refused,
+        /// Direct WORLD legs held behind a migration's fence (or, on a
+        /// shard the member left again before its incoming fence, kept
+        /// pending for it) — a wait, not an ending.
+        events_fence_held,
+        /// Held WORLD legs a fence (or its timeout) let go, in order.
+        events_fence_released,
+        /// Direct WORLD legs dropped because a fence's hold was full
+        /// (`HOLD_CAP`).
+        events_fence_overflow,
+        /// Fences that never came within `FENCE_TTL` ticks: the held legs
+        /// were released anyway — the per-publisher order is not
+        /// guaranteed for them.
+        events_fence_timeouts,
+        /// Seals and fences nobody waited for (an expired tombstone or
+        /// hold, a refused `Relocated`, a stale migration count).
+        events_fence_lost,
+        /// `Relocated` reports the registry's full or closed mailbox
+        /// refused: the shard opens no hold; the source's tombstone
+        /// forwards until it expires.
+        events_relocations_refused,
+        /// Tombstones that expired (`TOMB_TTL` ticks); a later leg for
+        /// that identity is `events_world_not_here`.
+        events_tombstones_expired,
     }
 }
 
@@ -127,6 +161,19 @@ event_counts! {
         events_world_refused_room_full,
         /// WORLD legs whose room had ended (its event mailbox closed).
         events_world_refused_room_gone,
+        /// Shard migrations a shard reported (`Relocated`) that moved an
+        /// identity's WORLD legs to its new shard.
+        events_relocations,
+        /// `Relocated` reports the router did not apply: an older (or the
+        /// same) migration count than it knows, a room incarnation that
+        /// ended, or an identity with no membership there.
+        events_relocations_stale,
+        /// Seals sent to a migration's source shard (the fence,
+        /// `docs/EVENTS.md` §7.3).
+        events_seals_sent,
+        /// Seals the source shard's full or closed event mailbox refused:
+        /// the target's hold times out (`events_fence_timeouts`).
+        events_seals_refused,
     }
 }
 

@@ -107,6 +107,13 @@ where
                     }
                 }
                 RegistryMsg::Push(push) => self.on_push(push),
+                RegistryMsg::Relocated {
+                    room,
+                    generation,
+                    identity,
+                    shard,
+                    mig,
+                } => self.on_relocated(room, generation, &identity, shard, mig),
                 RegistryMsg::ConnPeerChanged { conn, source } => {
                     self.on_conn_peer_changed(conn, source)
                 }

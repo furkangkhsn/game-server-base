@@ -370,6 +370,7 @@ pub(in crate::shard::tests) fn ghost_migrate(
             last_input: None,
             path: None,
             calls: Default::default(),
+            mig: 1,
         })),
     }
 }

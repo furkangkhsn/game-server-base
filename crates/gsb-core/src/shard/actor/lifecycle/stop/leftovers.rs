@@ -81,6 +81,10 @@ where
                 ShardMsg::Border { .. } | ShardMsg::ResyncRequest { .. } => {
                     self.m.stop.border_updates_unapplied += 1;
                 }
+                // A fence's leg or fence in flight: lost with the stop,
+                // like the legs still in the event mailbox (uncounted —
+                // BACKLOG "e3:").
+                ShardMsg::Forward(_) | ShardMsg::Fence { .. } => {}
                 ShardMsg::Shutdown => {}
             }
         }

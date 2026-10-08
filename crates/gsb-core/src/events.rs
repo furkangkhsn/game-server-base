@@ -38,11 +38,15 @@
 //! router actor later (EVENTS §12, "measure, then split") changes no
 //! routing code.
 //!
-//! Shard migration (the fence, the seal, the tombstones) is round e3;
-//! engine events (presence) e4; the input log, replay and the ECS
-//! bindings e5; the client e6. Until e3, a WORLD leg routed to a shard a
-//! player has since left is counted `events_world_not_here` there.
+//! A shard migration keeps every (publisher, identity, leg) order: the
+//! source keeps a tombstone and hands stragglers on over the shard FIFO,
+//! the router seals the source once it learns the move (`Relocated`),
+//! and the target holds the router's direct legs until the source's
+//! fence (round e3, `docs/EVENTS.md` §7.3; [`TOMB_TTL`], [`FENCE_TTL`],
+//! [`HOLD_CAP`]). Engine events (presence) are round e4; the input log,
+//! replay and the ECS bindings e5; the client e6.
 
+mod fence;
 mod inbound;
 mod publisher;
 pub(crate) mod route;
@@ -53,6 +57,9 @@ mod tests;
 
 pub use gsb_protocol::event::{ClientEvent, Dest, Event, WorldEvent};
 
+pub use fence::{FENCE_TTL, HOLD_CAP, TOMB_TTL};
+pub(crate) use fence::Relay;
+pub use inbound::Forwarded;
 pub(crate) use inbound::{EventIn, Inbound, WorldPush};
 pub use publisher::{
     DEFAULT_MAX_EVENT_BYTES, Publisher, PublisherId, PublisherSource, PublisherStats, Publishers,

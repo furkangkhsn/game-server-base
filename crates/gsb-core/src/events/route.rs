@@ -145,6 +145,31 @@ impl EventRoutes {
         self.rooms.remove(&room);
     }
 
+    /// A shard migration the router could not apply (an older count, an
+    /// ended incarnation, no membership): `events_relocations_stale`.
+    pub(crate) fn relocation_stale(&mut self) {
+        self.counts.events_relocations_stale += 1;
+    }
+
+    /// A shard migration moved `identity`'s WORLD legs (the caller
+    /// already points its place at the new shard, §7.3): SEAL the shard
+    /// it was routed to before — `old`, `None` when that shard is not
+    /// known — behind every leg already sent there.
+    pub(crate) fn relocated(&mut self, old: Option<&Mailbox<EventIn>>, identity: &str, mig: u64) {
+        self.counts.events_relocations += 1;
+        let Some(old) = old else {
+            return;
+        };
+        let seal = EventIn::Seal {
+            identity: identity.to_owned(),
+            mig,
+        };
+        match crate::channel::try_send(old, seal) {
+            TrySend::Sent => self.counts.events_seals_sent += 1,
+            TrySend::Full | TrySend::Closed => self.counts.events_seals_refused += 1,
+        }
+    }
+
     /// Route one push.
     pub(crate) fn route(&mut self, p: Push, at: &dyn Locate) {
         self.counts.events_routed += 1;

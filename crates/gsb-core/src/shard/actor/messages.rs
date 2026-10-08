@@ -374,6 +374,10 @@ where
                             .unwrap_or_else(|| p.player.into());
                         self.calls.import(p.calls, owner);
                     }
+                    // Its WORLD legs follow it (`docs/EVENTS.md` §7.3):
+                    // the router learns the move, and this shard holds
+                    // the router's direct legs until the source's fence.
+                    self.relocated(&p.identity, p.mig, tick);
                     self.conns.insert(
                         p.player,
                         RoomConn {
@@ -527,7 +531,61 @@ where
                 self.tstats.over_cap += cut;
                 true
             }
+            ShardMsg::Forward(leg) => {
+                // Behind a deferred migration on the FIFO: wait with it
+                // (the member it is for may be the one not yet
+                // installed).
+                if !self.deferred.is_empty() {
+                    self.deferred.push_back(ShardMsg::Forward(leg));
+                    return true;
+                }
+                let conns = &self.conns;
+                let events = &mut self.events;
+                events.fences.forward_in(
+                    leg.0,
+                    |id| conns.values().any(|rc| rc.identity == id),
+                    events.table.counts_mut(),
+                );
+                true
+            }
+            ShardMsg::Fence { identity, mig } => {
+                if !self.deferred.is_empty() {
+                    self.deferred.push_back(ShardMsg::Fence { identity, mig });
+                    return true;
+                }
+                let events = &mut self.events;
+                events
+                    .fences
+                    .fence_in(&identity, mig, events.table.counts_mut());
+                true
+            }
             ShardMsg::Shutdown => false,
         }
+    }
+
+    /// A migrating member with `identity` arrived with migration count
+    /// `mig` (`docs/EVENTS.md` §7.3): tell the router (`Relocated`); when
+    /// it took the report, hold the direct legs until the source's fence.
+    /// An anonymous member is never addressed: nothing to do.
+    fn relocated(&mut self, identity: &str, mig: u64, tick: u64) {
+        if identity.is_empty() {
+            return;
+        }
+        let report = crate::registry::RegistryMsg::Relocated {
+            room: self.config.id,
+            generation: self.effects.out.epoch,
+            identity: identity.to_owned(),
+            shard: self.index,
+            mig,
+        };
+        let taken = self.registry.as_ref().is_some_and(|r| {
+            matches!(crate::channel::try_send(r, report), crate::channel::TrySend::Sent)
+        });
+        if !taken {
+            // The router keeps sending to the source, whose tombstone
+            // hands the legs on until it expires: no seal will come.
+            self.events.table.counts_mut().events_relocations_refused += 1;
+        }
+        self.events.fences.arrived(identity, mig, tick, taken);
     }
 }

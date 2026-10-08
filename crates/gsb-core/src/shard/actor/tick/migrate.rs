@@ -86,6 +86,9 @@ where
                     let calls = calls_owner
                         .map(|o| self.calls.take_owner(o))
                         .unwrap_or_default();
+                    // Its migration count (`docs/EVENTS.md` §7.3): the
+                    // fence of this crossing, told apart from older ones.
+                    let mig = self.events.fences.next_mig(&entry.identity);
                     Some(Box::new(PlayerMigration {
                         player: p,
                         conn: entry.conn,
@@ -108,6 +111,7 @@ where
                         last_input,
                         path,
                         calls,
+                        mig,
                     }))
                 });
                 // The session whose request state dies with a COMMITTED
@@ -115,6 +119,11 @@ where
                 // the message.
                 let moving_conn = player.as_ref().map(|pm| pm.conn);
                 let moving_calls = player.as_ref().map_or(0, |pm| pm.calls.len());
+                // The member's WORLD legs: a tombstone once the move commits.
+                let moving_events = player
+                    .as_ref()
+                    .map(|pm| (pm.identity.clone(), pm.mig))
+                    .filter(|(identity, _)| !identity.is_empty());
                 match self.links[b].send(ShardMsg::Migrate {
                     from: self.index,
                     at_tick: t.tick,
@@ -142,6 +151,11 @@ where
                         // abandons only what the table still owed the
                         // session: requests taken but not answered.)
                         self.calls.count_exported(moving_calls);
+                        // What still reaches this shard for the member is
+                        // handed on (`docs/EVENTS.md` §7.3).
+                        if let Some((identity, mig)) = &moving_events {
+                            self.events.fences.departed(identity, b, *mig, t.tick);
+                        }
                         if let Some(mc) = moving_conn {
                             self.drop_conn_request_state(mc);
                         }
@@ -214,6 +228,38 @@ where
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+impl<W, G, St, Sp> ShardActor<W, G, St, Sp>
+where
+    W: Send + 'static,
+    G: Eq + Hash + Clone + Debug + Send + 'static,
+    St: Debug + Send + 'static,
+    Sp: Debug + Clone + PartialEq + Send + 'static,
+{
+    /// What the migration fence hands the neighbours (`docs/EVENTS.md`
+    /// §7.3), in the order it decided it: legs for members that crossed
+    /// away (`events_forwarded`, or `events_forward_refused` when the
+    /// link is full or closed — the leg is lost) and fences (a refused
+    /// one leaves the target's hold to time out, counted there).
+    pub(crate) fn send_relays(&mut self) {
+        for (to, relay) in self.events.fences.take_relays() {
+            let msg = match relay {
+                crate::events::Relay::Forward(leg) => {
+                    ShardMsg::Forward(crate::events::Forwarded(leg))
+                }
+                crate::events::Relay::Fence { identity, mig } => ShardMsg::Fence { identity, mig },
+            };
+            let forward = matches!(msg, ShardMsg::Forward(_));
+            let sent = self.links.get_mut(to).is_some_and(|l| l.send(msg).is_ok());
+            let c = self.events.table.counts_mut();
+            match (forward, sent) {
+                (true, true) => c.events_forwarded += 1,
+                (true, false) => c.events_forward_refused += 1,
+                (false, _) => {}
             }
         }
     }

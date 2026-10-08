@@ -130,15 +130,20 @@ where
 
         self.phase_idle_sweep(t.at);
         // -- Phase 0e — EVENTS (`docs/EVENTS.md` §3; the room actor's
-        //    phase, the same shared code — `crate::events::Inbound`).
-        //    Until round e3's fence, a leg routed here for a member that
-        //    has since migrated away is `events_world_not_here`.
+        //    phase, the same shared code — `crate::events::Inbound`),
+        //    with the migration fence (§7.3): expired tombstones and
+        //    overdue holds first, then the drain (a leg for a member that
+        //    crossed away is handed on, a seal answered with the fence),
+        //    then what the fence hands the neighbours leaves, in order.
         {
+            let events = &mut self.events;
+            events.fences.sweep(t.tick, events.table.counts_mut());
             let logic = &self.logic;
             let world = &self.world;
             self.events
                 .drain(&self.conns, &self.calls, &|p| logic.call_owner(world, p));
         }
+        self.send_relays();
         // -- Phase 1 — READ (the room's bounded pull: per-connection
         //    fairness budget + shard-level pull budget).
         let per_conn = self.config.max_actions_per_conn_per_tick;

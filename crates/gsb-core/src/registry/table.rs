@@ -192,10 +192,14 @@ pub(crate) struct ConnInfo {
     /// [`FEATURE_PUSH`](gsb_protocol::FEATURE_PUSH) (`docs/EVENTS.md` §14).
     pub(crate) features: u64,
     /// The shard holding this membership (sharded rooms; the join's home
-    /// shard, or the shard whose ledger resumed it — `SpawnDone`): where
-    /// the member's WORLD legs go. Not followed across a migration until
-    /// round e3 (`Relocated`).
+    /// shard, or the shard whose ledger resumed it — `SpawnDone` — then
+    /// the shard each migration moved it to — `Relocated`): where the
+    /// member's WORLD legs go.
     pub(crate) shard: Option<usize>,
+    /// The highest migration count `Relocated` reported for this
+    /// membership (`docs/EVENTS.md` §7.3; 0 = none since the join): an
+    /// older report is stale. A resume carries the parked row's.
+    pub(crate) mig: u64,
     /// The connection's source ([`RegistryMsg::ConnOpened`]'s), which
     /// the per-source unauthenticated cap counts by while `authed` is
     /// false (BACKLOG D12). `None`: no peer address, or a row the open

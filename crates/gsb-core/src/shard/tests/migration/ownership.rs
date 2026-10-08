@@ -263,6 +263,7 @@ async fn ghost_migrate_after_leave_is_rejected() {
                 last_input: None,
                 path: None,
                 calls: Default::default(),
+                mig: 1,
             })),
         })
         .await

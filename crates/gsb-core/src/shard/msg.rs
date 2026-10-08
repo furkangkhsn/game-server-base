@@ -76,6 +76,12 @@ pub struct PlayerMigration {
     /// client is answered from the receiving shard. Empty when nothing
     /// travels.
     pub calls: crate::calls::Exported,
+    /// The player's migration count (`docs/EVENTS.md` §7.3): 1 for its
+    /// first crossing since it joined, +1 per crossing after. The
+    /// receiving shard reports it to the event router (`Relocated`), so a
+    /// late report of an older crossing cannot win, and the fence of this
+    /// crossing is told apart from an older one's.
+    pub mig: u64,
 }
 
 /// A migrating entity: the full game state plus the owning player, when
@@ -206,6 +212,15 @@ pub enum ShardMsg<S, B> {
     /// source wholesale, in CONTROL; the logic reads the merged view in
     /// the TEAMS phase ([`ShardLogic::team_exchange`]).
     TeamImport(TeamImport),
+    /// A WORLD leg that reached a shard its member had left
+    /// (`docs/EVENTS.md` §7.3): the tombstone hands it on here, behind
+    /// the member's `Migrate` on the same FIFO. Taken in CONTROL — waiting
+    /// behind a deferred migration like the migration itself.
+    Forward(crate::events::Forwarded),
+    /// The fence of `identity`'s migration `mig` (§7.3): the sending
+    /// shard will hand on nothing more for it. Behind every `Forward` it
+    /// sent; the receiver releases the direct legs it held.
+    Fence { identity: String, mig: u64 },
     /// Stop the shard (drops the world).
     Shutdown,
 }

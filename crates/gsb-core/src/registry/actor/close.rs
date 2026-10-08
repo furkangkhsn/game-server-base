@@ -190,6 +190,7 @@ where
             features: info.features,
             // The membership's shard moves with it (its WORLD legs).
             shard: info.shard.take(),
+            mig: std::mem::take(&mut info.mig),
         };
         let transport_gone = info.detached;
         // The park row first: the identity keeps a row (and its event

@@ -128,6 +128,8 @@ where
         self.conn_epoch.remove(&rc.conn);
         self.idle.stop(player);
         self.paths.remove(player);
+        // Its migration count ends with the membership (§7.3).
+        self.events.fences.left(&rc.identity);
         // The request state goes with the SESSION (the room actor's rule):
         // in-flight requests release their slots and any queued answer is
         // dropped (a reply to a gone session is not delivered); late

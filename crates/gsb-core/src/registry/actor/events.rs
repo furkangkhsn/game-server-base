@@ -106,6 +106,53 @@ where
         }
     }
 
+    /// [`crate::registry::RegistryMsg::Relocated`]: shard `shard` of
+    /// `room` installed `identity`'s migration `mig` — its membership
+    /// rows follow (where its WORLD legs go), and the shard they were
+    /// routed to before is sealed (`docs/EVENTS.md` §7.3). Stale (and
+    /// counted) for another incarnation of the room, an identity with no
+    /// membership there, or a count not above the one known.
+    pub(in crate::registry) fn on_relocated(
+        &mut self,
+        room: RoomId,
+        generation: u64,
+        identity: &str,
+        shard: usize,
+        mig: u64,
+    ) {
+        let Some(entry) = self.rooms.get(&room).filter(|e| e.generation == generation) else {
+            self.routes.relocation_stale();
+            return;
+        };
+        let rows: Vec<ConnectionId> = self
+            .ids
+            .get(identity)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|c| self.conns.get(c).is_some_and(|i| i.room == Some(room)))
+            .collect();
+        // The membership routing reads (`Tables::locate`): a live row
+        // before a parked one.
+        let top = rows
+            .iter()
+            .filter_map(|c| Some((*c, self.conns.get(c)?)))
+            .max_by_key(|(c, i)| (!i.detached, *c))
+            .map(|(_, i)| (i.shard, i.mig));
+        let Some((old, _)) = top.filter(|(_, known)| mig > *known) else {
+            self.routes.relocation_stale();
+            return;
+        };
+        for c in &rows {
+            if let Some(info) = self.conns.get_mut(c) {
+                info.shard = Some(shard);
+                info.mig = mig;
+            }
+        }
+        let door = old.filter(|&o| o != shard).and_then(|o| entry.events.get(o));
+        self.routes.relocated(door, identity, mig);
+    }
+
     /// `room` ended: its room-wide numbers end (a rebuilt room starts
     /// them from 1).
     pub(in crate::registry) fn forget_room_events(&mut self, room: RoomId) {

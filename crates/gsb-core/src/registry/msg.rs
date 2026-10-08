@@ -139,6 +139,22 @@ pub enum RegistryMsg {
     /// and delivers every leg of every recipient, or counts what stopped
     /// it. Never awaited; every delivery is a `try_send`.
     Push(crate::events::Push),
+    /// A shard installed a migrating member (`docs/EVENTS.md` §7.3): the
+    /// event router points `identity`'s WORLD legs at shard `shard` from
+    /// now on and SEALS the shard it knew before (the seal rides that
+    /// shard's event mailbox behind every leg already sent there). A
+    /// report of an older or equal migration count `mig`, of another
+    /// incarnation of the room (`generation`), or for an identity with no
+    /// membership in `room` is stale and changes nothing
+    /// (`events_relocations_stale`). Sent with `try_send` (the shard
+    /// counts a refusal, `events_relocations_refused`).
+    Relocated {
+        room: RoomId,
+        generation: u64,
+        identity: String,
+        shard: usize,
+        mig: u64,
+    },
     /// Shut everything down: notify connections, destroy all rooms.
     Shutdown,
 

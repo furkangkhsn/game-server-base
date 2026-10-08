@@ -100,6 +100,9 @@ where
                 // A push the publisher saw taken, never routed: every leg
                 // of it lost at once (`docs/EVENTS.md` §9).
                 RegistryMsg::Push(_) => self.routes.count_unread(),
+                // A migration the router never learnt: the target's hold
+                // and the source's tombstone run out (counted there).
+                RegistryMsg::Relocated { .. } => {}
                 // No match-all arm: a new message kind must be decided
                 // here.
                 RegistryMsg::CreateRoom { .. }
