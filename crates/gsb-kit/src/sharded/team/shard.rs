@@ -152,7 +152,8 @@ where
     ) {
         self.step += 1;
         self.tick = ctx.tick;
-        self.inner.update_seam_with_events(world, ctx, seam, calls, events);
+        self.inner
+            .update_seam_with_events(world, ctx, seam, calls, events);
     }
 
     fn apply_remote_effect(

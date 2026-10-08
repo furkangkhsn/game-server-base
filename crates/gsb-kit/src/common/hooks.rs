@@ -179,9 +179,7 @@ pub(crate) fn systems<G: Game>(
         Some(Io {
             calls,
             events: Some(events),
-        }) => guard_change_window(world, |w| {
-            game.systems_with_events(w, ctx, calls, events)
-        }),
+        }) => guard_change_window(world, |w| game.systems_with_events(w, ctx, calls, events)),
         Some(Io {
             calls,
             events: None,

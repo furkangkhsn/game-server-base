@@ -284,7 +284,12 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
         calls: &mut gsb_core::calls::Calls,
         events: &mut gsb_core::events::Events,
     ) {
-        self.step(world, ctx, None, Some(crate::common::Io::events(calls, events)));
+        self.step(
+            world,
+            ctx,
+            None,
+            Some(crate::common::Io::events(calls, events)),
+        );
         crate::common::close_change_window(world);
     }
 

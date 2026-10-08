@@ -202,7 +202,8 @@ where
     ) {
         self.step += 1;
         self.tick = ctx.tick;
-        self.inner.step(world, ctx, None, Some(crate::common::Io::calls(calls)));
+        self.inner
+            .step(world, ctx, None, Some(crate::common::Io::calls(calls)));
         crate::common::close_change_window(world);
     }
 
@@ -215,7 +216,12 @@ where
     ) {
         self.step += 1;
         self.tick = ctx.tick;
-        self.inner.step(world, ctx, None, Some(crate::common::Io::events(calls, events)));
+        self.inner.step(
+            world,
+            ctx,
+            None,
+            Some(crate::common::Io::events(calls, events)),
+        );
         crate::common::close_change_window(world);
     }
 

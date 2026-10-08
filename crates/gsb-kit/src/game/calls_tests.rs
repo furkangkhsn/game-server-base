@@ -190,7 +190,11 @@ fn drive<R: GameLogic<World>>(mut room: R, game: impl Fn(&R) -> (u32, u32, u32))
     assert_eq!(room.owner_alive(&world, owner), Some(true));
 
     room.update_with_calls(&mut world, &ctx(), &mut calls);
-    assert_eq!(game(&room), (0, 1, 0), "systems_with_calls ran, not systems");
+    assert_eq!(
+        game(&room),
+        (0, 1, 0),
+        "systems_with_calls ran, not systems"
+    );
     assert_eq!(calls.pending_len(), 1, "the game's call is in the table");
     room.update(&mut world, &ctx());
     assert_eq!(game(&room), (1, 1, 0), "a plain update runs systems");
@@ -219,5 +223,7 @@ fn the_sharded_room_forwards_the_call_hooks() {
     let (game, _inbox) = Calling::new();
     let room: ShardedRoom<Calling, GridPartition2<Position>> =
         ShardedRoom::with_game(game, GridPartition2::new(1, 50.0), 0);
-    drive(room, |r| (r.game().systems, r.game().with_calls, r.game().with_events));
+    drive(room, |r| {
+        (r.game().systems, r.game().with_calls, r.game().with_events)
+    });
 }
