@@ -105,6 +105,8 @@ async fn no_input_and_no_request_before_the_join_is_answered() {
             rate: 20.0,
             burst: 1,
         }),
+        rooms: 1,
+        events: false,
     };
     let rep = run_client(7, p).await;
     let (early_game, early_rpc, later) = peer.await.expect("peer");

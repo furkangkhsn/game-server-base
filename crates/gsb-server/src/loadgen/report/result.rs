@@ -11,6 +11,7 @@ pub(crate) fn print_report(
     hzs: &[f64],
     server_reports: &[MetricReport],
     sep: Option<&SepInfo>,
+    probe: Option<&crate::chat::ProbeTally>,
 ) {
     let mode = match (sep, inproc) {
         (Some(_), _) => "sep",
@@ -192,6 +193,11 @@ pub(crate) fn print_report(
         .map(|rate| (rate, args.rpc_burst.unwrap_or(1), rpc_total(reports)));
     let hz_med = median(hzs);
     let dur = args.duration.as_secs_f64().max(1e-9);
+    // The chat/presence scenario's numbers (`chat.rs`; `None` = a run
+    // without it).
+    let chat = args
+        .chat_plan()
+        .map(|plan| chat_totals(plan, args.rooms, reports, server_reports, probe, dur));
     // Sessions the SERVER ended on its own (write stall, idle window,
     // violation budget, …). Cumulative and monotonic, so the report with
     // the largest total is the latest word on every reason — including a
@@ -305,6 +311,9 @@ pub(crate) fn print_report(
 
     if let Some((rate, burst, t)) = &rpc {
         println!("{}", rpc_lines(*rate, *burst, t));
+    }
+    if let Some(t) = &chat {
+        println!("{}", chat_lines(t));
     }
 
     let room = last_room_agg;
@@ -454,7 +463,7 @@ pub(crate) fn print_report(
             req_rej_no_handler={} req_rej_logic={} req_rej_conn={} req_rej_room={} \
             req_refused={} req_unread={} req_unbound={} req_to={} req_late={} req_undelivered={} req_abandoned={} req_pending={} actions_unread={} actions_unbound={}{} churn_cycles={} resumed={} \
              fresh_joins={} room_resumes={} resume_rejected_stale={} \
-             detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{}{}{}{}{} game={}",
+             detach_expired_ai={} detach_expired_despawn={}{}{}{}{}{}{}{}{}{}{} game={}",
         mode,
         match labels {
             Some(l) => l.visibility.to_string(),
@@ -676,6 +685,9 @@ pub(crate) fn print_report(
         // publishers' and the engine-event subscribers', named by the
         // game's handles and subscriptions).
         events_segment(room.as_ref().map(|r| &r.events), server_reports),
+        // The chat/presence scenario (`chat.rs`) — only on a run in it,
+        // right before `game=` like the segments above.
+        chat.as_ref().map(chat_segment).unwrap_or_default(),
         // The hosted game, the line's LAST key (GAME-MODULE §4.5: the one
         // addition; every key before it keeps its place and format).
         args.game,

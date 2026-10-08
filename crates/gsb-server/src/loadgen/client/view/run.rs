@@ -58,12 +58,17 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     // AUTH + JOIN (one coalesced write on TCP — the connection actor
     // drains in order; two frames on rUDP — its reliable control band
     // orders them). The AUTH states the wire version (DESIGN §5.5).
-    let (auth, join) = (
-        session::auth_req(&Credentials::named(crate::bot::bot_name(id))),
-        session::join_req(p.room),
-    );
+    // The chat/presence scenario: this client reads pushes (and says
+    // so in its AUTH — without the bit the server sends it none).
+    let mut events = p.events.then(EventsClient::new);
+    let mut creds = Credentials::named(crate::bot::bot_name(id));
+    if events.is_some() {
+        creds = creds.with_events();
+    }
+    let (auth, join) = (session::auth_req(&creds), session::join_req(p.room_of(id)));
     rep.bytes_out += frame_bytes(&wire, Dir::Out, auth.op, auth.payload.len());
     rep.bytes_out += frame_bytes(&wire, Dir::Out, join.op, join.payload.len());
+    let hello_at = Instant::now();
     if wire.send_batch(&[auth, join]).await.is_err() {
         return rep;
     }
@@ -160,6 +165,11 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
             Got::Dead => break,
         };
         rep.bytes_in += frame_bytes(&wire, Dir::In, op, payload.len());
+        if let Some(ev) = events.as_mut()
+            && ev.frame(op, &payload)
+        {
+            continue;
+        }
         if let Some(c) = &mut capture {
             if op == snapshot_op {
                 c.frame(crate::capture::Kind::Snapshot, &payload);
@@ -177,6 +187,8 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
                 };
                 rep.joined = true;
                 rep.entity = m.entity;
+                rep.join_us
+                    .get_or_insert(hello_at.elapsed().as_micros() as u64);
                 bot.joined(m.entity);
                 if let Some(r) = &mut rpc {
                     r.joined(Instant::now());
@@ -289,6 +301,7 @@ pub(crate) async fn run_client(id: u64, p: ClientParams) -> ClientReport {
     if let Some(r) = rpc {
         rep.rpc = r.finish(Instant::now());
     }
+    rep.events = events.map(EventsClient::finish);
     if let Some(c) = capture {
         c.finish().await;
     }

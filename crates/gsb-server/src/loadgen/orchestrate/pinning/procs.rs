@@ -564,6 +564,9 @@ pub(crate) async fn orchestrate(args: Args) {
             fresh_joins: c.fresh_joins,
             // The orchestrated run refuses the RPC mode (`args/check.rs`).
             rpc: RpcTally::default(),
+            // The chat/presence scenario runs in process only.
+            join_us: None,
+            events: None,
             seq_first: None,
             seq_last: None,
         })
@@ -590,5 +593,13 @@ pub(crate) async fn orchestrate(args: Args) {
         server_cpu_s,
         clients_cpu_s,
     };
-    print_report(&args, false, &reports, &hzs, &server_reports, Some(&sep));
+    print_report(
+        &args,
+        false,
+        &reports,
+        &hzs,
+        &server_reports,
+        Some(&sep),
+        None,
+    );
 }

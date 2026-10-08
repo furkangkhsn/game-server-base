@@ -70,6 +70,8 @@ async fn an_ended_rudp_session_ends_the_client_counted_once() {
         capture: None,
         stall: None,
         rpc: None,
+        rooms: 1,
+        events: false,
     };
     let rep = tokio::time::timeout(HANG_GUARD, run_client(6, p))
         .await

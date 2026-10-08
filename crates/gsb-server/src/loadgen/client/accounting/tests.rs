@@ -165,6 +165,8 @@ async fn session(flood: bool, window: Duration) -> (ClientReport, Tally) {
         capture: None,
         stall: None,
         rpc: None,
+        rooms: 1,
+        events: false,
     };
     let rep = run_client(3, p).await;
     (rep, peer.await.expect("peer"))

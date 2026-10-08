@@ -57,6 +57,23 @@ const DEMO_ONLY: &[(&str, &str)] = &[
         "--rpc-burst",
         "it shapes the RPC mode, which only the demo has a request for",
     ),
+    (
+        "--chat-rate",
+        "the chat/presence scenario hosts the demo with its services",
+    ),
+    (
+        "--chat-channels",
+        "it shapes the chat/presence scenario, which hosts the demo",
+    ),
+    (
+        "--friends",
+        "the friends service is the demo's (`gsb_demo::friends`)",
+    ),
+    (
+        "--rooms",
+        "it spreads the demo's clients over its rooms; the other games lay \
+         out their own rooms",
+    ),
 ];
 
 /// The MMO's own flags, each with why another game has no use for it.

@@ -138,7 +138,7 @@ pub(crate) async fn run_churn_client(
         }
 
         // -- wait for JOIN_ROOM_RESULT (bounded, with bounded retry) ───
-        let Some(entity) = churn_join(id, &mut wire, p.room, &mut rep).await else {
+        let Some(entity) = churn_join(id, &mut wire, p.room_of(id), &mut rep).await else {
             // Never joined this cycle: nothing to park; just end it.
             rep.udp_ends.note(&wire);
             drop(wire);

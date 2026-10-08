@@ -91,6 +91,8 @@ async fn session(window: Duration) -> (ClientReport, Option<Tally>) {
         capture: None,
         stall: None,
         rpc: None,
+        rooms: 1,
+        events: false,
     };
     let rep = run_churn_client(3, p, Duration::from_secs(60), 0).await;
     if rep.churn_cycles == 0 {

@@ -62,6 +62,10 @@ impl Args {
             stall_every_ms: 5000,
             rpc_rate: None,
             rpc_burst: None,
+            chat_rate: None,
+            chat_channels: 16,
+            friends: 0,
+            rooms: 1,
         }
     }
 }
@@ -323,6 +327,25 @@ pub(crate) fn parse(argv: &[String]) -> Result<Cli, CliError> {
                 let b: u32 = number(&a, v()?)?;
                 refuse_unless(b >= 1, "--rpc-burst must be at least 1")?;
                 args.rpc_burst = Some(b);
+            }
+            "--chat-rate" => {
+                let r: f64 = number(&a, v()?)?;
+                refuse_unless(
+                    r >= 0.0 && r.is_finite(),
+                    "--chat-rate must be >= 0 (lines/s, server-wide)",
+                )?;
+                args.chat_rate = Some(r);
+            }
+            "--chat-channels" => {
+                let c: u32 = number(&a, v()?)?;
+                refuse_unless(c >= 1, "--chat-channels must be at least 1")?;
+                args.chat_channels = c;
+            }
+            "--friends" => args.friends = number(&a, v()?)?,
+            "--rooms" => {
+                let k: u32 = number(&a, v()?)?;
+                refuse_unless(k >= 1, "--rooms must be at least 1")?;
+                args.rooms = k;
             }
             "--tls-ca" => args.tls_ca = Some(v()?),
             "--tls-server-name" => args.tls_server_name = v()?,

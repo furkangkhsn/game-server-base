@@ -8,6 +8,7 @@ use bytes::Bytes;
 use gsb_client::{Conn, Recv};
 
 mod accounting;
+mod chat;
 mod connect;
 mod ends;
 mod errors;
@@ -15,6 +16,7 @@ mod rpc;
 mod stall;
 mod wait;
 pub(crate) use accounting::{Dir, frame_bytes, wire_in_bytes, ws_message_bytes};
+pub(crate) use chat::{EventTally, EventsClient};
 pub(crate) use connect::{TlsOpts, connect_wire};
 pub(crate) use ends::{UDP_END_REASONS, UdpEnds};
 pub(crate) use errors::{ClientErrors, ERROR_REASONS};
@@ -114,6 +116,12 @@ pub(crate) struct ClientReport {
     /// The RPC traffic mode's numbers (`--rpc-rate`; all zero without
     /// it — and on a churn or orchestrated run, which refuse the mode).
     pub(crate) rpc: RpcTally,
+    /// AUTH + JOIN sent → JOIN_ROOM_RESULT read, µs (`None`: never
+    /// joined). Reported by the chat/presence scenario (its effect on
+    /// the control plane).
+    pub(crate) join_us: Option<u64>,
+    /// The chat/presence scenario's numbers (`None`: a run without it).
+    pub(crate) events: Option<EventTally>,
 }
 
 impl ClientReport {
@@ -157,6 +165,18 @@ pub(crate) struct ClientParams {
     pub(crate) stall: Option<Stall>,
     /// `--rpc-rate`: the RPC traffic beside the inputs (`None` = none).
     pub(crate) rpc: Option<RpcPlan>,
+    /// `--rooms`: client `id` joins `room + id % rooms`.
+    pub(crate) rooms: u32,
+    /// The chat/presence scenario: announce `FEATURE_PUSH` and tally the
+    /// pushes (`chat.rs`).
+    pub(crate) events: bool,
+}
+
+impl ClientParams {
+    /// The room client `id` joins.
+    pub(crate) fn room_of(&self, id: u64) -> u64 {
+        self.room + id % u64::from(self.rooms.max(1))
+    }
 }
 
 /// What one bounded receive on the wire found: a frame, a quiet window,

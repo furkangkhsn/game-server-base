@@ -115,10 +115,12 @@ pub(crate) async fn start_inprocess(
     spawn_half: f32,
     transport: crate::Transport,
     overrides: ServerOverrides,
+    rooms: u32,
+    chat: Option<crate::chat::ChatModule>,
 ) -> Result<InProcessServer, gsb_server::ServerError> {
     let mut cfg = gsb_server::Config {
         bind: "127.0.0.1:0".into(),
-        room_count: 1,
+        room_count: u64::from(rooms),
         visibility,
         topology,
         shard_count,
@@ -132,7 +134,20 @@ pub(crate) async fn start_inprocess(
     transport.open_door(&mut cfg);
     apply_overrides(&mut cfg, &overrides);
     let (rep_tx, rep_rx) = mpsc::unbounded_channel::<MetricReport>();
-    let handle = start_hosted(cfg, Some(rep_tx)).await?;
+    let handle = match chat {
+        // The chat/presence scenario (`chat.rs`): the demo with its
+        // services and the registry probe.
+        Some(module) => {
+            gsb_server::start_game_server_with(
+                Box::new(module),
+                cfg,
+                Default::default(),
+                Some(rep_tx),
+            )
+            .await?
+        }
+        None => start_hosted(cfg, Some(rep_tx)).await?,
+    };
     Ok(InProcessServer { handle, rep_rx })
 }
 

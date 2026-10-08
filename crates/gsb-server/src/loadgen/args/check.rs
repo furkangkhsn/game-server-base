@@ -63,6 +63,22 @@ pub(super) fn check(args: &mut Args, game_flags: &[String]) -> Result<(), CliErr
         args.rpc_rate.is_none() || !(args.orchestrate || args.serve || args.churn_secs.is_some()),
         "--rpc-rate drives a plain client run: not with --orchestrate, --serve or --churn-secs",
     )?;
+    // The chat/presence scenario's server half (its services, the probe)
+    // lives in this process's in-process server, and its tallies in this
+    // process's plain clients.
+    refuse_unless(
+        args.chat_plan().is_none()
+            || !(args.addr.is_some()
+                || args.orchestrate
+                || args.serve
+                || args.churn_secs.is_some()),
+        "--chat-rate / --friends run the in-process scenario: not with --addr, \
+         --orchestrate, --serve or --churn-secs",
+    )?;
+    refuse_unless(
+        args.chat_channels == 16 || args.chat_rate.is_some(),
+        "--chat-channels shapes --chat-rate: give the rate too",
+    )?;
     refuse_unless(
         args.rpc_burst.is_none() || args.rpc_rate.is_some(),
         "--rpc-burst shapes --rpc-rate: give the rate too",

@@ -15,6 +15,17 @@ use crate::stats::*;
 pub(crate) async fn run(args: Args) {
     init_tracing();
 
+    // The chat/presence scenario (`chat.rs`): its window is the run's,
+    // fixed before the server starts (the services start with it), and
+    // its probe hands its tally over a one-slot channel at the end.
+    let chat_deadline = Instant::now() + args.duration;
+    let (chat, probe_rx) = match args.chat_plan() {
+        Some(plan) => {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            (Some((plan, tx)), Some(rx))
+        }
+        None => (None, None),
+    };
     // The in-process handle stays with the main task: it must be stopped
     // only AFTER the clients are done, so it cannot be spawned early.
     let (addr, inproc, rep_rx, server, udp_key) = match &args.addr {
@@ -51,6 +62,21 @@ pub(crate) async fn run(args: Args) {
                     udp_security: args.udp_security,
                     udp_handshakes_per_sec: args.udp_handshakes_per_sec,
                 },
+                // `--rooms K` builds `--room + K - 1` rooms (the clients'
+                // `room + id % K`); a run without it keeps the one room.
+                if args.rooms > 1 {
+                    (args.room + u64::from(args.rooms) - 1) as u32
+                } else {
+                    1
+                },
+                chat.map(|(plan, tx)| {
+                    crate::chat::ChatModule::new(
+                        plan,
+                        args.offset..args.offset + args.clients,
+                        chat_deadline,
+                        tx,
+                    )
+                }),
             )
             .await
             .unwrap_or_else(|e| {
@@ -135,6 +161,8 @@ pub(crate) async fn run(args: Args) {
             rate,
             burst: args.rpc_burst.unwrap_or(1),
         }),
+        rooms: args.rooms,
+        events: args.chat_plan().is_some(),
     };
     if let Some(dir) = &args.capture {
         std::fs::create_dir_all(dir)
@@ -248,6 +276,16 @@ pub(crate) async fn run(args: Args) {
     // room's final count (`RoomFinal`) and every connection's final
     // flush (BACKLOG F35). That report is what the run reads the room
     // from: no metrics period needs to pass first.
+    // The probe stops at the window's end: its tally is normally in the
+    // slot by the time the clients are done (bounded wait; `None` if it
+    // never came).
+    let probe = match probe_rx {
+        Some(mut rx) => tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
     if let Some(handle) = server {
         handle.stop().await;
     }
@@ -262,7 +300,15 @@ pub(crate) async fn run(args: Args) {
     // lines of its children.
     let hzs: Vec<f64> = reports.iter().filter_map(measured_hz).collect();
 
-    print_report(&args, inproc, &reports, &hzs, &server_reports, None);
+    print_report(
+        &args,
+        inproc,
+        &reports,
+        &hzs,
+        &server_reports,
+        None,
+        probe.as_ref(),
+    );
 }
 
 /// How long the run waits between its last client and the server's

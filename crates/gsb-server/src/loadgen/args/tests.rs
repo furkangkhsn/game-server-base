@@ -184,3 +184,61 @@ fn the_rpc_mode_parses_and_refuses() {
             .starts_with("--rpc-rate does not apply to --game arena")
     );
 }
+
+/// The chat/presence scenario's flags (round e6): a good line, its plan,
+/// and every refusal.
+#[test]
+fn the_chat_scenario_parses_and_refuses() {
+    let Ok(Cli::Run(args)) = line(&[
+        "--chat-rate",
+        "50",
+        "--chat-channels",
+        "8",
+        "--friends",
+        "4",
+        "--rooms",
+        "10",
+    ]) else {
+        panic!("parsed");
+    };
+    let plan = args.chat_plan().expect("the scenario");
+    assert_eq!((plan.rate, plan.channels, plan.friends), (50.0, 8, 4));
+    assert_eq!(args.rooms, 10);
+    // `--friends` alone turns the scenario on (no chat: rate 0); a bare
+    // run is not one.
+    let Ok(Cli::Run(args)) = line(&["--friends", "2"]) else {
+        panic!("parsed");
+    };
+    assert_eq!(args.chat_plan().map(|p| p.rate), Some(0.0));
+    let Ok(Cli::Run(args)) = line(&["--rooms", "3"]) else {
+        panic!("parsed");
+    };
+    assert!(args.chat_plan().is_none());
+    let inproc = "--chat-rate / --friends run the in-process scenario: not with --addr, \
+                  --orchestrate, --serve or --churn-secs";
+    for (argv, why) in [
+        (
+            &["--chat-rate", "-1"][..],
+            "--chat-rate must be >= 0 (lines/s, server-wide)",
+        ),
+        (
+            &["--chat-rate", "1", "--chat-channels", "0"],
+            "--chat-channels must be at least 1",
+        ),
+        (
+            &["--chat-channels", "4"],
+            "--chat-channels shapes --chat-rate: give the rate too",
+        ),
+        (&["--rooms", "0"], "--rooms must be at least 1"),
+        (&["--chat-rate", "1", "--addr", "127.0.0.1:7777"], inproc),
+        (&["--friends", "1", "--orchestrate"], inproc),
+        (&["--chat-rate", "1", "--serve"], inproc),
+        (&["--chat-rate", "1", "--churn-secs", "2"], inproc),
+    ] {
+        assert_eq!(refused(argv), why, "{argv:?}");
+    }
+    assert!(
+        refused(&["--game", "arena", "--friends", "1"])
+            .starts_with("--friends does not apply to --game arena")
+    );
+}

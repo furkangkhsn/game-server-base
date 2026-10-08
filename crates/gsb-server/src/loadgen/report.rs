@@ -5,6 +5,7 @@ use crate::client::*;
 use crate::stats::*;
 
 mod calls;
+mod chat;
 mod fold;
 mod logic;
 mod path;
@@ -13,6 +14,7 @@ mod rpc;
 mod spread;
 mod team;
 pub(crate) use calls::*;
+pub(crate) use chat::*;
 pub(crate) use fold::*;
 pub(crate) use logic::*;
 pub(crate) use path::*;

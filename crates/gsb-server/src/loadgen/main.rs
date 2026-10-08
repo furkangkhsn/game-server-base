@@ -46,6 +46,7 @@
 
 mod bot;
 mod capture;
+mod chat;
 mod churn;
 mod client;
 mod codec;
@@ -350,6 +351,34 @@ struct Args {
     /// B back to back every B / R seconds — above the per-connection
     /// pending cap (4) a burst meets the cap's rejections.
     rpc_burst: Option<u32>,
+    /// The chat/presence scenario (`chat.rs`, `docs/EVENTS.md` §12):
+    /// chat lines a second, server-wide (`--chat-rate R`; 0 = the
+    /// scenario without chat — the baseline). With it (or `--friends`)
+    /// every client announces `FEATURE_PUSH` and counts what it was
+    /// pushed (`gsb_client::events`).
+    chat_rate: Option<f64>,
+    /// The chat's channels (`--chat-channels C`, default 16): client `id`
+    /// is in channel `id % C`.
+    chat_channels: u32,
+    /// Friends per client on a ring (`--friends F`, default 0 = no
+    /// friends service): the demo's friends service, fed by the engine's
+    /// presence events.
+    friends: u32,
+    /// Rooms the clients are spread over (`--rooms K`, default 1): client
+    /// `id` joins room `--room + id % K`; the in-process server builds
+    /// them all.
+    rooms: u32,
+}
+
+impl Args {
+    /// The chat/presence scenario's shape, when the run is one.
+    fn chat_plan(&self) -> Option<chat::ChatPlan> {
+        (self.chat_rate.is_some() || self.friends > 0).then(|| chat::ChatPlan {
+            rate: self.chat_rate.unwrap_or(0.0),
+            channels: self.chat_channels,
+            friends: self.friends,
+        })
+    }
 }
 
 /// The usage text (`--help` / `-h`).
@@ -407,6 +436,21 @@ Client options:
   --rpc-burst B             [demo] requests per burst (default 1): B back to
                             back every B/R s (above 4 — the per-connection
                             pending cap — a burst meets the cap)
+  --rooms K                 [demo] spread the clients over K rooms: client i
+                            joins room --room + i % K (default 1)
+  --chat-rate R             [demo] the chat/presence scenario: a chat
+                            publisher pushes R lines/s (server-wide) to
+                            channel members with push_many; every client
+                            announces FEATURE_PUSH and counts its pushes,
+                            gaps and the push→receive latency; a probe
+                            times the registry's mailbox (RESULT's ev_*,
+                            chat_*, join_*, reg_* keys). 0 = the scenario
+                            without chat (the baseline); in-process only
+  --chat-channels C         [demo] chat channels (default 16; client i is
+                            in channel i % C)
+  --friends F               [demo] the demo's friends service on a ring of
+                            F friends per client (presence from the
+                            engine's events); turns the scenario on
   --spawn-half-size F       [demo] map half-size for the spread profile's homes
                             and the (in-process/served) server's spawn
                             points (default: 50 for ring, 1000 for spread)

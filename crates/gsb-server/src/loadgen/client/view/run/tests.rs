@@ -57,6 +57,8 @@ async fn a_stream_eof_ends_the_client() {
         capture: None,
         stall: None,
         rpc: None,
+        rooms: 1,
+        events: false,
     };
     let rep = tokio::time::timeout(HANG_GUARD, run_client(5, p))
         .await
