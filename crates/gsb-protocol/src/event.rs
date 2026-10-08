@@ -16,6 +16,37 @@
 //! dispatches a `PUSH` frame's op ([`crate::op::base::PUSH`]) to its
 //! event type without linking the server engine.
 //!
+//! What `gsb-build` writes for `option (gsb.event) = { op: 2002, to:
+//! CLIENT }`, and what it buys — a client-side bound accepts it:
+//!
+//! ```
+//! use gsb_protocol::event::{ClientEvent, Dest, Event};
+//! #[derive(Clone, PartialEq, prost::Message)]
+//! struct Chat {
+//!     #[prost(string, tag = "1")]
+//!     text: String,
+//! }
+//! impl Event for Chat { const OP: u16 = 2002; const TO: Dest = Dest::Client; }
+//! impl ClientEvent for Chat {}
+//! fn client_listens<E: ClientEvent>() -> u16 { E::OP }
+//! assert_eq!(client_listens::<Chat>(), 2002);
+//! ```
+//!
+//! while a room-side bound refuses it at compile time:
+//!
+//! ```compile_fail,E0277
+//! use gsb_protocol::event::{ClientEvent, Dest, Event, WorldEvent};
+//! #[derive(Clone, PartialEq, prost::Message)]
+//! struct Chat {
+//!     #[prost(string, tag = "1")]
+//!     text: String,
+//! }
+//! impl Event for Chat { const OP: u16 = 2002; const TO: Dest = Dest::Client; }
+//! impl ClientEvent for Chat {}
+//! fn room_takes<E: WorldEvent>() -> u16 { E::OP }
+//! room_takes::<Chat>(); // `Chat: WorldEvent` is not satisfied
+//! ```
+//!
 //! One op space: an event's op and a request's op ([`Request::OP`]) share
 //! the game band, and `gsb-build` refuses a number both take.
 //!

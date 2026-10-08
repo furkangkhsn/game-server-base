@@ -47,8 +47,10 @@ import "kit.proto";
 // gsb's request options (`(gsb.op)`, `(gsb.error)`, `(gsb.reserved_op)`;
 // gsb-protocol's `gsb/options.proto`, round q3): the `DemoRequests`
 // service below declares the demo's room-local request so `gsb-build`
-// writes its `impl Call` + `impl Request`. Options only — nothing on the
-// wire changes.
+// writes its `impl Call` + `impl Request`. And its event option
+// (`(gsb.event)`, round e1): `ItemGranted` below gets `impl Event` +
+// `WorldEvent` + `ClientEvent`. Options only — nothing on the wire
+// changes.
 import "gsb/options.proto";
 
 // Client → server: "move my entity toward (x, y)".
@@ -174,6 +176,22 @@ service DemoRequests {
     option (gsb.op) = 1006;
     option (gsb.error) = "DemoError";
   }
+}
+
+// Event (docs/EVENTS.md §4.1, round e1; op ITEM_GRANTED = 1007, one op
+// space with the requests above): "you were granted item `kind`" — a
+// web-shop purchase or an admin grant reaching the player from OUTSIDE
+// any room. `to: BOTH`: the player's room logic takes it (the WORLD leg:
+// the inventory is room state) and the client hears it (the CLIENT leg,
+// a `gsb.base.Push` frame: a toast). The demo declares it to exercise
+// the generated contract (`gsb_demo::game::ItemGranted: Event +
+// WorldEvent + ClientEvent`); nothing routes it yet (EVENTS §21 e2).
+message ItemGranted {
+  option (gsb.event) = { op: 1007, to: BOTH };
+  string kind = 1;
+  // The grant's version in the granting service (a client or a room
+  // that sees two grants out of order keeps the higher one).
+  uint64 version = 2;
 }
 
 // Client → server (RPC inner op ECONOMY = 1006): "buy item `kind`". The

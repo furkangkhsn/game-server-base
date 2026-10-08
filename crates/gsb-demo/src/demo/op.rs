@@ -46,3 +46,9 @@ pub const ABILITY: u16 = 1005;
 /// RPC inner op: external-I/O request — delegated to the in-process
 /// economy service (the reference adapter), answered on a later tick.
 pub const ECONOMY: u16 = 1006;
+
+/// Event op (the `op` of a `gsb_protocol::base::Push` carrying it):
+/// `ItemGranted`, declared `to: BOTH` in `game.proto` (round e1). One op
+/// space with the request ops above — `gsb-build` refuses a number both
+/// take.
+pub const ITEM_GRANTED: u16 = 1007;
