@@ -108,13 +108,15 @@ kendi sayacında:
 
 | Yüzey | Ne |
 |---|---|
-| `gsb-metric` satırı | oda satırının sonunda (çağrı sayaçlarından sonra) `events_admitted … events_world_not_here`; taşıma satırından sonra `scope=events events_routed=… events_unread=… events_offline=… events_client_{sent,parked,unsupported,refused_conn_full,refused_conn_gone}=… events_world_{sent,no_room,refused_room_full,refused_room_gone}=… pushes_written=… pushes_dropped_{outbound_full,outbound_gone,unread}=…` (her zaman; sıfırlar dahil); yayıncı başına `scope=publisher name=<ad> id=<n> events_pushed=… events_refused_{router_full,router_gone,too_large}=…` (servis satırlarından sonra) |
-| Prometheus / OTLP | oda başına `gsb_room_events_{admitted,no_handler,undecodable,unbound,taken,untaken,world_not_here}_total{room}`; registry diliminde `gsb_events_{routed,unread,offline,client_sent,client_parked,client_unsupported,client_refused_conn_full,client_refused_conn_gone,world_sent,world_no_room,world_refused_room_full,world_refused_room_gone}_total`; net kapsamında `gsb_net_pushes_{written,dropped_outbound_full,dropped_outbound_gone,dropped_unread}_total`; `gsb_publisher_events_{pushed,refused_router_full,refused_router_gone,refused_too_large}_total{publisher}` (servis ailelerinden sonra; yayıncı yoksa hiç yok) |
+| `gsb-metric` satırı | oda satırının sonunda (çağrı sayaçlarından sonra) `events_admitted … events_world_not_here`, sonra göç çiti (e3) `events_forwarded … events_tombstones_expired`; taşıma satırından sonra `scope=events events_routed=… events_unread=… events_offline=… events_client_{sent,parked,unsupported,refused_conn_full,refused_conn_gone}=… events_world_{sent,no_room,refused_room_full,refused_room_gone}=… events_relocations=… events_relocations_stale=… events_seals_{sent,refused}=… pushes_written=… pushes_dropped_{outbound_full,outbound_gone,unread}=…` (her zaman; sıfırlar dahil); yayıncı başına `scope=publisher name=<ad> id=<n> events_pushed=… events_refused_{router_full,router_gone,too_large}=…` (servis satırlarından sonra) |
+| Prometheus / OTLP | oda başına `gsb_room_events_{admitted,no_handler,undecodable,unbound,taken,untaken,world_not_here,forwarded,forward_refused,fence_held,fence_released,fence_overflow,fence_timeouts,fence_lost,relocations_refused,tombstones_expired}_total{room}`; registry diliminde `gsb_events_{routed,unread,offline,client_sent,client_parked,client_unsupported,client_refused_conn_full,client_refused_conn_gone,world_sent,world_no_room,world_refused_room_full,world_refused_room_gone,relocations,relocations_stale,seals_sent,seals_refused}_total`; net kapsamında `gsb_net_pushes_{written,dropped_outbound_full,dropped_outbound_gone,dropped_unread}_total`; `gsb_publisher_events_{pushed,refused_router_full,refused_router_gone,refused_too_large}_total{publisher}` (servis ailelerinden sonra; yayıncı yoksa hiç yok) |
 | loadgen | metrik telinde odanın olay sayaçları çağrılarınkinden sonra, yönlendiricinin registry bölümünün sonunda, PUSH kareleri sunucu kapanışlarından sonra, yayıncılar servislerden sonra (GSNW); `RESULT`'ta olay anahtarları (oda, yönlendirici, PUSH; sıfırlar dahil) ve `pub_<ad>_<sayaç>=` |
 
 Defter: alıcı başına `events_offline` ya da her bacağın tam bir sonu;
 `events_world_sent = admitted + no_handler + undecodable + unbound +
-world_not_here` (+ yolda); `events_client_sent = pushes_written +
+world_not_here + forward_refused + fence_overflow` (odanın shard'ları
+üzerinden toplanır; `forwarded` bir aktarımdır, son değil; + bekletilen,
+yolda); `events_client_sent = pushes_written +
 pushes_dropped_*` (+ yolda); `Σ events_pushed = events_routed +
 events_unread` (+ yolda). Registry örneği bir itme patlamasının sonunda
 (kutusu boşalınca) ya da sürekli akışta en çok 250 ms'de bir yenilenir.
@@ -1884,9 +1886,9 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
 
 - **e2: loadgen `RESULT`'ın olay anahtarları (docs/EVENTS.md §9).**
   `game=`'den hemen önce, servis anahtarlarından sonra: odanın katlanmış
-  `EventCounts`'u (`events_admitted= … events_world_not_here=`, oda
+  `EventCounts`'u (`events_admitted= … events_tombstones_expired=`, oda
   satırının anahtarları), son raporun yönlendirici sayaçları
-  (`events_routed= … events_world_refused_room_gone=`) ve PUSH kareleri
+  (`events_routed= … events_seals_refused=`) ve PUSH kareleri
   (`pushes_written= … pushes_dropped_unread=`) — her satırda, rapor
   yoksa sıfır —, sonra basılan her yayıncı için
   `pub_<ad>_<sayaç>=` (dört `PublisherCounts` alanı; yayıncısı olmayan
@@ -1894,6 +1896,18 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   sonra, yönlendirici registry bölümünün sonunda, PUSH kareleri sunucu
   kapanışlarından sonra, yayıncılar servislerden sonra (tel yerleşimi
   değişti; sihir sayısını ana dal atar — bir sonraki boş `GSNW`).
+
+- **e3: göç çitinin anahtarları (docs/EVENTS.md §7.3, §9).** Odanın
+  `EventCounts`'u dokuz anahtar uzadı (`events_world_not_here=`'den
+  sonra `events_forwarded= events_forward_refused= events_fence_held=
+  events_fence_released= events_fence_overflow= events_fence_timeouts=
+  events_fence_lost= events_relocations_refused=
+  events_tombstones_expired=`), yönlendiricininki dört
+  (`events_world_refused_room_gone=`'dan sonra `events_relocations=
+  events_relocations_stale= events_seals_sent= events_seals_refused=`);
+  önceki her anahtar yerinde. Metrik telinde iki küme aynı yerlerinde
+  uzadı (tel yerleşimi değişti; sihir sayısını ana dal atar — bir
+  sonraki boş `GSNX`).
 
 - **q6: loadgen `RESULT`'ın çağrı, servis ve RPC anahtarları (B157,
   B164, B161).** `game=`'den hemen önce (diğer isteğe bağlı segmentlerden

@@ -842,7 +842,9 @@ CLIENT: `client_{sent, parked, unsupported, refused_conn_full,
 refused_conn_gone}`; WORLD: `world_{sent, no_room, refused_room_full,
 refused_room_gone}`. `client_sent = pushes_written +
 pushes_dropped_outbound_* + yolda`. `world_sent = admitted + no_handler +
-undecodable + not_here + forwarded + fence_overflow + (bekleyen)`;
+undecodable + not_here + forward_refused + fence_overflow + (bekleyen)`
+(odanın shard'ları üzerinden; `forwarded` bir aktarımdır, son değil —
+e3'te düzeltildi, ilk yazımda `forwarded` son sayılmıştı);
 `admitted = taken + untaken`.
 
 ## 10. Sıralama garantileri (düz söz)
@@ -1334,6 +1336,64 @@ tasarımdan farklar ve netleştirmeler:
 `Relocated`, seal, `ShardMsg::{Forward, Fence}`, mezar taşları, bekletme,
 zincir kuralı; park/devam/oda ölümü yolları; gerçek shard aktörleriyle
 testler (q5'in `calls_actors.rs` deseni).
+
+**e3 — uygulanan biçim (2026-10-08).** Plandaki her madde girdi
+(`gsb_core::events::fence`, `ShardMsg::{Forward, Fence}`,
+`EventIn::Seal`, `RegistryMsg::Relocated`, `PlayerMigration.mig`,
+`ConnInfo.mig`); tasarımdan farklar ve netleştirmeler:
+
+- **Öncelik (direkt bacak):** mühürlenmemiş mezar taşı → tutma → üye →
+  mühürlü mezar taşı → `events_world_not_here`. İlk kural tasarımda
+  yoktu: A→B→A gidiş-dönüşünde A'ya, yönlendirici ilk göçü öğrenmeden
+  gönderilen bacaklar (bob A'ya dönmüş olsa da) B'nin doğrudan
+  aldıklarından eskidir; mezar taşı onları B üzerinden dolaştırır, B
+  hemen geri aktarır (`a_ping_pong_keeps_fifo_through_the_unsealed_tombstone`;
+  kural kaldırılınca A `3, 1, 2, 4, 5` görür). **İleri gönderilen bacak
+  hiç tutulmaz** (yanındaki her doğrudan bacaktan eskidir): üye →
+  mezar taşı → `not_here`.
+- **Fazlar:** `Forward` ve `Fence` CONTROL'de (shard FIFO'su) işlenir;
+  üye buradaysa ileri gönderilen bacak bu tick'in EVENTS'ine, kutudan
+  önce girer (`Fences::ready`); üye buradan da ayrıldıysa (zincir) hemen
+  aktarılır — giden sıra, aynı CONTROL'ün göndereceği çitten önce kalır.
+  Mezar taşı süpürmesi ve tutma zaman aşımı EVENTS'ten hemen önce;
+  komşulara gidenler EVENTS'ten sonra, karar sırasıyla tek seferde
+  (`send_relays`). Mühür (`EventIn::Seal`) olay kutusunda, EVENTS'te.
+- **Ertelenmiş göç:** kurulum kapısı açılmamış bir `Migrate` beklerken
+  arkasından gelen `Forward`/`Fence` de ertelenir (aynı sırayla yeniden
+  sunulur) — `a_forward_behind_a_deferred_migration_waits_with_it`.
+- **`mig`:** shard kimlik başına tutar (göçle gelen, katılımda 0);
+  registry üyelik satırında (`ConnInfo.mig`), yeni katılımda sıfır,
+  devamda park satırınınki sürer. `Relocated { room, generation,
+  identity, shard, mig }`: başka enkarnasyon, üyeliği olmayan kimlik ya
+  da bilinenden büyük olmayan sayı `events_relocations_stale`. Mühür,
+  yönlendiricinin bildiği önceki shard'a (biliniyorsa ve yeniden aynı
+  değilse). Anonim üyeler adreslenmez, çitlenmez.
+- **Sayaçlar:** §9'daki "Oda/shard yönlendirmesi" dokuzu `EventCounts`'a
+  (oda satırının sonunda), dört yönlendirici sayacı `RouterCounts`'a;
+  aileler `gsb_room_events_*`, `gsb_events_*`; loadgen teli genişledi
+  (sihir ana dalda: bir sonraki boş `GSNX`). `events_relocations_refused`
+  ve `events_tombstones_expired` birer olay bacağı değil, olay sayısıdır.
+  Defter düzeltmesi yukarıda (§9).
+- **Kanıt:** gerçek shard aktörleri, her biri KENDİ elle sürülen
+  ticker'ında (en kötü sıra seçilebilir), gerçek `EventRoutes` + tek
+  satırlık `Locate` (`shard/tests/fence.rs`, 9 test: tek göç 1…6,
+  BOTH'ta CLIENT bacağı etkilenmez, zincir C→B→A sırasıyla 1…6, hiç
+  gelmeyen çit, reddedilen `Relocated`, dolu tutma + sahipsiz mühür,
+  ertelenmiş göç, tutulmayan ileri gönderim, gidiş-dönüş); canlı
+  registry ile (`tests/events.rs`): göç boyunca 44 bacak sırayla,
+  bayat `Relocated`'lar, park boşluğu, oda değiştirme, yeniden kurulan
+  oda, `CloseConn` ile parka alınmış satır (B197). Mutasyonlar: tutma
+  yok → `[4, 5, 6, 1, 2, 3]`; mühür gönderilmez; mezar taşı yok; ileri
+  gönderilen de tutulur; ilk taslak zincir kuralı (ayrılırken bekletileni
+  hemen gönder); giden çit gelenden önce; ayrıldıktan sonra gelen kendi
+  bacağı beklemeden aktarılır; `Forward` ertelenmez; mühürsüz taş önceliği
+  yok; registry'de satır taşınmaz / bayatlık denetimi yok / enkarnasyon
+  denetimi yok / CLIENT'ın "ayrılmamış" koşulu yok — hepsi bir testi
+  düşürür.
+- **Kalanlar** (BACKLOG `e3:`): durmada kalan çit bacakları sayılmaz;
+  hızlı gidiş-dönüşte eski taşın yerini alması; reddedilen `Relocated`
+  yeniden denenmez; devamda `mig` taşıması testsiz; sabitler config
+  değil.
 
 **e4 — motor olayları.** `EngineEvent`, `Interest`, aboneler;
 `gsb-macros`: `#[gsb(engine_events)]` kolu + denetimler;
