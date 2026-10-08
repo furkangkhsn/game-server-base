@@ -333,6 +333,26 @@ birbirine karışmaz:
   (odanın `req_*` sayaçları karşılarında, her satırda zaten); modsuz
   satır ve CLIENT satırı birebir aynı. Ölçüm ve okuması:
   RPC-CONTROL-PLANE §8.2.
+- **`--chat-rate R [--chat-channels C] [--friends F] [--rooms K]`**
+  (tur e6): sohbet/varlık senaryosu (`loadgen/chat.rs`). Süreç içi
+  sunucu demo'yu sarar: `chat` yayıncısı saniyede R satırı (sunucu
+  geneli) kanallara sırayla `push_many` ile iter (istemci `id`, `id % C`
+  kanalında; satır gönderim anını taşır), `--friends F` demo'nun arkadaş
+  servisini F'lik halkayla barındırır (motor olaylarıyla), bir yoklama
+  10 ms'de bir `Presence::of` ile registry kutusunun kuyruk gecikmesini
+  ölçer. İstemciler `FEATURE_PUSH` bildirir, PUSH'ları
+  `gsb_client::events` tablosuna verir; itme → alma gecikmesini,
+  boşlukları ve join gecikmesini (AUTH+JOIN → JOIN_ROOM_RESULT) tutar.
+  `--rooms K` genel: istemci `--room + id % K` odasına girer (süreç içi
+  sunucu hepsini kurar; oda anahtarları K odanın katlanmışıdır). **Yalnız
+  demo, yalnız süreç içi** (`--addr`, `--serve`, `--orchestrate`,
+  `--churn-secs` ile kullanım hatası). **RESULT:** yalnız senaryoda,
+  `game=`'den hemen önce — `chat_rate chat_channels friends rooms`,
+  istemci tablolarının toplamı `ev_<sayaç>` (on `EventCounters` alanı),
+  `ev_gapped_clients chat_lines_rx friend_online_rx friend_offline_rx
+  chat_lat_{p50,p99,max}_us join_{p50,p99,max}_us reg_probes reg_busy
+  reg_gone reg_rtt_{p50,p99,max}_us routed_per_s client_legs_per_s`.
+  Ölçüm ve bölme kararı: EVENTS §12 "e6 ölçümü".
 
 ### 4.5 Değişmemesi gerekenler (2D demo)
 
@@ -484,6 +504,32 @@ metodu olmayan bir trait'te `RegisterError::NoEngineEvents`'tir. Örnek:
 gsb-demo'nun arkadaş servisi (`gsb_demo::friends`, `FriendOnline` 1008 /
 `FriendOffline` 1009, ikisi `to: CLIENT`); demo modülü onu
 barındırmıyor (arkadaş grafiği oyunun verisidir).
+
+**Olayları istemcide almak (tur e6, `docs/EVENTS.md` §15).** Rust
+istemcisi PUSH okuyabildiğini AUTH'ta söyler (`Credentials::with_events`
+→ `Auth.features` `FEATURE_PUSH`; söylemeyen istemciye sunucu hiç PUSH
+göndermez ve her bacağı `events_client_unsupported` sayar) ve kareleri
+`gsb_client::events::Events` tablosuna verir — tek okuyucu
+`RequestClient`'tır:
+
+```rust
+let creds = Credentials::named("alice").with_events();
+session::auth_and_join(&mut conn, &creds, room, WAIT, |_| {}).await?;
+let mut client = RequestClient::new(conn, WAIT, extract, 64)
+    .with_events(Events::with_capacity(1024));  // kuyruk sınırı (varsayılan 1024)
+let ev = client.events().expect("a table");
+ev.on::<FriendOnline>(|p| println!("{} online", p.body.who)); // anında; bu tip kuyruğa girmez
+// döngüde: client.poll(Duration::from_millis(50)).await (ya da bir isteğin wait'i)
+for line in client.events().unwrap().take::<ChatMessage>() { /* line.body, .publisher, .seq */ }
+for gap in client.events().unwrap().take_gaps() { /* gap.publisher, gap.missed → yeniden eşitle */ }
+```
+
+`on`/`take` yalnız `ClientEvent` alır: WORLD-yalnız bir olayı istemcide
+almak derleme hatasıdır. Boşluk, sunucunun kaybettiği (ve saydığı) bir
+CLIENT bacağıdır (park, dolu gelen kutusu, aynı kimliğin PUSH okumayan
+oturumu); yeni oturum (çevrimdışından sonra) yeni akıştır — sayaçlar
+sıfırlanır, boşluk değildir. Sayaçlar: `Events::counters()`
+(`received … body_undecodable`, OPS "İstemci olay sayaçları").
 
 ### 4.7 Deterministik mantık (tur q4)
 

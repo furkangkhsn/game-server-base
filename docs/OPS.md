@@ -146,6 +146,31 @@ Bir kimliğin bir registry mesajındaki olayları şu sırayla gelir:
 `Left`. Taşıması ölen oyuncu, oda park mı despawn mı demeden `Parked`
 görünür; parklamayan oda için ardından `Left` + `Offline` gelir.
 
+**İstemci olay sayaçları (e6, docs/EVENTS.md §15).** Rust istemcisinin
+olay tablosu (`gsb_client::events::Events::counters()`, sunucuya
+gitmez — istemcinin kendi gözlemi; sunucudaki karşılıkları yukarıda):
+`received` (zarfı çözülen PUSH), `undecodable` (zarfı çözülmeyen),
+`gaps` / `missed` (yayıncının numarası atladı: sunucu o bacakları
+kaybetti ve saydı — `events_client_parked`, `…_unsupported`,
+`…_refused_conn_*`, `pushes_dropped_*`), `stale` (eski numara; bu
+tasarımda olmaz), `restarted` (yeni akış = çevrimdışından sonra yeni
+oturum), `handled` / `taken` (dinleyiciye / `take`'e), `dropped_unread`
+(dolu kuyruğun en eskisi; `Events::with_capacity`, varsayılan 1024),
+`body_undecodable`. Defter: `received = stale + handled + taken +
+dropped_unread + body_undecodable + kuyrukta`.
+
+**Loadgen: sohbet/varlık senaryosu ve registry yükü (e6).**
+`gsb-loadgen N --chat-rate R --chat-channels C --friends F --rooms K
+--stagger-ms S` (süreç içi, yalnız demo; GAME-MODULE §4.4): sohbet
+yayıncısı `push_many` ile kanal üyelerine, demo'nun arkadaş servisi
+motor olaylarıyla, istemciler `FEATURE_PUSH` ile; registry kutusunun
+kuyruk gecikmesini bir `Presence::of` yoklaması ölçer (motor göstergesi
+henüz yok). `RESULT`'ta `chat_*`, `ev_*`, `join_*`, `reg_*`,
+`routed_per_s`, `client_legs_per_s` (aşağıda "e6"). İlk ölçüm ve
+yönlendiriciyi bölme kararı (bölme yok; yeniden ölçüm tetiği: CLIENT
+bacağı ~200 000/s ya da join p99'u bir tick'ten fazla bozulursa):
+docs/EVENTS.md §12 "e6 ölçümü".
+
 **Girdi kaydı: `[record]` (q6, B170).** `record` cargo feature'ıyla
 derlenmiş sunucuda seçilen odalar mantığa giren her girdiyi
 (docs/SERVICES.md §10.1) tick başına bir dosyaya yazar; dosya aynı oyuna
@@ -1941,6 +1966,22 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   `engine_events_refused_gone`; abonesi olmayan oyunda hiç yok). Metrik
   teli: aboneler yayıncılardan sonra, raporun son bölümü (tel yerleşimi
   değişti; sihir sayısını ana dal atar — bir sonraki boş `GSNY`).
+
+- **e6: loadgen sohbet/varlık senaryosunun anahtarları (docs/EVENTS.md
+  §12, §15).** Yalnız senaryoda (`--chat-rate` / `--friends`), olay
+  segmentinden sonra, `game=`'den hemen önce: `chat_rate= chat_channels=
+  friends= rooms=`, istemcilerin olay tablolarının toplamı
+  `ev_received= ev_undecodable= ev_gaps= ev_missed= ev_stale=
+  ev_restarted= ev_handled= ev_taken= ev_dropped_unread=
+  ev_body_undecodable=`, sonra `ev_gapped_clients= chat_lines_rx=
+  friend_online_rx= friend_offline_rx= chat_lat_{p50,p99,max}_us=`
+  (itme → alma, istemci saatiyle; süreç içi aynı saat)
+  `join_{p50,p99,max}_us=` (AUTH+JOIN → JOIN_ROOM_RESULT)
+  `reg_probes= reg_busy= reg_gone= reg_rtt_{p50,p99,max}_us=` (registry
+  yoklaması) `routed_per_s= client_legs_per_s=` (son raporun
+  `events_routed` / `events_client_sent`'i bölü pencere). Senaryo yalnız
+  süreç içi: metrik teli ve `CLIENT` satırları değişmedi (sihir sayısı
+  yok); senaryosuz satır birebir aynı.
 
 - **q6: loadgen `RESULT`'ın çağrı, servis ve RPC anahtarları (B157,
   B164, B161).** `game=`'den hemen önce (diğer isteğe bağlı segmentlerden

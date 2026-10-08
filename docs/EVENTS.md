@@ -40,6 +40,18 @@
 > `FriendOnline` 1008 / `FriendOffline` 1009, `to: CLIENT`). Ayrıntı ve
 > sapmalar §21 "e4 — uygulanan biçim".
 >
+> **e6 uygulandı (2026-10-08):** istemci ve ölçüm — `gsb_client::events`
+> (`Events` sans-IO tablosu: `on`/`take`/`take_gaps`, (yayıncı, akış)
+> başına numara denetimi, akış değişince sıfırlama, sınırlı kuyruk
+> `with_capacity` — varsayılan 1024, §20 E15 —, `EventCounters`),
+> `RequestClient::{with_events, events, poll}` (tek okuyucu, tur başına
+> tek sınırlı `recv`), `Credentials::with_events` (AUTH'ta
+> `FEATURE_PUSH`; verilmezse eski davranış: `features = 0`); uçtan uca
+> testler (`gsb-server/tests/client_events.rs`); loadgen sohbet/varlık
+> senaryosu (`--chat-rate`, `--chat-channels`, `--friends`, `--rooms`)
+> ve registry yükü ölçümü — **karar: bölme yok** (§12 "e6 ölçümü").
+> Ayrıntı ve sapmalar §21 "e6 — uygulanan biçim".
+>
 > Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
 **Tek paragraf özet.** Olay, sunucu kodunun (bir servis, bir admin görevi,
@@ -938,6 +950,59 @@ pub struct RecordedEvent { pub to: Option<Identity> /* None = oda */, pub owner:
 - **Oda kutusu boyutu:** tick başına tepe olay sayısının ≥ 2 katı (s0'ın
   `N·k ≤ C` kuralının ikizi); `event_capacity` config doğrulamasında.
 
+### e6 ölçümü (2026-10-08) ve bölme kararı
+
+`gsb-loadgen` sohbet/varlık senaryosu (OPS "loadgen: sohbet/varlık
+senaryosu"), release, süreç içi (istemciler sunucuyla aynı çekirdekleri
+paylaşır — sunucu için alt sınır), TCP, 20 s pencere, 10 oda, kanal
+başına 50 üye (`--chat-channels N/50`), halka üzerinde 4 arkadaş, katılımlar
+pencerenin ilk ~10 s'sine yayılı (`--stagger-ms`: 500 istemcide 20, 2000'de
+5) — yani join'ler itme trafiğiyle aynı anda registry kutusuna biner.
+Makine: 32 mantıksal çekirdek; ölçüm sırasında başka bir ajanın derlemesi
+de koşuyordu, yük ortalaması (1 dk) 4,7–6,8.
+
+| N | sohbet satırı/s | yönlendirilen itme/s | CLIENT bacağı/s | join p50 / p99 / max (ms) | registry yoklaması p50 / p99 / max (µs) | itme → alma p50 / p99 (µs) | kayıp |
+|---|---|---|---|---|---|---|---|
+| 500 | 0 | 150 | 200 | 19,0 / 33,0 / 39,2 | 2 / 16 / 27 | — | 0 |
+| 500 | 200 | 350 | 7 701 | 18,3 / 33,7 / 45,8 | 3 / 231 / 391 | 212 / 949 | 0 |
+| 500 | 1 000 | 1 150 | 37 711 | 18,1 / 34,0 / 46,1 | 3 / 523 / 707 | 452 / 1 211 | 0 |
+| 2 000 | 0 | 552 | 800 | 19,2 / 35,7 / 41,0 | 3 / 28 / 1 175 | — | 0 (*) |
+| 2 000 | 200 | 752 | 8 318 | 19,5 / 36,0 / 43,3 | 4 / 317 / 2 526 | 270 / 5 378 | 0 (*) |
+| 2 000 | 1 000 | 1 552 | 38 292 | 19,1 / 35,6 / 40,3 | 4 / 853 / 1 491 | 613 / 5 017 | 0 (*) |
+| 2 000 | 5 000 | 5 552 | 188 277 | 19,8 / 38,2 / 42,2 | 17 / 3 513 / 6 626 | 2 102 / 7 699 | 0 (*) |
+
+"Registry yoklaması": her 10 ms'de bir `Presence::of` (tek kimlik) —
+registry kutusunda join'lerin ve itmelerin arkasında bekler, yerinde
+cevaplanır; gidiş-dönüşü kutunun kuyruk gecikmesidir (motor göstergesi
+yerine dışarıdan ölçüm; gösterge BACKLOG `e6:`). "Kayıp": `RouterFull`
+(yayıncı tutamağında), `client_refused_conn_full`,
+`pushes_dropped_outbound_full`, istemci boşlukları — her koşuda **sıfır**;
+`events_offline` (henüz bağlanmamış kanal üyeleri) ve
+`events_client_parked` (pencere sonunda soketi kapanmış, parktaki
+oyuncular) beklenen, sayılmış sonlardır. (*) 2 000 istemcide arkadaş
+servisi motor olaylarından 975'ini kaybetti
+(`sub_Friends_engine_events_refused_full`): pencere sonundaki toplu
+çıkışta abonenin kanalı (servisin `mailbox`'ı) doldu — sohbet oranından
+bağımsız, yönlendiricinin değil abonenin darboğazı (BACKLOG `e6:`).
+
+**Okuma.** (1) Join gecikmesi tick'le nicelenir (30 Hz: ortalama yarım
+tick + tur): p50 19 ms, p99 33–38 ms, itmesiz koşuyla fark gürültü
+düzeyinde — en ağır koşuda (saniyede 188 000 CLIENT bacağı) p99 +2,5 ms
+(%7). (2) Registry kutusunun kuyruk gecikmesi CLIENT bacağı hızıyla
+büyür: p99 ≈ 16–28 µs (itmesiz) → ~0,5–0,9 ms (38 000/s) → 3,5 ms
+(188 000/s); p50 hep ≤ 17 µs. Büyüyen ortalama değil kuyruktur: bir
+`push_many` (50 `try_send`) registry'yi tek parça meşgul eder, arkasına
+düşen mesaj onu bekler. (3) `RouterFull` hiç görülmedi.
+
+**Karar (§12 tetiği, E2): bölme YOK.** Tetiklerin ikisi de tutmadı:
+join p99 belirgin bozulmadı, `RouterFull` sıfır. `EventRoutes` registry'de
+kalır. Yeniden ölçüm tetiği: hedef bir oyunda CLIENT bacağı hızı
+~200 000/s'yi geçecekse (registry kuyruğunun p99'u ms mertebesine
+çıkar) ya da join p99 itmesiz koşuya göre bir tick'ten (33 ms) fazla
+bozulursa — o zaman `EventRoutes` ayrı `EventRouter` aktörüne taşınır
+(§6.1). Ölçüm ayrık süreçte (sunucu ayrı çekirdeklerde) tekrarlanmadı:
+senaryo süreç içi kalıyor (BACKLOG `e6:`).
+
 ## 13. Güvenlik: kim neyi yayınlayabilir
 
 - **Yalnız sunucu kodu yayınlar.** Yetki = bir `Publisher` tutmak;
@@ -1597,3 +1662,65 @@ algılama, `features` bitini AUTH'ta gönderir); loadgen sohbet/varlık
 senaryosu ve registry yükü ölçümü → bölme kararı (§12). Sonra istemci
 çekirdeği turunda (B28) FFI `Event::{Push, Gap}`, C#/Godot/JS üretilmiş
 olay yüzeyleri.
+
+**e6 — uygulanan biçim (2026-10-08).** Plandaki her madde girdi;
+tasarımdan farklar ve netleştirmeler:
+
+- **`gsb_client::events::Events`** (sans-IO; FFI çekirdeğinin olay
+  yarısı): `ingest(&FrameBody) -> bool` (PUSH'u tüketir, diğerini
+  bırakır), `push(base::Push)`, `on::<E: ClientEvent>(FnMut(Pushed<E>) +
+  Send)`, `take::<E: ClientEvent>()`, `take_gaps()`, `queued()`,
+  `stream()`, `counters()`. `Pushed<E> { body, publisher, seq, stream }`,
+  `Gap { publisher, stream, missed, seq }`. WORLD-yalnız olayla `on`/
+  `take` derleme hatası (`compile_fail` doctest).
+- **Numara kuralı (§15'in netleşmesi, E5 ile):** aynı `stream` içinde
+  yayıncı başına son numara; `seq > son + 1` → boşluk; `seq ≤ son` →
+  `stale`, düşer (teslim edilmez). `stream` değişince bütün yayıncıların
+  sayacı sıfırlanır (`restarted`; ilk akış sayılmaz) — tasarımın
+  "`seq == 1` yeni akış" sezgisi yerine kesin `Push.stream`. Bir tablonun
+  bir akışta bir yayıncıdan gördüğü İLK numara 1'e göre denetlenir:
+  büyükse boşluktur (bu istemci öncekileri görmedi — kayboldular ya da
+  aynı kimliğin başka oturumuna gittiler; oyun yeniden eşitler). Yeni
+  süreçte parktan devam eden istemci bu yüzden eski oturumun aldıklarını
+  boşluk görür: bilerek (o süreç onları görmedi).
+- **Sayaçlar** (istemcide, yerel; §9'daki listeden ayrışma):
+  `received` (zarfı çözülen PUSH), `undecodable` (zarfı çözülmeyen),
+  `gaps`, `missed`, `stale`, `restarted`, `handled` (dinleyiciye),
+  `taken`, `dropped_unread` (dolu kuyruğun en eskisi), `body_undecodable`
+  (gövdesi tipine çözülmeyen — tasarım bunu `undecodable`'a katıyordu;
+  tek anlam için ayrıldı). Defter: `received = stale + handled + taken +
+  dropped_unread + body_undecodable + kuyrukta`.
+- **Koşturucu:** ayrı bir `EventClient` yok — `RequestClient` tek
+  okuyucudur: `with_events(Events)` ile her PUSH karesi tabloya,
+  cevaplar isteklere, kalan kareler kuyruğa; `poll(window)` bekleyen
+  isteği olmayan istemci için bir sınırlı tur okur (tur başına tek
+  `await`, multiplexing yok).
+- **AUTH:** `Credentials.features` (yeni alan, varsayılan 0) +
+  `Credentials::with_events()`; `auth_req` alanı yazar. Bayt kilidi:
+  `session::tests::pins::events_auth_frame_bytes_are_pinned`
+  (`features = 4` varint); biti olmayan AUTH'un baytları değişmedi.
+- **Uçtan uca** (`gsb-server/tests/client_events.rs`, gerçek sunucu,
+  TCP): CLIENT ve BOTH olayı tipli, tek CLIENT bacağında 1, 2
+  (BOTH'un WORLD bacağı `world_no_room`); aynı kimliğin PUSH okumayan
+  yeni oturumu bacağı alır (`client_unsupported`) → okuyan oturumda boşluk,
+  `missed` = sunucunun `events_client_unsupported`'ı; çevrimdışı sonrası
+  yeni oturum = yeni akış (aynı tabloyla `restarted = 1`, boşluk yok,
+  numara 1'den); kapasite 2'lik kuyrukta 5 itme → `dropped_unread = 3`,
+  en yeni ikisi kalır; bitsiz istemciye hiç PUSH karesi gitmez,
+  `events_client_unsupported = 2`, `pushes_written = 0`.
+- **Loadgen** (OPS): `--chat-rate R` (sunucu genelinde satır/s; 0 =
+  sohbetsiz taban koşu), `--chat-channels C` (`id % C`), `--friends F`
+  (halka; demo'nun `gsb_demo::friends` servisi, motor olaylarıyla),
+  `--rooms K` (`--room + id % K`; genel). Senaryo modülü demo'yu sarar
+  (`loadgen/chat.rs`: `chat` yayıncısı `push_many` ile, `friends`
+  servisi, registry yoklaması); sohbet satırı loadgen'e özel bir olay
+  (op 1990, `.proto`'suz el yazımı `impl Event`). Yalnız süreç içi
+  (`--addr`/`--serve`/`--orchestrate`/`--churn-secs` reddeder) —
+  dolayısıyla loadgen metrik teli ve `CLIENT` satırları DEĞİŞMEDİ (sihir
+  sayısı gerekmedi). `RESULT`'ta `game=`'den önce `chat_*`, `ev_*`,
+  `join_*`, `reg_*`, `routed_per_s`, `client_legs_per_s`.
+- **Ölçüm ve karar:** §12 "e6 ölçümü" — bölme yok.
+- **Kalanlar** (BACKLOG `e6:`): registry kutu derinliği motor
+  göstergesi (yoklama yerine); arkadaş servisinin toplu çıkışta motor
+  olayı kaybı; senaryo ayrık süreçte değil; FFI `Event::{Push, Gap}`
+  (B28).
