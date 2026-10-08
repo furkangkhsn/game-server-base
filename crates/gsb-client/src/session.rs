@@ -32,6 +32,11 @@ use crate::error::{ClientError, ServerError};
 pub struct Credentials {
     pub name: String,
     pub ticket: Vec<u8>,
+    /// What this client reads beyond the base protocol (`Auth.features`,
+    /// a bit set — [`gsb_protocol::FEATURE_PUSH`]). Not part of the
+    /// resume key: a resume may announce other bits. 0 (the default):
+    /// nothing — the server sends this session no `PUSH` frame.
+    pub features: u64,
 }
 
 impl Credentials {
@@ -40,6 +45,7 @@ impl Credentials {
         Self {
             name: name.into(),
             ticket: Vec::new(),
+            features: 0,
         }
     }
 
@@ -48,18 +54,28 @@ impl Credentials {
         self.ticket = ticket.into();
         self
     }
+
+    /// The same credentials announcing that this client reads `PUSH`
+    /// frames ([`gsb_protocol::FEATURE_PUSH`]): the server then sends it
+    /// the CLIENT legs of the events pushed to its identity — feed them
+    /// to a [`crate::events::Events`] table.
+    pub fn with_events(mut self) -> Self {
+        self.features |= gsb_protocol::FEATURE_PUSH;
+        self
+    }
 }
 
-/// The AUTH frame (it states [`gsb_protocol::PROTOCOL_VERSION`]).
+/// The AUTH frame (it states [`gsb_protocol::PROTOCOL_VERSION`] and the
+/// credentials' `features`).
 pub fn auth_req(c: &Credentials) -> FrameBody {
     let auth = Auth {
         name: c.name.clone(),
         ticket: c.ticket.clone(),
         protocol_version: gsb_protocol::PROTOCOL_VERSION,
-        // No `FEATURE_PUSH` yet: this client does not read PUSH frames
-        // (the typed event surface, `docs/EVENTS.md` §21 e6), so the
-        // server must not send it any.
-        features: 0,
+        // `FEATURE_PUSH` only when the caller reads PUSH frames
+        // (`Credentials::with_events`): the server never sends one to a
+        // client that did not ask (`docs/EVENTS.md` §14).
+        features: c.features,
     };
     FrameBody::new(op::AUTH_REQ, auth.encode_to_vec())
 }

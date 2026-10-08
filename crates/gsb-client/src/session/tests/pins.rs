@@ -110,6 +110,22 @@ fn ticket_auth_frame_bytes_are_pinned() {
     assert_eq!(encode(f.op, &f.payload), want);
 }
 
+/// AUTH of a client that reads pushes (`Credentials::with_events`):
+/// `features = 4` carries `FEATURE_PUSH`; without it the bytes are the
+/// pre-e6 ones above.
+#[test]
+fn events_auth_frame_bytes_are_pinned() {
+    let f = auth_req(&Credentials::named("n").with_events());
+    #[rustfmt::skip]
+    let want = [
+        0x09, 0, 0, 0, 0x01, 0x00,             // len 9, AUTH_REQ
+        0x0a, 0x01, b'n',          // name
+        0x18, 0x01,                // protocol_version
+        0x20, 0x01,                // features = FEATURE_PUSH
+    ];
+    assert_eq!(encode(f.op, &f.payload), want);
+}
+
 #[test]
 fn join_leave_heartbeat_frame_bytes_are_pinned() {
     let wire = |f: gsb_protocol::FrameBody| encode(f.op, &f.payload);

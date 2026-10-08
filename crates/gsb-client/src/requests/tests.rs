@@ -181,3 +181,58 @@ fn an_undecodable_answer_is_counted() {
     assert_eq!(r.take(&t), Some(Err(RequestError::Undecodable)));
     assert_eq!(r.counters().undecodable, 1);
 }
+
+/// The runner with an event table: `PUSH` frames go to the table, an
+/// answer to its request, anything else to the frame queue — in one
+/// reader, read one bounded turn at a time; the session's end ends it.
+#[tokio::test]
+async fn the_runner_feeds_pushes_to_its_event_table() {
+    use crate::events::Events;
+    use crate::frame::FrameTx;
+    use gsb_protocol::event::{ClientEvent, Dest, Event};
+
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct Line {
+        #[prost(string, tag = "1")]
+        text: String,
+    }
+    impl Event for Line {
+        const OP: u16 = 2002;
+        const TO: Dest = Dest::Client;
+    }
+    impl ClientEvent for Line {}
+
+    let (a, b) = tokio::io::duplex(1 << 16);
+    let (c, d) = tokio::io::duplex(1 << 16);
+    let conn = Conn::halves(Box::new(a), Box::new(c));
+    let mut tx = FrameTx::new(b);
+    drop(d);
+    let extract: Extract = Box::new(|_| None);
+    let mut client = RequestClient::new(conn, T, extract, 8).with_events(Events::new());
+    let push = |seq: u64| gsb_protocol::base::Push {
+        publisher: 1,
+        seq,
+        op: u32::from(Line::OP),
+        body: Line { text: "hi".into() }.encode_to_vec(),
+        stream: 1,
+    };
+    tx.send(gsb_protocol::op::base::PUSH, &push(1).encode_to_vec())
+        .await
+        .unwrap();
+    tx.send(gsb_protocol::op::base::HEARTBEAT_ACK, &[])
+        .await
+        .unwrap();
+    tx.send(gsb_protocol::op::base::PUSH, &push(3).encode_to_vec())
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        assert!(client.poll(Duration::from_secs(5)).await);
+    }
+    let events = client.events().expect("a table");
+    assert_eq!(events.take::<Line>().len(), 2);
+    assert_eq!(events.take_gaps()[0].missed, 1);
+    assert_eq!(client.take_frames().count(), 1, "the other frame");
+    drop(tx);
+    assert!(!client.poll(Duration::from_secs(5)).await, "the end");
+    assert!(client.is_ended());
+}

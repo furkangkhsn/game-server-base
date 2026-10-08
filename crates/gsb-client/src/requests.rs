@@ -18,6 +18,11 @@
 //!   multiplexing; the frames that are not answers wait in a bounded
 //!   queue for the caller ([`RequestClient::take_frames`]).
 //!
+//! [`RequestClient`] also runs the event table (`crate::events`, round
+//! e6) when given one ([`RequestClient::with_events`]): the same reader
+//! hands it every `PUSH` frame, and [`RequestClient::poll`] reads one
+//! bounded turn for a client that waits on no request.
+//!
 //! Where answers ride is the GAME's choice (the demo and the kit put
 //! `gsb.base.RpcResponse` in their private frame's `responses`), so the
 //! client takes an extractor: `FnMut(&FrameBody) -> Option<Vec<RpcResponse>>`
@@ -38,6 +43,7 @@ use gsb_protocol::request::{Request, WireMessage};
 use prost::Message;
 
 use crate::conn::{Conn, Recv};
+use crate::events::Events;
 
 /// How a typed request ended, when not with its answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +326,8 @@ pub struct RequestClient {
     frames: VecDeque<FrameBody>,
     frames_cap: usize,
     frames_dropped: u64,
+    /// The event table, when this client reads pushes.
+    events: Option<Events>,
     ended: bool,
 }
 
@@ -337,8 +345,42 @@ impl RequestClient {
             frames: VecDeque::new(),
             frames_cap,
             frames_dropped: 0,
+            events: None,
             ended: false,
         }
+    }
+
+    /// The same client feeding every `PUSH` frame it reads to `events`
+    /// (authenticate with `Credentials::with_events`, or the server
+    /// sends none). Without a table a `PUSH` frame is just another
+    /// non-answer frame.
+    pub fn with_events(mut self, events: Events) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    /// The event table (`None`: not given one).
+    pub fn events(&mut self) -> Option<&mut Events> {
+        self.events.as_mut()
+    }
+
+    /// Read ONE bounded turn (up to `window`): a frame is fed (an
+    /// answer to its request, a push to the event table, anything else
+    /// to the frame queue), and what is due is timed out. `false` once
+    /// the session has ended.
+    pub async fn poll(&mut self, window: Duration) -> bool {
+        if self.ended {
+            self.requests.end_session();
+            return false;
+        }
+        self.requests.sweep(Instant::now());
+        match self.conn.recv(window).await {
+            Ok(Recv::Frame(f)) => self.feed(f),
+            Ok(Recv::Quiet) => {}
+            Ok(Recv::Closed) | Err(_) => self.end(),
+        }
+        self.requests.sweep(Instant::now());
+        !self.ended
     }
 
     /// Send `body` and wait for its outcome.
@@ -434,6 +476,11 @@ impl RequestClient {
     }
 
     fn feed(&mut self, f: FrameBody) {
+        if let Some(events) = self.events.as_mut()
+            && events.ingest(&f)
+        {
+            return;
+        }
         match (self.extract)(&f) {
             Some(answers) => {
                 for a in answers {
