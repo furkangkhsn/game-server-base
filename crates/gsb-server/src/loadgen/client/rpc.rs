@@ -4,6 +4,11 @@
 //! matches the answers riding its private frames (`Private.responses`)
 //! against them in its [`Ledger`].
 //!
+//! The requests go through the typed request table
+//! (`gsb_client::requests::Requests`, B161): it numbers them, builds
+//! their frames, matches and decodes the answers and times them out; the
+//! [`Ledger`] keeps the latencies and tells the strays apart.
+//!
 //! The request is the demo's `ECONOMY` purchase of an item in its price
 //! table: the external-I/O half of the RPC pattern (a pending slot, a
 //! worker task, the economy service, a completion on a later tick), so
@@ -18,7 +23,6 @@
 
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use gsb_kit::client::wire::{Fields, Value};
 use gsb_protocol::FrameBody;
 use prost::Message;
@@ -58,21 +62,10 @@ pub(crate) fn client_limit() -> Duration {
 /// request is answered `ok`.
 pub(crate) const ITEM: &str = "potion";
 
-/// The `ECONOMY` request body (the same for every request).
-fn buy_payload() -> Bytes {
+/// The `ECONOMY` request (the same for every request): the demo's typed
+/// `Buy` (`BuyItem`, op 1006 — `gsb-build`'s `impl Request`).
+fn buy() -> Buy {
     gsb_demo::game::BuyItem { kind: ITEM.into() }
-        .encode_to_vec()
-        .into()
-}
-
-/// The request envelope for correlation id `id`.
-fn request(id: u64, body: &Bytes) -> FrameBody {
-    let env = gsb_protocol::base::RpcRequest {
-        id,
-        op: u32::from(gsb_demo::op::ECONOMY),
-        payload: body.to_vec(),
-    };
-    FrameBody::new(gsb_protocol::op::base::RPC_REQ, env.encode_to_vec())
 }
 
 /// One client's RPC traffic: its schedule and its ledger.
@@ -82,7 +75,7 @@ pub(crate) struct RpcClient {
     phase: Duration,
     /// The next burst (`None` until the join).
     next: Option<Instant>,
-    body: Bytes,
+    body: Buy,
     ledger: Ledger,
 }
 
@@ -96,7 +89,7 @@ impl RpcClient {
             plan,
             phase,
             next: None,
-            body: buy_payload(),
+            body: buy(),
             ledger: Ledger::new(client_limit()),
         }
     }
@@ -122,7 +115,7 @@ impl RpcClient {
             *next = now + interval;
         }
         let burst = (0..self.plan.burst)
-            .map(|_| request(self.ledger.sent(now), &self.body))
+            .map(|_| self.ledger.start(&self.body, now))
             .collect();
         Some(burst)
     }
@@ -131,10 +124,11 @@ impl RpcClient {
     /// returns how many it carried.
     pub(crate) fn on_private(&mut self, frame: &[u8], at: Instant) -> usize {
         let answers = responses(frame);
-        for r in &answers {
-            self.ledger.answer(r.id, r.ok, &r.reason, at);
+        let n = answers.len();
+        for r in answers {
+            self.ledger.answer(r, at);
         }
-        answers.len()
+        n
     }
 
     /// The client's numbers, the ledger closed at `now`.

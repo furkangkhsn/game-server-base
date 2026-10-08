@@ -43,7 +43,8 @@ pub(crate) fn rpc_segment(rate: f64, burst: u32, t: &RpcTally) -> String {
         " rpc_rate={rate} rpc_burst={burst} rpc_sent={} rpc_ok={} rpc_to={} rpc_rej_conn={} \
          rpc_rej_room={} rpc_rej_dup={} rpc_rej_no_handler={} rpc_rej_malformed={} \
          rpc_rej_logic={} rpc_client_to={} rpc_late={} rpc_open={} rpc_dup_answers={} \
-         rpc_unmatched={} rpc_ok_p50_ms={p50:.1} rpc_ok_p99_ms={p99:.1} rpc_ok_max_ms={max:.1}",
+         rpc_unmatched={} rpc_ok_p50_ms={p50:.1} rpc_ok_p99_ms={p99:.1} rpc_ok_max_ms={max:.1} \
+         rpc_undecodable={}",
         t.sent,
         t.ok,
         t.timeout,
@@ -58,6 +59,7 @@ pub(crate) fn rpc_segment(rate: f64, burst: u32, t: &RpcTally) -> String {
         t.open,
         t.dup_answers,
         t.unmatched,
+        t.undecodable,
     )
 }
 
@@ -69,7 +71,7 @@ pub(crate) fn rpc_lines(rate: f64, burst: u32, t: &RpcTally) -> String {
         "rpc (clients): rate={rate}/s burst={burst} sent={} answered={} ok={} \
          rejected[to={} conn={} room={} dup={} no_handler={} malformed={} logic={}] \
          client_timeouts={} (answered late {}, never {}) open_at_end={} \
-         dup_answers={} unmatched={} ok_latency p50={p50:.1}ms p99={p99:.1}ms max={max:.1}ms",
+         dup_answers={} unmatched={} undecodable={} ok_latency p50={p50:.1}ms p99={p99:.1}ms max={max:.1}ms",
         t.sent,
         t.answered(),
         t.ok,
@@ -86,6 +88,7 @@ pub(crate) fn rpc_lines(rate: f64, burst: u32, t: &RpcTally) -> String {
         t.open,
         t.dup_answers,
         t.unmatched,
+        t.undecodable,
     );
     if t.dup_answers > 0 || t.unmatched > 0 {
         s.push_str(&format!(

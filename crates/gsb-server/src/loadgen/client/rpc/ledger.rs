@@ -4,22 +4,30 @@
 //!
 //! The rules (each pinned by `tests.rs`):
 //!
-//! - ids are the client's own, `1, 2, 3, …` per session, never reused —
-//!   so an answer names exactly one request, or none;
+//! - ids are the typed request table's (`gsb_client::requests`, B161),
+//!   `1, 2, 3, …` per session, never reused — so an answer names exactly
+//!   one request, or none;
 //! - the FIRST answer to a waiting request settles it: counted once, by
-//!   its kind (`ok`, or the core's rejection it names), and its latency
-//!   (send → arrival) recorded when it is `ok`;
+//!   its kind (`ok` — its payload decoded as `BuyResult` —, the core's
+//!   rejection it names, or `undecodable`), and its latency (send →
+//!   arrival) recorded when it is `ok`;
 //! - a second answer to a settled request is a DUPLICATE (`dup_answers`
 //!   — must stay 0: F14's exactly-once), counted nowhere else;
 //! - an answer to an id never sent (0 — the core's malformed answer —
 //!   or past the last one) is UNMATCHED, counted nowhere else;
 //! - the client's own timeout is the server's request timeout plus a
-//!   margin (`limit`): an answer later than that still settles its
-//!   request but is also `late`; a request still waiting at the end is
-//!   `unanswered` when older than the limit (a client-side timeout),
-//!   `open` otherwise (in flight when the run ended — not judged).
+//!   margin (`limit`), on the table's clock: a request is timed out once
+//!   its limit is reached; an answer after that is `late` (and, since
+//!   B161, counted under no kind — the table already ended the request);
+//!   a request timed out and never answered is `unanswered`; one still in
+//!   flight at the end is `open` (not judged).
 
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+
+use gsb_client::requests::{RequestError, Requests, Ticket};
+use gsb_protocol::FrameBody;
+use gsb_protocol::base::RpcResponse;
 
 /// What one answer says, as the client can tell it: `ok`, or the core's
 /// rejection its reason names (`gsb_core::rpc`'s reason constants —
@@ -78,6 +86,9 @@ pub(crate) struct RpcTally {
     pub(crate) open: u64,
     /// Every `ok` answer's latency, µs (send → arrival).
     pub(crate) ok_lat_us: Vec<u32>,
+    /// Answers whose payload did not decode as the request's declared
+    /// type (`BuyResult`; the typed client's `undecodable`).
+    pub(crate) undecodable: u64,
 }
 
 impl RpcTally {
@@ -116,21 +127,27 @@ impl RpcTally {
         self.unanswered += o.unanswered;
         self.open += o.open;
         self.ok_lat_us.extend_from_slice(&o.ok_lat_us);
+        self.undecodable += o.undecodable;
     }
 }
 
-/// A sent request: still waiting (since when), or settled.
-#[derive(Debug, Clone, Copy)]
-enum Slot {
-    Waiting(Instant),
-    Settled,
-}
+/// The request every client sends (the demo's `Buy`, op 1006).
+pub(crate) type Buy = gsb_demo::game::BuyItem;
 
-/// One client's ledger (see the module docs).
+/// One client's ledger (see the module docs) over the typed request
+/// table, `gsb_client::requests::Requests` (B161): it numbers the
+/// requests, builds their frames, matches and decodes the answers and
+/// times the requests out at the client's limit; the ledger keeps what
+/// it adds — the send times (latency), the timed-out ids (a late answer
+/// is told from a duplicate or an unmatched one) and the tally.
 pub(crate) struct Ledger {
-    /// Request `id` is `slots[id - 1]`.
-    slots: Vec<Slot>,
-    limit: Duration,
+    requests: Requests,
+    /// In flight: each request's ticket and send time.
+    open: HashMap<u64, (Ticket<Buy>, Instant)>,
+    /// Timed out on the client's clock and not answered since.
+    timed_out: HashSet<u64>,
+    /// The last id the table minted (ids are `1..=last`).
+    last: u64,
     tally: RpcTally,
 }
 
@@ -138,41 +155,81 @@ impl Ledger {
     /// An empty ledger whose client-side timeout is `limit`.
     pub(crate) fn new(limit: Duration) -> Self {
         Self {
-            slots: Vec::new(),
-            limit,
+            requests: Requests::new(limit),
+            open: HashMap::new(),
+            timed_out: HashSet::new(),
+            last: 0,
             tally: RpcTally::default(),
         }
     }
 
-    /// Record a request sent at `at`; returns its id.
-    pub(crate) fn sent(&mut self, at: Instant) -> u64 {
-        self.slots.push(Slot::Waiting(at));
+    /// Start request `body` at `at`: its `RPC_REQ` frame (its id is the
+    /// table's next, from 1).
+    pub(crate) fn start(&mut self, body: &Buy, at: Instant) -> FrameBody {
+        let (ticket, frame) = self.requests.start(body, at);
+        self.last = ticket.id();
+        self.open.insert(ticket.id(), (ticket, at));
         self.tally.sent += 1;
-        self.slots.len() as u64
+        frame
     }
 
-    /// Count one answer for `id` (`ok`, `reason`) that arrived at `at`.
-    pub(crate) fn answer(&mut self, id: u64, ok: bool, reason: &str, at: Instant) {
-        let slot = id
-            .checked_sub(1)
-            .and_then(|i| self.slots.get_mut(usize::try_from(i).ok()?));
-        let Some(slot) = slot else {
-            self.tally.unmatched += 1;
+    /// The requests the table timed out by `now` leave `open`.
+    fn sweep(&mut self, now: Instant) {
+        self.requests.sweep(now);
+        let Self {
+            requests,
+            open,
+            timed_out,
+            ..
+        } = self;
+        open.retain(|id, (ticket, _)| match requests.take(ticket) {
+            Some(_) => {
+                timed_out.insert(*id);
+                false
+            }
+            None => true,
+        });
+    }
+
+    /// Count one answer `r` that arrived at `at`.
+    pub(crate) fn answer(&mut self, r: RpcResponse, at: Instant) {
+        self.sweep(at);
+        let id = r.id;
+        let Some((ticket, since)) = self.open.remove(&id) else {
+            // Not in flight: the table drops it (its `answers_late`);
+            // the ledger says which kind of stray it is.
+            self.requests.answer(r);
+            if self.timed_out.remove(&id) {
+                self.tally.late += 1;
+            } else if (1..=self.last).contains(&id) {
+                self.tally.dup_answers += 1;
+            } else {
+                self.tally.unmatched += 1;
+            }
             return;
         };
-        let Slot::Waiting(since) = *slot else {
-            self.tally.dup_answers += 1;
-            return;
-        };
-        *slot = Slot::Settled;
+        self.requests.answer(r);
         let t = &mut self.tally;
-        let waited = at.saturating_duration_since(since);
-        if waited > self.limit {
-            t.late += 1;
-        }
-        match classify(ok, reason) {
+        let Some(outcome) = self.requests.take(&ticket) else {
+            return;
+        };
+        let kind = match outcome {
+            Ok(_) => Kind::Ok,
+            Err(RequestError::Engine(reason)) => classify(false, &reason),
+            Err(RequestError::Game(_)) => Kind::Logic,
+            Err(RequestError::Undecodable) => {
+                t.undecodable += 1;
+                return;
+            }
+            // Taken right after its answer: none of these can be it.
+            Err(RequestError::TimedOut | RequestError::SessionEnded | RequestError::Forgotten) => {
+                return;
+            }
+        };
+        match kind {
             Kind::Ok => {
                 t.ok += 1;
+                let waited = at.saturating_duration_since(since);
                 t.ok_lat_us
                     .push(u32::try_from(waited.as_micros()).unwrap_or(u32::MAX));
             }
@@ -187,17 +244,16 @@ impl Ledger {
     }
 
     /// Close the ledger at `now`: every request still waiting is
-    /// `unanswered` (older than the limit) or `open`.
+    /// `unanswered` (timed out on the client's clock) or `open`.
     pub(crate) fn finish(mut self, now: Instant) -> RpcTally {
-        for slot in &self.slots {
-            if let Slot::Waiting(since) = *slot {
-                if now.saturating_duration_since(since) > self.limit {
-                    self.tally.unanswered += 1;
-                } else {
-                    self.tally.open += 1;
-                }
-            }
-        }
+        self.sweep(now);
+        self.tally.unanswered = self.timed_out.len() as u64;
+        self.tally.open = self.open.len() as u64;
+        debug_assert_eq!(
+            self.requests.counters().timed_out,
+            self.tally.client_timeouts(),
+            "the table's timeouts are the late and the unanswered"
+        );
         self.tally
     }
 }

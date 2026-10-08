@@ -19,6 +19,7 @@ fn tally() -> RpcTally {
         unanswered: 12,
         open: 13,
         ok_lat_us: vec![40_000, 10_000, 30_000, 20_000],
+        undecodable: 14,
     }
 }
 
@@ -32,7 +33,8 @@ fn the_segment_names_each_number_once() {
         " rpc_rate=2.5 rpc_burst=8 rpc_sent=20 rpc_ok=10 rpc_to=1 rpc_rej_conn=2 \
          rpc_rej_room=3 rpc_rej_dup=4 rpc_rej_no_handler=5 rpc_rej_malformed=6 \
          rpc_rej_logic=7 rpc_client_to=23 rpc_late=11 rpc_open=13 rpc_dup_answers=8 \
-         rpc_unmatched=9 rpc_ok_p50_ms=30.0 rpc_ok_p99_ms=40.0 rpc_ok_max_ms=40.0"
+         rpc_unmatched=9 rpc_ok_p50_ms=30.0 rpc_ok_p99_ms=40.0 rpc_ok_max_ms=40.0 \
+         rpc_undecodable=14"
     );
 }
 
