@@ -21,6 +21,7 @@ mod binding;
 mod calls;
 mod cause;
 mod counters;
+mod events;
 mod fanout;
 mod groups;
 mod guardrails;
