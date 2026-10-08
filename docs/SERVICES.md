@@ -41,6 +41,16 @@
 > sınandı (B168); yinelenen servis kaydı `RegisterError` (B169).
 > Sapmalar §20 "Faz 5 — uygulanan biçim"de.
 >
+> **Bağlama turu (q6):** servis sayaçları dışa açık (`gsb_service_*`,
+> `scope=service`, loadgen teli ve `RESULT`; B164), `RESULT` `CallCounts`'u
+> yazar (B157), loadgen RPC kipi `gsb_client::requests` üstünde (B161),
+> `[record]` config'i → registry → oda başına yazar iş parçacığı (B170),
+> `#[gsb_core::service]` tel biçimli çağrılarının kodeklerini kendisi
+> kaydeder (`calls.record_service::<K>()`, B173), TEST modunun son
+> tarihleri sim saatinde (B174), tekrar `Join` kabulünü ve `may_release`
+> cevabını karşılaştırır (B175), kaydeden `SimRoom` adım başına bir hash
+> (B177). Ayrıntı §20 "Faz 2 ve 4 — q6 bağlama turu"nda.
+>
 > **Durum:** TASARIM — kullanıcı incelemesi bekliyor. Uygulama YOK; bu
 > turun çıktısı bu doküman ve `spikes/s0-calls` (gsb çalışma alanının
 > üyesi olmayan, motoru değiştirmeyen bir kanıt crate'i + `#[service]`
@@ -1545,6 +1555,61 @@ somutlaşanlar:
   loadgen teli `CALL_COUNT` dizisiyle 4 alan büyüdü — sihir sayısı
   `GSNT` değişmedi, bir sonraki boş `GSNU`).
 - Ertelenenler BACKLOG'da `q4:` satırları.
+
+**Faz 2 ve 4 — q6 bağlama turu.** Uygulanan biçim:
+
+- **Servis sayaçları (B164):** `gsb_core::metrics::{ServiceCounts,
+  ServiceReport, MethodReport}`; toplayıcı (`MetricsCollector::with_services`,
+  altında `MetricAccumulator::with_services`) barındırılan servislerin
+  `ServiceStats`'ını her raporda atomik yüklemeyle okur — servis kapsamlı,
+  mesaj ve await yok. `MetricReport::services`; `gsb-metric
+  scope=service` / `scope=service_method` satırları; Prometheus ve OTLP'de
+  yedi `gsb_service_*_total{service}` ailesi (her kayıp kendi sayacında)
+  ve metot başına `gsb_service_method_{calls_total,latency_us_total,
+  latency_us_max}{service,method}`; altın metinler ve `otlp::cross`.
+  Sunucu toplayıcıyı registry'den sonra başlatır (servisler o zaman
+  barındırılmış olur). Loadgen teli servisleri taşır (sihir sayısı
+  değişmedi; bir sonraki boş `GSNV`), `RESULT` `svc_<servis>_*` anahtarları
+  (OPS §3 "q6"). Yalnız `#[service]` hostunun servisleri; `add_service`'in
+  el yazımı servisi dışarıda (BACKLOG `q6:`).
+- **`RESULT`'ta `CallCounts` (B157)** ve **loadgen RPC kipi tipli istemcide
+  (B161):** OPS §3 "q6".
+- **Kayıt config'i (B170):** `gsb_core::registry::{RecordPlan,
+  RecordRooms}` + `Registry::with_record`; seçilen tek odanın her kurulumu
+  (ilk kurulum, yeniden kurulum, panik sonrası) bir `Recorder` ve kendi
+  yazar iş parçacığını alır: `<dir>/room-<id>-<nesil>.gsblog`; iş
+  parçacığı dosyanın nasıl bittiğini günlüğe yazar. Sharded oda uyarıyla
+  kaydedilmez (B171). Sunucuda `[record]` (`dir`, `rooms`, `game_version`,
+  `buffer`; OPS §2), `record` feature'ı gsb-server → gsb-core + gsb-kit;
+  feature'sız derlemede tablo başlatmayı durdurur (`RecordNotBuilt`).
+  Test: config'lenmiş sunucunun yazdığı dosya aynı oyuna karşı kayıttaki
+  hash'lere tekrar eder (`gsb-server/tests/record_rooms.rs`).
+- **`#[service]` kodekleri (B173):** makro her metodun çağrı tipini
+  autoref ile yoklar (`__private::record::Probe`): `Response` ve `Error`
+  ikisi de `WireMessage` ise kodek kaydedilir, değilse hiçbir şey (dosyaya
+  "eksik" yazılır, sayılır). Oyun boot'ta tek satır yazar:
+  `calls.record_service::<inventory::Kind>()` — `record` kapalıyken de
+  derlenir ve işlemsizdir (cfg gerekmez). `ServiceKind::record_codecs`
+  (el yazımı tür hiçbir şey kaydetmez). Neden otomatik değil: kodekler
+  kaydın başlığıyla birlikte yazara gider (`RecordMsg::Start`), ilk
+  çağrıda tembel kayıt dosyaya ulaşmazdı.
+- **TEST modu saati (B174):** `Calls` sabitlenebilir bir son tarih saati
+  taşır (`Calls::now`: sabit yoksa tick saati `ticker::now()`); `SimRoom`
+  her adımın damgasını sabitler. Tablonun `call_timeout` süpürmesi,
+  External son tarihleri ve detach tutmaları sim saatinde koşar. Canlı
+  odada değişiklik yok.
+- **Tekrar CONTROL cevaplarını karşılaştırır (B175):** `Input::Join` kabulü
+  (`player`, `entity`), `Input::Release` `may_release` cevabını taşır (kayıt
+  biçimi sürüm 2); farklı cevap `replay_diverged` sayar ve tick'ini hash
+  gibi raporlar; tekrar kendi cevabıyla sürer.
+- **Bir hash (B177):** kaydeden `SimRoom` adım hash'ini kaydın aldığından
+  alır (`state_hash` adım başına bir kez).
+- **B185:** q4'ün canlı kayıt testlerinin negatif kontrolleri ilk
+  RESPONSES'u (ya da ilk sonu) seçiyordu; yalnız External cevabı taşıyan
+  bir RESPONSES dünyayı değiştirmez (cevap istemciye gider), yük altında
+  yüklemelerden önce gelince ayrışma görünmüyordu. Artık bir oyun
+  çağrısının sonunu seçerler.
+- Ertelenenler BACKLOG'da `q6:` satırları.
 
 **Faz 5 — ECS adaptörleri ve kit**
 - Çekirdek ECS'siz kalır; isteğe bağlı adaptör crate'leri

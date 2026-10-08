@@ -76,10 +76,46 @@ yeniden kurulumda aynı hata odayı emekli eder.
 `calls_received`, `calls_timed_out` (hostun süresi), `calls_shed`
 (load-shed), `calls_failed` (başka bir katman hatası), `calls_abandoned`
 (serviste panik), `replies_undeliverable_{full,gone}` ve metot başına
-`calls`/`latency_us_total`/`latency_us_max`. Bu sürümde dışa
-açılmıyorlar (Prometheus/OTLP ailesi yok — BACKLOG `q2:` satırı);
-her çağrı `gsb.call` span'inde (`service`, `method`, `trace`) koşar ve
-gecikmesini DEBUG düzeyinde yazar.
+`calls`/`latency_us_total`/`latency_us_max`. Her çağrı `gsb.call`
+span'inde (`service`, `method`, `trace`) koşar ve gecikmesini DEBUG
+düzeyinde yazar. **q6'dan (B164) beri dışa açılırlar:** sunucu oyunun
+barındırdığı servislerin istatistiklerini toplayıcıya verir
+(`MetricsCollector::with_services`; toplayıcı artık registry'den SONRA
+başlar, registry'nin erken örnekleri sınırlı kanalda bekler) ve her
+rapor onları o anki değerleriyle okur (atomik yükleme; mesaj, await
+yok). Servis kapsamlıdır, oda değil:
+
+| Yüzey | Ne |
+|---|---|
+| `gsb-metric` satırı | servis başına `scope=service name=<ad> calls_received=… calls_timed_out=… calls_shed=… calls_failed=… calls_abandoned=… replies_undeliverable_full=… replies_undeliverable_gone=…`, metot başına `scope=service_method service=<ad> method=<m> calls=… latency_us_total=… latency_us_mean=… latency_us_max=…` (taşıma satırından sonra) |
+| Prometheus / OTLP | `gsb_service_{calls_received,calls_timed_out,calls_shed,calls_failed,calls_abandoned,replies_undeliverable_full,replies_undeliverable_gone}_total{service}` (counter; her kayıp kendi sayacında) ve `gsb_service_method_calls_total{service,method}`, `gsb_service_method_latency_us_total{service,method}` (toplam µs, counter — ortalama için `calls`'a böl), `gsb_service_method_latency_us_max{service,method}` (gauge); taşıma ailelerinden sonra, oda ailelerinden önce; servis yoksa hiç yok |
+| loadgen | metrik telinde taşımadan sonra (servis adı, sayaçlar, metotlar); `RESULT`'ta `svc_<servis>_<sayaç>=` ve metot başına `svc_<servis>_<metot>_{calls,latency_us_mean,latency_us_max}=` (§3) |
+
+Yalnız `RegistryParts::service` ile barındırılan (`#[service]`)
+servisler sayılır; `add_service` ile kaydedilen el yazımı servisin
+istatistiği registry'ye gelmez (BACKLOG `q6:`).
+
+**Girdi kaydı: `[record]` (q6, B170).** `record` cargo feature'ıyla
+derlenmiş sunucuda seçilen odalar mantığa giren her girdiyi
+(docs/SERVICES.md §10.1) tick başına bir dosyaya yazar; dosya aynı oyuna
+karşı `gsb_core::determinism::Replay` ile tekrar edilir.
+
+| Anahtar | Varsayılan | Anlam |
+|---|---|---|
+| `dir` | — (zorunlu) | Kayıt dizini (yoksa kurulur; kurulamazsa `invalid [record]: …` ile başlamaz). Oda enkarnasyonu başına bir dosya: `room-<id>-<nesil>.gsblog` (panik sonrası yeniden kurulum ve yok-et/yeniden-kur yeni nesil, eski dosya ezilmez) |
+| `rooms` | yok = her oda | Kaydedilen oda id'leri; sharded oda kaydedilmez (uyarı, BACKLOG B171) |
+| `game_version` | oyunun adı | Her başlığa yazılır (tekrar aynı oyun derlemesini ister) |
+| `buffer` | 4096 | Oda başına kayıt kanalı (tick kaydı); `0` başlatmayı durdurur. Dolu kanal kaydı düşürür: `records_dropped` |
+
+Tick dosyaya dokunmaz: registry seçilen her oda kurulumuna bir
+`Recorder` ve kendi yazar iş parçacığını verir; iş parçacığı oda bitip
+kaydedici düşünce dosyayı kapatır ve günlüğe nasıl bittiğini yazar
+(`input log written`, kodeksiz sonuç varsa `input log incomplete`,
+yazma hatasında `input log writer failed` — o andan sonraki kayıtlar
+odada `records_dropped`). Feature'sız derlemede tablo başlatmayı
+`ServerError::RecordNotBuilt` ile adıyla durdurur. gsb-server'ın
+`record` feature'ı gsb-core'a ve (oyun derlenmişse) gsb-kit'e iletilir;
+kit üstündeki bir oyun `gsb-kit/record`'u açar.
 
 **Göç ve çağrılar (q5, B152).** Sharded odada göçen oyuncunun uçuştaki
 çağrıları `Migrate` ile taşınır: kaynak shard'ın satırında
@@ -1821,6 +1857,28 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   açıklaması, değerleri; histogramın kümülatif kovaları, kenarları,
   `count`/`sum`'u; summary'nin p50/p99'u OTLP ince kovalarından yeniden
   türetilir).
+
+- **q6: loadgen `RESULT`'ın çağrı, servis ve RPC anahtarları (B157,
+  B164, B161).** `game=`'den hemen önce (diğer isteğe bağlı segmentlerden
+  sonra; önceki her anahtar yerinde): odanın katlanmış `CallCounts`'u —
+  her alan kendi adıyla (`calls_issued= … records_dropped=`, oda
+  satırının anahtarları), her satırda, rapor yoksa sıfır —, sonra
+  barındırılan her servis için `svc_<servis>_<sayaç>=` (yedi
+  `ServiceCounts` alanı) ve metot başına
+  `svc_<servis>_<metot>_{calls,latency_us_mean,latency_us_max}=`
+  (servisi olmayan oyunda hiç yok; demo `Economy`/`buy`'ı taşır). Servis
+  sayaçları loadgen metrik telinde taşıma bölümünden sonra gelir (tel
+  yerleşimi değişti; sihir sayısını ana dal atar — bir sonraki boş
+  `GSNV`). RPC kipi (`--rpc-rate`) artık `gsb_client::requests`'in tipli
+  tablosu üstünde koşar: id'leri, kareleri, eşleştirmeyi, tipli çözmeyi
+  ve istemci zaman aşımını tablo yapar; defter gecikmeleri ve geç /
+  ikinci / eşleşmeyen yanıt ayrımını tutar. İki fark: istemci sınırına
+  **ulaşan** istek (eskiden: aşan) zaman aşımına uğrar, ve sınırdan sonra
+  gelen yanıt artık bir türde (`rpc_ok`, `rpc_rej_*`) sayılmaz — yalnız
+  `rpc_late`'te (tablo isteği zaten kapattı); yani `rpc_sent = Σ tür +
+  rpc_late + yanıtsız + rpc_open`. `rpc_client_to` (= yanıtsız + geç)
+  aynı anlamda. Segmentin sonuna `rpc_undecodable=` (ok/oyun hatası
+  yükü `BuyResult` olarak çözülmeyen yanıt; türsüz, gecikmesiz).
 
 ## 4. Test planı
 

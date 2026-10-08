@@ -328,7 +328,8 @@ birbirine karışmaz:
   `game=`'den hemen önce — `rpc_rate rpc_burst rpc_sent rpc_ok rpc_to
   rpc_rej_conn rpc_rej_room rpc_rej_dup rpc_rej_no_handler
   rpc_rej_malformed rpc_rej_logic rpc_client_to rpc_late rpc_open
-  rpc_dup_answers rpc_unmatched rpc_ok_p50_ms rpc_ok_p99_ms rpc_ok_max_ms`
+  rpc_dup_answers rpc_unmatched rpc_ok_p50_ms rpc_ok_p99_ms rpc_ok_max_ms
+  rpc_undecodable` (sonuncusu q6)
   (odanın `req_*` sayaçları karşılarında, her satırda zaten); modsuz
   satır ve CLIENT satırı birebir aynı. Ölçüm ve okuması:
   RPC-CONTROL-PLANE §8.2.

@@ -594,6 +594,11 @@ oyunun private mesajında aynı numara):
   yargılanmaz). İstemci tarafı zaman aşımı = yanıtsız + geç
   (`rpc_client_to`).
 
+  *(q6, B161: defter `gsb_client::requests::Requests`'in üstünde koşar;
+  sınırdan sonra gelen yanıt artık yalnız `rpc_late`'tir, türünde
+  sayılmaz; sınıra ulaşan istek zaman aşımına uğrar; yeni
+  `rpc_undecodable` — OPS §3 "q6".)*
+
 Ret nedenlerinin metinleri artık `gsb_core::rpc` sabitleridir
 (`TIMEOUT_REASON`'ın yanında `CONN_CAP_REASON`, `ROOM_CAP_REASON`,
 `DUPLICATE_REASON`, `MALFORMED_REASON`, `NO_HANDLER_PREFIX` +
@@ -612,7 +617,7 @@ isteğe bağlı segmentler gibi; modsuz satır birebir aynı, mevcut her
 anahtar yerinde): `rpc_rate rpc_burst rpc_sent rpc_ok rpc_to rpc_rej_conn
 rpc_rej_room rpc_rej_dup rpc_rej_no_handler rpc_rej_malformed
 rpc_rej_logic rpc_client_to rpc_late rpc_open rpc_dup_answers
-rpc_unmatched rpc_ok_p50_ms rpc_ok_p99_ms rpc_ok_max_ms` (gecikmeler
+rpc_unmatched rpc_ok_p50_ms rpc_ok_p99_ms rpc_ok_max_ms rpc_undecodable` (gecikmeler
 yalnız `ok` yanıtların, ham değerler üzerinden, ms). Karşılarında odanın
 kendi sayaçları her satırda zaten var (`req_ext`, `req_rej_*`,
 `req_refused`, `req_unread` — B36, §8.3 —, `req_to`, `req_late`): aynı
