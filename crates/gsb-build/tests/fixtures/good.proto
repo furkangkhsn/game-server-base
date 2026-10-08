@@ -1,10 +1,14 @@
 // The well-formed fixture: two gsb services (one error in the same
 // package, one fully qualified in another), a reserved op, and an
-// ordinary protobuf service the codegen must leave alone.
+// ordinary protobuf service the codegen must leave alone; events of
+// every destination (one nested), a file-level reserved op, and an
+// event in the imported file (its impls land in that file's module).
 syntax = "proto3";
 package fixture.good;
 import "gsb/options.proto";
 import "common.proto";
+
+option (gsb.reserved_ops) = 2099;
 
 message TransferGold { string to = 1; uint64 amount = 2; }
 message TransferDone { uint64 balance = 1; }
@@ -31,4 +35,23 @@ service Workshop {
 
 service NotOurs {
   rpc Echo(Plain) returns (Plain);
+}
+
+message GoldReceived {
+  option (gsb.event) = { op: 2001, to: WORLD };
+  uint64 amount = 1;
+}
+message ChatLine {
+  option (gsb.event) = { op: 2002, to: CLIENT };
+  string text = 1;
+}
+message BalanceChanged {
+  option (gsb.event) = { op: 2005, to: BOTH };
+  uint64 balance = 1;
+}
+message Presence {
+  message Online {
+    option (gsb.event) = { op: 2006, to: CLIENT };
+    string who = 1;
+  }
 }

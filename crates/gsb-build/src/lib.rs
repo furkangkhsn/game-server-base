@@ -1,5 +1,6 @@
 //! Build-script helper for gsb games (`docs/SERVICES.md` §4.2, §11, Faz
-//! 3): prost-build, plus the request codegen of `gsb/options.proto`.
+//! 3; `docs/EVENTS.md` §4.1): prost-build, plus the request and event
+//! codegen of `gsb/options.proto`.
 //!
 //! A game declares its client-wire requests as `rpc`s in its `.proto`:
 //!
@@ -40,6 +41,31 @@
 //! request message behind two rpcs. A service none of whose rpcs carries
 //! a gsb option is an ordinary protobuf service and left alone.
 //!
+//! Events (`docs/EVENTS.md` §4.1) are declared on the message itself:
+//!
+//! ```proto
+//! option (gsb.reserved_ops) = 2099;   // file level: retired, never reused
+//!
+//! message GoldReceived {
+//!   option (gsb.event) = { op: 2001, to: WORLD };   // WORLD | CLIENT | BOTH
+//!   uint64 amount = 1;
+//! }
+//! ```
+//!
+//! and get, at the end of their file's code:
+//!
+//! ```rust,ignore
+//! impl ::gsb_protocol::event::Event for GoldReceived { const OP: u16 = 2001; const TO: Dest = Dest::World; }
+//! impl ::gsb_protocol::event::WorldEvent for GoldReceived {}   // ClientEvent for CLIENT; both for BOTH
+//! ```
+//!
+//! Requests and events share ONE op space (the game band): an op both
+//! take is a [`Problem::DuplicateOp`], and the reserved ops
+//! (`(gsb.reserved_op)` on a service, `(gsb.reserved_ops)` on a file)
+//! close a number to both. An event is also refused for a missing `op`
+//! or `to`, an op in the engine's range or past 16 bits, and a message
+//! that is a gsb rpc's request as well (its type would have two ops).
+//!
 //! Pure Rust: the options are read from protoc's descriptor set with
 //! trimmed `descriptor.proto` mirrors (prost drops extensions), and the
 //! code is written through prost-build's own `ServiceGenerator` hook —
@@ -56,17 +82,20 @@ mod generate;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub use check::{Declared, GAME_BAND_START, Plan, Problem, check};
+pub use check::{Declared, DeclaredEvent, Destination, GAME_BAND_START, Plan, Problem, check};
 
 /// The default path of the request contract in generated code.
 pub const CONTRACT_PATH: &str = "::gsb_protocol::request";
+
+/// The default path of the event contract in generated code.
+pub const EVENT_CONTRACT_PATH: &str = "::gsb_protocol::event";
 
 /// Why a build was refused.
 #[derive(Debug)]
 pub enum Error {
     /// protoc or prost-build failed (I/O, a `.proto` syntax error …).
     Build(std::io::Error),
-    /// The requests broke a rule; every problem found.
+    /// The requests or events broke a rule; every problem found.
     Invalid(Vec<Problem>),
 }
 
@@ -75,7 +104,7 @@ impl fmt::Display for Error {
         match self {
             Error::Build(e) => write!(f, "gsb-build: {e}"),
             Error::Invalid(ps) => {
-                writeln!(f, "gsb-build: the .proto requests are invalid:")?;
+                writeln!(f, "gsb-build: the .proto requests/events are invalid:")?;
                 for p in ps {
                     writeln!(f, "  - {p}")?;
                 }
@@ -99,6 +128,7 @@ pub struct Builder {
     includes: Vec<PathBuf>,
     externs: Vec<(String, String)>,
     contract: String,
+    event_contract: String,
     out_dir: Option<PathBuf>,
 }
 
@@ -132,6 +162,7 @@ impl Builder {
             includes,
             externs: Vec::new(),
             contract: CONTRACT_PATH.to_owned(),
+            event_contract: EVENT_CONTRACT_PATH.to_owned(),
             out_dir: None,
         }
     }
@@ -159,6 +190,13 @@ impl Builder {
         self
     }
 
+    /// Where the generated impls find `Event`, `WorldEvent`,
+    /// `ClientEvent` and `Dest` (default [`EVENT_CONTRACT_PATH`]).
+    pub fn event_contract_path(&mut self, path: &str) -> &mut Self {
+        path.clone_into(&mut self.event_contract);
+        self
+    }
+
     /// Write the generated files here instead of `OUT_DIR`.
     pub fn out_dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
         let dir = dir.into();
@@ -168,8 +206,8 @@ impl Builder {
     }
 
     /// Compile `protos` (with `includes`, then the builder's own) into
-    /// prost messages plus the request impls; check the requests first.
-    /// Returns what was declared.
+    /// prost messages plus the request and event impls; check the
+    /// requests and events first. Returns what was declared.
     pub fn compile(
         &mut self,
         protos: &[impl AsRef<Path>],
@@ -189,14 +227,26 @@ impl Builder {
         let raw = std::fs::read(&fds_path)?;
         let (set, index) = check::decode(&raw).map_err(Error::Invalid)?;
         let plan = check::plan(&set, &index).map_err(Error::Invalid)?;
-        self.config
-            .service_generator(Box::new(generate::Requests::new(
-                &plan,
-                index,
-                self.externs.clone(),
-                self.contract.clone(),
-            )));
+        let files: Vec<String> = set
+            .file
+            .iter()
+            .map(|f| f.name.clone().unwrap_or_default())
+            .collect();
+        let (generator, finalized) =
+            generate::Requests::new(&plan, index, self.externs.clone(), self.contract.clone())
+                .with_events(&plan, &files, &self.event_contract);
+        self.config.service_generator(Box::new(generator));
         self.config.compile_fds(fds)?;
+        // The event impls ride prost-build's per-file `finalize` (see
+        // `generate`): fewer or more calls than files means they landed
+        // in the wrong file or not at all.
+        if finalized.get() != files.len() {
+            return Err(Error::Build(std::io::Error::other(format!(
+                "prost-build finalized {} files of {}: the event impls could not be placed",
+                finalized.get(),
+                files.len()
+            ))));
+        }
         Ok(plan)
     }
 }

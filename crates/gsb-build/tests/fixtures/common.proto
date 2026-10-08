@@ -1,3 +1,8 @@
 syntax = "proto3";
 package fixture.common;
+import "gsb/options.proto";
 message SharedError { uint32 code = 1; }
+message Announce {
+  option (gsb.event) = { op: 2010, to: CLIENT };
+  string text = 1;
+}

@@ -1,0 +1,4 @@
+syntax = "proto3";
+package fixture.bad;
+import "gsb/options.proto";
+message NoWhere { option (gsb.event) = { op: 2001, to: DESTINATION_UNSPECIFIED }; }

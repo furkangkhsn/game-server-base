@@ -1,6 +1,6 @@
 [package]
 name = "gsb-build"
-description = "Build-script helper for gsb games: prost-build plus the request codegen of `gsb/options.proto` (impl Call + Request per rpc, op checks)."
+description = "Build-script helper for gsb games: prost-build plus the request and event codegen of `gsb/options.proto` (impl Call + Request per rpc, impl Event per event, one op space checked)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

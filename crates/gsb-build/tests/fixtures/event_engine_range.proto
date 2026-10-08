@@ -1,0 +1,4 @@
+syntax = "proto3";
+package fixture.bad;
+import "gsb/options.proto";
+message Low { option (gsb.event) = { op: 17, to: CLIENT }; }

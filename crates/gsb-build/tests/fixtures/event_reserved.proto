@@ -1,0 +1,12 @@
+syntax = "proto3";
+package fixture.bad;
+import "gsb/options.proto";
+option (gsb.reserved_ops) = 1001;
+option (gsb.reserved_ops) = 2001;
+message A { } message B { } message E { }
+service S {
+  option (gsb.reserved_op) = 2002;
+  rpc One(A) returns (B) { option (gsb.op) = 1001; option (gsb.error) = "E"; }
+}
+message Retired { option (gsb.event) = { op: 2001, to: WORLD }; }
+message AlsoRetired { option (gsb.event) = { op: 2002, to: CLIENT }; }

@@ -1,8 +1,20 @@
 //! The code: prost-build's [`ServiceGenerator`] hook writes, inside the
 //! request's own package module, one `impl Call` + `impl Request` per
-//! declared rpc.
+//! declared rpc, and, at the end of each `.proto` file's code, one
+//! `impl Event` + its destination markers per declared event.
+//!
+//! Events have no service around them, so they ride the hook's per-file
+//! `finalize`: prost-build calls it once per file of the descriptor set,
+//! in the set's order, right after that file's code — the same set (and
+//! order) the plan was read from. The generator counts the calls; the
+//! builder refuses the build if the count is not the file count, so a
+//! prost-build that stopped calling it per file cannot silently drop
+//! the impls.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::rc::Rc;
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use prost_build::{Service, ServiceGenerator};
@@ -17,6 +29,11 @@ pub(crate) struct Requests {
     index: Index,
     externs: Vec<(String, String)>,
     contract: String,
+    /// Per file of the descriptor set, in its order: the event impls
+    /// `finalize` appends after that file's code.
+    events: Vec<String>,
+    /// How many times `finalize` ran (one per file).
+    finalized: Rc<Cell<usize>>,
 }
 
 impl Requests {
@@ -41,7 +58,48 @@ impl Requests {
             index,
             externs,
             contract,
+            events: Vec::new(),
+            finalized: Rc::new(Cell::new(0)),
         }
+    }
+
+    /// Also write `plan`'s events, through the contract at `contract`,
+    /// for a descriptor set whose files are `files` (in the set's
+    /// order). Returns the generator and its `finalize` counter.
+    pub(crate) fn with_events(
+        mut self,
+        plan: &Plan,
+        files: &[String],
+        contract: &str,
+    ) -> (Self, Rc<Cell<usize>>) {
+        self.events = files
+            .iter()
+            .map(|file| {
+                let mut out = String::new();
+                for e in plan.events.iter().filter(|e| &e.file == file) {
+                    let ty = self.rust_path(&e.package, &e.message);
+                    let (op, rust, proto) = (e.op, e.to.rust(), e.to.proto());
+                    let _ = write!(
+                        out,
+                        "/// gsb event `{}` (op {op}, to {proto}).\n\
+                         impl {contract}::Event for {ty} {{\n    \
+                             const OP: u16 = {op};\n    \
+                             const TO: {contract}::Dest = {contract}::Dest::{rust};\n\
+                         }}\n",
+                        e.event()
+                    );
+                    if e.to.world() {
+                        let _ = writeln!(out, "impl {contract}::WorldEvent for {ty} {{}}");
+                    }
+                    if e.to.client() {
+                        let _ = writeln!(out, "impl {contract}::ClientEvent for {ty} {{}}");
+                    }
+                }
+                out
+            })
+            .collect();
+        let counter = Rc::clone(&self.finalized);
+        (self, counter)
     }
 
     /// The Rust path of message `full` as seen from package `from`'s
@@ -165,5 +223,13 @@ impl ServiceGenerator for Requests {
                  }}\n"
             ));
         }
+    }
+
+    fn finalize(&mut self, buf: &mut String) {
+        let n = self.finalized.get();
+        if let Some(code) = self.events.get(n) {
+            buf.push_str(code);
+        }
+        self.finalized.set(n + 1);
     }
 }
