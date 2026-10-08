@@ -437,8 +437,16 @@ fn update_with_events(&mut self, w: &mut World, ctx: &TickCtx, calls: &mut Calls
 ```
 
 Sharded mantık `ShardLogic::update_seam_with_events`'i uygular. Kit
-sarmalayıcıları (`gsb-kit`) olay kancalarını henüz iletmiyor (BACKLOG
-`e2:`); ECS biçimleri e5. CLIENT olaylarını odalar hiç görmez: doğrudan
+üstündeki oyun `Game::boot_events` ve `Game::systems_with_events`'i
+(sharded yolda `ShardGame::systems_seam_with_events`) uygular; her kit
+odası onları iletir (tur e5). Oda da yayıncı olabilir (fabrikada
+`parts.publisher(..)` verilen tutamaç); tekrar için oda bağlantısız bir
+tutamaçla kurulur (`Publisher::detached(id, ad)`: itmeler hiçbir yere
+gitmez — odanın itmeleri çıktısıdır, aldığı olaylar kayıttan gelir).
+Örnek: demo ekonomisi onayladığı her satın almada alıcıya `ItemGranted`
+(BOTH) iter (`PriceList::with_publisher`, oda alıcı adına satın alır:
+`EconomyService::buy_for`); odası öğeyi alıcının varlığında sayar
+(`Granted`). CLIENT olaylarını odalar hiç görmez: doğrudan
 `FEATURE_PUSH` bildiren istemcinin bağlantısına `PUSH` karesi olarak
 gider.
 
@@ -499,8 +507,13 @@ rastgeleliği kullanır:
   (anti-cheat doğrulaması ve TEST modu karşılaştırması bunu okur).
 
 TEST modu: `SimRoom` + `Sim` (`Delay::ticks(n, ..)`, `Delay::never`),
-betikli istemciler; kayıt/tekrar: `record` özelliği, `RoomActor::with_record`,
-`Replay`.
+betikli istemciler, olaylar için `sim.publisher("bank")` (T adımından
+önceki itme T'nin EVENTS'inde; `SimRoom::deliver` canlı zamanlı koşuda);
+kayıt/tekrar: `record` özelliği, `RoomActor::with_record`, `Replay`.
+Olaylar kaydın girdisidir (`Input::Events`: tablonun aldığı, sahibiyle);
+oyunun `Publisher::push` sonucuna göre dallanması tekrarda ayrışır
+(bağlantısız tutamaç her zaman `Ok` döner) — itme çıktıdır, sonucu
+durumu değiştirmemeli.
 
 ### 4.8 ECS bağlayıcıları ve çağrı tablosu (tur q5)
 
@@ -516,6 +529,13 @@ Motor ECS'siz; ECS'li bir oyun tabloya ECS başına tek bağlayıcı crate
 - **hecs → `gsb-hecs`:** sistemler düz fonksiyon (`&mut World, &mut
   Calls, &BankClient`); aynı uzantılar ve `gsb_hecs::owner_alive`.
 - **ECS'siz:** `Owner(oyunun_id'si)`, `&mut Calls`.
+- **Olaylar (tur e5, `docs/EVENTS.md` §4.5):** bevy_ecs'te
+  `gsb_bevy_ecs::events::lend(world, events, |w| gsb_bevy_ecs::lend(w,
+  calls, |w| schedule.run(w)))`, sistemler `ResMut<GsbEvents>`; hecs'te
+  `&mut Events` düz fonksiyona, `gsb_hecs::take_for::<E, C>(world,
+  events, |c, e| ..)` olayı sahibinin bileşenine verir, kalanları (oda
+  çapı, sahipsiz) döndürür. Oda çapı olayın sahibi `Owner::ACTOR`'dur,
+  hiçbir varlık değil. Kanıt: `calls_styles.rs`'in olay senaryosu.
 - Aynı oyunun üç biçimde aynı sonucu verdiğinin kanıtı ve örnek kodu:
   `crates/gsb-conformance/tests/calls_styles.rs`.
 - **Sharded oyun:** göçen oyuncunun uçuştaki çağrıları kendiliğinden

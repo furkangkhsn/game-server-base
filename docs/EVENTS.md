@@ -366,8 +366,9 @@ pub enum PushRefused { RouterFull, RouterGone }
   parts.publisher("bank");` (ad metrik etiketi ve günlük için; id
   `PublisherId`, 0 motora ayrılmış). Servis implementasyonuna yapıcısında
   verilir; odaya `Svc<Publisher>` (bevy) ya da düz alan olarak. REPLAY'de
-  odanın tutamacı **bağlantısız** bir tutamaçtır (itmeler hiçbir yere
-  gitmez, sayılmaz — çıktı, girdi değil; `ReplayHost` istemcileri gibi).
+  odanın tutamacı **bağlantısız** bir tutamaçtır (`Publisher::detached`,
+  e5: itmeler hiçbir yere gitmez, metrikte sayılmaz — çıktı, girdi değil;
+  yalnız `PublisherStats::detached()` tutar).
 
 ### 5.2 Hedef
 
@@ -1502,6 +1503,94 @@ tasarımdan farklar ve netleştirmeler:
 **e5 — determinizm ve bağlayıcılar.** `Input::Events` (etiket 18), tekrar,
 TEST modunda `sim.publisher(..)`; `gsb-bevy-ecs::events` (`GsbEvents`,
 `lend`), `gsb-hecs`; `gsb-conformance`'a olaylı senaryo (üç biçim, aynı iz).
+
+**e5 — uygulanan biçim (2026-10-08).** Plandaki her madde girdi;
+tasarımdan farklar ve netleştirmeler:
+
+- **Kayıt (`record`):** `Input::Events(Vec<RecordedEvent>)`, dosya
+  etiketi 18 (eklemeli; `FORMAT_VERSION` 2 kaldı — q5'in 16/17 kuralı).
+  `RecordedEvent { to: Option<Identity>, owner, publisher: PublisherId,
+  seq, op, payload }` — `publisher` tasarımdaki `u32` yerine tipli
+  `PublisherId` (dosyada u64). Kaydedilen, tablonun **aldığıdır**
+  (`Events::admit` başarılı: kabul edilmiş op, çözülen gövde; sahibi
+  çözülmüş): EVENTS fazından hemen sonra, yalnız boş değilse tek girdi
+  — sıra `… RESPONSES, Events, Read …`. `no_handler`/`undecodable`/
+  `unbound`/`not_here` kayda girmez (mantığa ulaşmadılar). Shard
+  kaydetmez (B171).
+- **Tekrar:** `Replay` kendi olay tablosunu kurar (`Events::sharing_ops`
+  + `boot_events`), `Input::Events`'i kayıttaki yerinde aynı tabloya
+  koyar (yönlendirici, yayıncı, servis yok), SYSTEMS artık
+  `update_with_events`'i çağırır, tick sonu `events.end_tick()`.
+  Tekrarın almadığı kayıtlı olay (op kabul edilmemiş, gövde çözülmüyor)
+  `replay_diverged` sayılır ve tick'i hash gibi raporlanır.
+  `ReplayReport.events: EventCounts`, `Replay::event_counts()`.
+- **Bağlantısız yayıncı (E10):** `Publisher::detached(id, ad)` — itme
+  kodlanır ve boyutu denetlenir (`TooLarge` canlıdakiyle aynı), sonra
+  hiçbir yere gitmez, `Ok` döner; metrik sayılmaz (§5.1), yalnız metrik
+  olmayan `PublisherStats::detached()` sayar (testin kanıtı: oda
+  canlıdaki kadar itti, hiçbiri gitmedi). `Publisher::is_detached`.
+  Yayıncı odayı tekrar için oyun bu tutamaçla kurar.
+- **TEST modu:** `Sim::publisher(ad)` (sim'in kendi darphanesi, ad başına
+  bir id, 1'den; yönlendirici kutusu `SIM_ROUTER_CAPACITY` = 4096, dolu →
+  `RouterFull` canlıdaki gibi); `Sim::pushes()` itilen her şeyi sırayla
+  okur (test için; `Push::{publisher, target, op, dest, body}`
+  okuyucuları eklendi). `SimRoom::deliver(&mut sim)` son çağrıdan beri
+  itilen WORLD bacaklarını odanın kendi olay kutusuna yönlendirir
+  (kimlik → odanın canlı ya da parktaki üyesi; `push_room` bu oda;
+  `push_all` oda çapı; (yayıncı, alıcı) başına 1'den numara); `tick`
+  onu önce çağırır, canlı zamanlı koşu (`tick_at`) her adımdan önce.
+  T adımından önce yapılan itme (test, sahte servis, iş parçacığı, ya
+  da odanın T−1'deki kendi itmesi) T'nin EVENTS'indedir.
+  `SimRoom::event_counts()`. **Sapma:** `Delay::ticks(n)` itmeler için
+  yok (itme hep bir sonraki adımda); CLIENT bacakları TEST modunda
+  teslim edilmez (`SimClient` PUSH karesi görmez) — BACKLOG `e5:`.
+- **Kanıt** (`determinism/tests/events.rs`): TEST modunda itme tam
+  sonraki adımda, üye olmayan kimlik / başka oda / CLIENT-only olay
+  odaya ulaşmaz, alınan altın aynı adımın satın almasını öder. `record`
+  ile: iki iş parçacığı 0–8 ms titreşimle 60 olay (`push`,
+  `push_many`, `push_all`) iterken oda duvar saatinde adımlar, iki
+  istemci satın alır, oda her onaylı satın almada odaya 1 altın geri
+  öder (kendi yayıncısı, E10) — kayıt iki kez aynı hash'lere oynar,
+  tekrarda kayıtlı olay sayısı = canlıda alınan, bağlantısız tutamaç
+  canlıdaki itme sayısı kadar yuttu; negatif kontrol (ilk `Events`
+  girdisi bir tick geç) tam o tick'te ayrışır; dosyaya yazılan kayıt
+  aynı olayları geri okur ve aynı oynar; op'u değiştirilmiş kayıtlı olay
+  `replay_diverged` + `events_no_handler`, tick'i raporlanır.
+- **bevy_ecs (`gsb_bevy_ecs::events`):** `GsbEvents(Events)` kaynağı
+  (`Deref`/`DerefMut`), `events::lend(world, events, f)` — `calls`'ın
+  `lend`'i gibi iki takas; kök yeniden dışa açımı yalnız `GsbEvents`
+  (`lend` adı `calls::lend`'in). **hecs (`gsb_hecs::events`):** sistemler
+  `&mut Events` alır; `take_for::<E, C>(world, events, |c, e| ..)` olayı
+  sahibi varlığın `C` bileşenine verir, gerisini (oda çapı, varlık
+  olmayan / gitmiş / `C`'siz sahip) sırayla döndürür.
+- **Kit (B192):** `Game::boot_events`, `Game::systems_with_events`
+  (varsayılan `systems_with_calls`), `ShardGame::systems_seam_with_events`
+  (varsayılan `systems_seam_with_calls`); her kit odası (açık, AOI,
+  ışıklı AOI, PVS, takım, sharded, sharded takım, sharded uzamsal ve
+  shard yüzleri) `boot_events`/`update_with_events`/
+  `update_seam_with_events`'i iletir (`common::Io { calls, events }`).
+- **Uyum (`gsb-conformance`):** `play_events` — banka yayıncısı bob'a
+  200 altın iter, bob aynı tick 600 gönderir (500'ü varken): EVENTS
+  READ'den önce, sistemler olayı istekten önce alır, aktarım geçer;
+  sonra oda çapı 7 her cüzdana. Üç biçim (ECS'siz, bevy_ecs, hecs) aynı
+  izi verir (cüzdanlar, cevaplar, banka, `CallCounts`, `EventCounts`).
+  `Style::systems` olay tablosunu da alır; `decide` artık `Charge`
+  (tutar + onaylı altın) döner, banka bakiyeyi ondan hesaplar.
+- **Demo (B200):** ekonomi servisi (`PriceList::with_publisher`) onayladığı
+  her satın almada alıcıya `ItemGranted { kind, version }` (BOTH) iter;
+  alıcı çağrının doğrulanmış oyuncusudur — oda `EconomyService::buy_for`
+  ile oyuncunun kimliği adına satın alır (varlıktaki `Account`
+  bileşeni, katılımda `spawn_player_as`/`spawn_team_player_as` ile
+  basılır, göçle taşınır). WORLD bacağını demo odası alır ve alıcının
+  varlığında sayar (`Granted { items, version }`; eski sürüm yinelenen).
+  Sunucunun demo modülü yayıncıyı `parts.publisher("economy")` ile basar.
+  Test: `rooms/tests/grant.rs` (gerçek oda aktörü + gerçek ekonomi
+  hostu, iki satın alma → iki itme, sürüm 1, 2, `Granted` 1, 2).
+- **Sayaç / tel:** yeni metrik sayaç yok; loadgen teli, golden'ler,
+  `otlp::cross` değişmedi. Sunucu artık bir `economy` yayıncısı bastığı
+  için `scope=publisher` satırı ve `pub_economy_*` `RESULT` anahtarları
+  demo sunucusunda görünür.
+- **Kalanlar** (BACKLOG `e5:`).
 
 **e6 — istemci ve ölçüm.** `gsb_client::events` (sans-IO, boşluk
 algılama, `features` bitini AUTH'ta gönderir); loadgen sohbet/varlık
