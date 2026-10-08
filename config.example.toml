@@ -455,6 +455,24 @@ keepalive_hz = 1.0
 # call_completions = 1024
 # call_timeout_secs = 60
 
+# EVENTS (sistemin bize ittiği) — docs/EVENTS.md §6.3, §12, §20 E3.
+# Yalnız düz anahtar ([rooms.<id>] ile oda başına değil).
+#
+#   event_capacity  = her odanın (sharded oyunda her shard'ın) KENDİ
+#                     sınırlı olay kutusu: yönlendirilen WORLD bacakları
+#                     bir sonraki EVENTS fazına kadar burada bekler. Dolu
+#                     kutu bacağı kaybeder
+#                     (gsb_events_world_refused_room_full_total). Tick
+#                     başına tepe olay sayısının en az 2 katı seçin.
+#                     >= 1; varsayılan 1024.
+#   max_event_bytes = bir yayıncının itebileceği en büyük olay gövdesi
+#                     (bayt). Büyüğü tutamaçta tipli reddedilir
+#                     (PushRefused::TooLarge,
+#                     gsb_publisher_events_refused_too_large_total).
+#                     1 ..= 1 MiB − 64; varsayılan 65536.
+# event_capacity = 1024
+# max_event_bytes = 65536
+
 # ROOM SELECTION: three orthogonal axes (docs/ROADMAP.md, P2
 # "Konfigürasyon düzeltmesi" — Faz A):
 #

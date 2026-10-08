@@ -46,6 +46,7 @@ pub(in crate::report) fn shard(i: usize) -> RoomReport {
     let mut step_fine_hist = [0u64; FINE_HIST_BINS];
     step_fine_hist[[2usize, 9, 1][i]] = steps;
     RoomReport {
+        events: Default::default(),
         room: RoomId((1 << 16) + i as u64),
         steps,
         hz: [30.0, 28.0, 29.0][i],
@@ -157,12 +158,14 @@ const LATE: LogicCounter = LogicCounter::sum("late_name", "");
 
 pub(in crate::report) fn report(rooms: Vec<RoomReport>) -> MetricReport {
     MetricReport {
+        publishers: Default::default(),
         metrics_dropped: 0,
         reports_torn_at_cut_grace: 0,
         emitted_at: Instant::now(),
         rooms,
         registry: None,
         net: NetReport {
+            pushes: Default::default(),
             bytes_in: 0,
             bytes_out_room: 0,
             bytes_out_control: 0,

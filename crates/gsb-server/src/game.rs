@@ -126,6 +126,9 @@ pub struct RegistryParts {
     /// The `#[service]` implementations hosted on tower (their routes,
     /// for [`Self::client`]); their stops go into `services`.
     pub(crate) hosted: Services,
+    /// The publishing handles minted so far (`docs/EVENTS.md` §5.1; see
+    /// [`Self::publisher`]).
+    pub(crate) publishers: gsb_core::events::Publishers,
     /// What the registry records (`[record]`, feature `record`; B170).
     #[cfg(feature = "record")]
     pub(crate) record: Option<gsb_core::registry::RecordPlan>,
@@ -186,6 +189,23 @@ impl RegistryParts {
         self.hosted.try_client()
     }
 
+    /// A publishing handle named `name` (`docs/EVENTS.md` §5.1): the right
+    /// to push events — to an identity, many, a room or everyone — into
+    /// the registry's router. Hand it to a service's constructor, a room
+    /// factory, an admin task. `name` is its metric label
+    /// (`gsb_publisher_*{publisher="<name>"}`, the log's
+    /// `scope=publisher`); the same name hands back the same handle (one
+    /// id, one set of counters). Its body bound is the config's
+    /// `max_event_bytes`.
+    ///
+    /// ```ignore
+    /// let bank = parts.publisher("bank");
+    /// parts.service(Bank::serve(PgBank::new(db, bank)), |s| s)?;
+    /// ```
+    pub fn publisher(&mut self, name: &str) -> gsb_core::events::Publisher {
+        self.publishers.publisher(name)
+    }
+
     /// Register a hand-written game service for an explicit stop
     /// (BACKLOG F5, DESIGN §9.2): `ServerHandle::stop` asks it to stop
     /// only after every room and shard task has ended (their
@@ -231,6 +251,7 @@ impl RegistryParts {
             _task: task,
             services: self.services,
             service_stats: self.hosted.stats().to_vec(),
+            publisher_stats: self.publishers.sources(),
         }
     }
 }
@@ -244,6 +265,9 @@ pub struct RegistryTask {
     pub(crate) services: Vec<Service>,
     /// The hosted services' stats, for the metrics collector (B164).
     pub(crate) service_stats: Vec<(&'static str, std::sync::Arc<gsb_core::calls::ServiceStats>)>,
+    /// The publishing handles the module minted, for the metrics
+    /// collector (`docs/EVENTS.md` §9).
+    pub(crate) publisher_stats: Vec<gsb_core::events::PublisherSource>,
 }
 
 /// Errors of game selection and of the game modules themselves

@@ -6,11 +6,12 @@ use std::time::Instant;
 use gsb_core::conn::ServerClose;
 use gsb_core::id::{ConnectionId, RoomId};
 use gsb_core::metrics::{
-    CALL_COUNT, CallCounts, FINE_HIST_BINS, HIST_BINS, MetricReport, NetReport, RegistryReport,
-    RoomReport, STOP_COUNT, ServerCloses, StopCounts, TRANSPORT_COUNT, TransportCounters,
-    VerdictsLost,
+    CALL_COUNT, CallCounts, EVENT_COUNT, EventCounts, FINE_HIST_BINS, HIST_BINS, MetricReport,
+    NetReport, PUSH_COUNT, PushCounts, ROUTER_COUNT, RegistryReport, RoomReport, RouterCounts,
+    STOP_COUNT, ServerCloses, StopCounts, TRANSPORT_COUNT, TransportCounters, VerdictsLost,
 };
 
+mod events;
 mod logic;
 mod services;
 
@@ -61,6 +62,7 @@ mod services;
 ///     u64 metrics_dropped
 ///     [u64; STOP_COUNT] stop (StopCounts::fields order)
 ///     [u64; CALL_COUNT] calls (CallCounts::fields order)
+///     [u64; EVENT_COUNT] events (EventCounts::fields order)
 ///     u8 n_logic  u32 logic_dropped
 ///     per logic counter: u8 name_len  [u8; name_len] name
 ///                        u8 fold (0 = SUM, 1 = MAX)  u64 value
@@ -81,6 +83,7 @@ mod services;
 ///                [u64; ServerClose::COUNT] close_verdicts_lost
 ///                u64 leave_verdicts_lost  u64 detach_despawns_lost
 ///                u64 unauth_source_moves_kept
+///                [u64; ROUTER_COUNT] events (RouterCounts::fields order)
 ///   u64 bytes_in  u64 bytes_out_room  u64 bytes_out_control
 ///   u64 bytes_out_total  u64 frames_in  u64 frames_out
 ///   u64 actions_dropped  u64 violations  u64 input_rate_limited
@@ -91,6 +94,7 @@ mod services;
 ///   u64 requests_unprocessed  u64 actions_unprocessed
 ///   u64 control_frames_unprocessed
 ///   [u64; ServerClose::COUNT] server_closes (ServerClose::ALL order)
+///   [u64; PUSH_COUNT] pushes (PushCounts::fields order)
 ///   u32 n_top  [per entry] u64 conn_id  u64 count
 ///   [u64; TRANSPORT_COUNT] transport (TransportCounters::fields order)
 ///   u32 n_services
@@ -99,6 +103,9 @@ mod services;
 ///     u32 n_methods
 ///     per method: u32 name_len  [u8] name  u64 calls
 ///                 u64 latency_us_total  u64 latency_us_max
+///   u32 n_publishers
+///   per publisher (minting order): u32 name_len  [u8] name  u32 id
+///     [u64; PUBLISHER_COUNT] counts (PublisherCounts::fields order)
 /// ```
 ///
 /// Both directions live in this binary (the server's `--serve` mode and
@@ -311,6 +318,12 @@ mod services;
 /// `records_dropped`, at the end of `CallCounts`).
 /// GSNV = the GSNU layout plus the hosted services' counters after the
 /// transport counters (round q6, B164: `codec/services.rs`).
+/// GSNW = the GSNV layout plus the event path's counters (round e2,
+/// `docs/EVENTS.md` §9): each room's event table after its call-table
+/// counters, the router's after the registry section, the connections'
+/// PUSH frames after the server closes, and the publishing handles
+/// after the services (`codec/events.rs`). (Round e2 changed the
+/// layout; the magic below moves to GSNW when the round merges.)
 pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E56;
 
 /// Little-endian writer (the encode side of the format above).
@@ -422,6 +435,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         for (_, n) in room.calls.fields() {
             w.u64(n);
         }
+        for (_, n) in room.events.fields() {
+            w.u64(n);
+        }
         logic::encode(&mut w, &room.logic);
     }
     w.u8(match &r.registry {
@@ -455,6 +471,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(g.verdicts_lost.leaves);
         w.u64(g.verdicts_lost.detach_despawns);
         w.u64(g.unauth_source_moves_kept);
+        for (_, n) in g.events.fields() {
+            w.u64(n);
+        }
     }
     w.u64(r.net.bytes_in);
     w.u64(r.net.bytes_out_room);
@@ -479,6 +498,9 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
     for (_, n) in r.net.server_closes.iter() {
         w.u64(n);
     }
+    for (_, n) in r.net.pushes.fields() {
+        w.u64(n);
+    }
     w.u32(r.actions_dropped_top.len() as u32);
     for (conn, n) in &r.actions_dropped_top {
         w.u64(conn.0);
@@ -488,6 +510,7 @@ pub(crate) fn encode_report(r: &MetricReport) -> Vec<u8> {
         w.u64(n);
     }
     services::encode(&mut w, &r.services);
+    events::encode(&mut w, &r.publishers);
     let mut frame = Vec::with_capacity(8 + w.0.len());
     frame.extend_from_slice(&METRICS_MAGIC.to_le_bytes());
     frame.extend_from_slice(&(w.0.len() as u32).to_le_bytes());
@@ -653,6 +676,13 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
                 }
                 CallCounts::from_values(values)
             },
+            events: {
+                let mut values = [0u64; EVENT_COUNT];
+                for v in &mut values {
+                    *v = r.u64()?;
+                }
+                EventCounts::from_values(values)
+            },
             logic: logic::decode(&mut r)?,
         });
     }
@@ -690,6 +720,13 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
                 detach_despawns: r.u64()?,
             },
             unauth_source_moves_kept: r.u64()?,
+            events: {
+                let mut values = [0u64; ROUTER_COUNT];
+                for v in &mut values {
+                    *v = r.u64()?;
+                }
+                RouterCounts::from_values(values)
+            },
         }),
         0 => None,
         _ => return None,
@@ -726,6 +763,13 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         // clients authenticate locally, so a load run's ticket counts are
         // all zero; the ops surface and the exporters carry them.
         tickets: Default::default(),
+        pushes: {
+            let mut values = [0u64; PUSH_COUNT];
+            for v in &mut values {
+                *v = r.u64()?;
+            }
+            PushCounts::from_values(values)
+        },
     };
     let n_top = r.u32()?;
     let mut actions_dropped_top = Vec::with_capacity(n_top as usize);
@@ -738,6 +782,7 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
     }
     let transport = TransportCounters::from_values(values);
     let services = services::decode(&mut r)?;
+    let publishers = events::decode(&mut r)?;
     if !r.done() {
         return None;
     }
@@ -757,5 +802,6 @@ pub(crate) fn decode_report(body: &[u8]) -> Option<MetricReport> {
         actions_dropped_top,
         transport,
         services,
+        publishers,
     })
 }

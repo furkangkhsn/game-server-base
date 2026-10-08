@@ -306,6 +306,21 @@ pub struct Config {
     /// host's own 30 s deadline. `0` = off (only the service's deadline
     /// bounds a call). Finite, `>= 0`. Default 60.
     pub call_timeout_secs: f64,
+    /// **Each room's own event mailbox** (`docs/EVENTS.md` §6.3, §12) —
+    /// every hosted room's (and every shard's) `RoomConfig::event_capacity`:
+    /// the events' WORLD legs routed to the room wait in it until its
+    /// next EVENTS phase; a leg a full mailbox refuses is lost, counted
+    /// `gsb_events_world_refused_room_full_total`. Keep it at least twice
+    /// the peak events per tick. `>= 1`. Default 1024.
+    pub event_capacity: usize,
+    /// **The largest event body a publisher may push** (`docs/EVENTS.md`
+    /// §20 E3), in bytes — every publishing handle's bound: a larger
+    /// body is refused at the handle (`PushRefused::TooLarge`,
+    /// `gsb_publisher_events_refused_too_large_total`), so a publisher's
+    /// mistake never becomes a PUSH frame a client must refuse. `1 ..=`
+    /// the transports' frame bound less a PUSH header's room (1 MiB −
+    /// 64). Default 65536.
+    pub max_event_bytes: usize,
     /// **Per-room overrides** (`[rooms.<id>]`, BACKLOG B18): one room's
     /// own values for the room-level keys above (`tick_hz`,
     /// `room_control`, `conn_action`, `max_snapshot_bytes`,
@@ -808,6 +823,8 @@ impl Default for Config {
             call_share: 64,
             call_completions: 1024,
             call_timeout_secs: 60.0,
+            event_capacity: gsb_core::events::DEFAULT_EVENT_CAPACITY,
+            max_event_bytes: gsb_core::events::DEFAULT_MAX_EVENT_BYTES,
             rooms: std::collections::BTreeMap::new(),
             topology: None,
             communication: None,

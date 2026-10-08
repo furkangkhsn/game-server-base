@@ -63,6 +63,7 @@ async fn start_inner(
     cfg.check_room_keys()?;
     cfg.check_room_overrides()?;
     cfg.check_call_table()?;
+    cfg.check_events()?;
 
     // The push exporters (`[metrics]`): a table this build has no
     // exporter for, or a target the exporter refuses, refuses startup.
@@ -199,6 +200,7 @@ async fn start_inner(
         rooms_hold,
         services: Vec::new(),
         hosted: gsb_core::calls::Services::new(),
+        publishers: gsb_core::events::Publishers::new(reg_tx.clone(), cfg.max_event_bytes),
         #[cfg(feature = "record")]
         record,
     });
@@ -212,6 +214,7 @@ async fn start_inner(
             .with_transport_events(transport_rx)
             .with_exporters(exporters)
             .with_services(registry.service_stats.clone())
+            .with_publishers(registry.publisher_stats.clone())
             .run(),
     );
 

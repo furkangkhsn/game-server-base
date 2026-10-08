@@ -281,3 +281,32 @@ fn the_call_table_check_refuses_what_no_room_can_run() {
         assert!(check(text).is_ok(), "{text}");
     }
 }
+
+/// The event knobs (`docs/EVENTS.md` §12, §20 E3): `event_capacity`
+/// reaches every room (the core's default when omitted); the startup
+/// check refuses a zero mailbox and a body bound a PUSH frame could not
+/// carry.
+#[test]
+fn the_event_knobs_reach_every_room_and_are_checked() {
+    let core = RoomConfig::default();
+    let room = parse("").expect("parses").room_config(1);
+    assert_eq!(room.event_capacity, core.event_capacity);
+    let cfg = parse("event_capacity = 64").expect("parses");
+    for id in [1, 9] {
+        assert_eq!(cfg.room_config(id).event_capacity, 64);
+    }
+    let check = |text: &str| parse(text).expect("parses").check_events();
+    for text in [
+        "event_capacity = 0",
+        "max_event_bytes = 0",
+        "max_event_bytes = 1048513",
+    ] {
+        assert!(
+            matches!(check(text), Err(ServerError::BadEvents(_))),
+            "{text}"
+        );
+    }
+    for text in ["", "event_capacity = 1", "max_event_bytes = 1048512"] {
+        assert!(check(text).is_ok(), "{text}");
+    }
+}

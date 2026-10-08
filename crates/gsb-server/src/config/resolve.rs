@@ -118,6 +118,11 @@ pub enum ServerError {
     )]
     BadTickRate(f64),
 
+    /// The event knobs (`event_capacity`, `max_event_bytes`;
+    /// `docs/EVENTS.md` §12, §20 E3).
+    #[error("invalid event config: {0}")]
+    BadEvents(String),
+
     /// The call-table knobs (`call_share`, `call_completions`,
     /// `call_timeout_secs`; BACKLOG B155).
     #[error("invalid call-table config: {0}")]

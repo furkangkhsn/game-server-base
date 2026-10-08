@@ -370,6 +370,7 @@ fn the_outbound_losses_survive_the_wire() {
 fn the_control_plane_losses_survive_the_wire() {
     let mut sent = three_shards();
     sent.registry = Some(gsb_core::metrics::RegistryReport {
+        events: Default::default(),
         rooms: 1,
         conns: 2,
         rooms_created: 3,
@@ -590,6 +591,70 @@ fn the_service_counts_survive_the_wire() {
     let got = decode_report(&frame[8..]).expect("decodes");
     assert_eq!(got.services, sent.services);
     assert_eq!(got.transport, sent.transport, "its neighbour intact");
+    assert!(
+        decode_report(&frame[8..frame.len() - 1]).is_none(),
+        "a cut record"
+    );
+}
+
+/// The event path's counters (round e2) cross the wire: each room's
+/// event table in its slot (folding as a SUM), the router's after the
+/// registry section, the connections' PUSH frames after the server
+/// closes, and the publishing handles after the services; a truncated
+/// publisher record is refused.
+#[test]
+fn the_event_counts_survive_the_wire() {
+    use gsb_core::metrics::{
+        EVENT_COUNT, EventCounts, PUSH_COUNT, PublisherCounts, PublisherReport, PushCounts,
+        ROUTER_COUNT, RegistryReport, RouterCounts,
+    };
+    let numbered = |base: u64, i: usize| base + i as u64;
+    let mut sent = three_shards();
+    let mut v = [0u64; EVENT_COUNT];
+    for (i, x) in v.iter_mut().enumerate() {
+        *x = numbered(10, i);
+    }
+    sent.rooms[1].events = EventCounts::from_values(v);
+    sent.rooms[2].events.events_taken = 5;
+    let mut v = [0u64; ROUTER_COUNT];
+    for (i, x) in v.iter_mut().enumerate() {
+        *x = numbered(30, i);
+    }
+    sent.registry = Some(RegistryReport {
+        events: RouterCounts::from_values(v),
+        ..Default::default()
+    });
+    let mut v = [0u64; PUSH_COUNT];
+    for (i, x) in v.iter_mut().enumerate() {
+        *x = numbered(50, i);
+    }
+    sent.net.pushes = PushCounts::from_values(v);
+    sent.publishers = vec![
+        PublisherReport {
+            publisher: "bank".into(),
+            id: 1,
+            counts: PublisherCounts::from_values([6, 2, 0, 1]),
+        },
+        PublisherReport {
+            publisher: "chat".into(),
+            id: 2,
+            ..Default::default()
+        },
+    ];
+    let frame = encode_report(&sent);
+    let got = decode_report(&frame[8..]).expect("decodes");
+    for (a, b) in sent.rooms.iter().zip(&got.rooms) {
+        assert_eq!(a.events, b.events);
+    }
+    assert_eq!(
+        got.registry.map(|g| g.events),
+        sent.registry.map(|g| g.events)
+    );
+    assert_eq!(got.net.pushes, sent.net.pushes);
+    assert_eq!(got.publishers, sent.publishers);
+    assert_eq!(got.services, sent.services, "its neighbour intact");
+    let folded = fold_rooms(&sent).expect("three rows");
+    assert_eq!(folded.events.events_taken, 14 + 5, "summed over rows");
     assert!(
         decode_report(&frame[8..frame.len() - 1]).is_none(),
         "a cut record"

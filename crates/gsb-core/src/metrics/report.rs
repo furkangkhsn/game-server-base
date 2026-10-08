@@ -165,7 +165,7 @@ pub struct RoomReport {
 }
 
 /// Registry slice of a report (latest gauges + cumulative counters).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RegistryReport {
     pub rooms: u32,
     pub conns: u32,

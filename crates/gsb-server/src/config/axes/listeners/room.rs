@@ -47,6 +47,11 @@ pub(crate) struct GameDefaults {
     pub(crate) afk_action: AfkAction,
 }
 
+/// What a PUSH frame adds around an event body (the opcode, the `Push`
+/// fields' tags and varints), with room to spare: `max_event_bytes` may
+/// not come closer than this to the transports' frame bound.
+const PUSH_HEADER_ROOM: usize = 64;
+
 impl RoomTemplate {
     /// Room `id` of this server: the server's room, with the id's
     /// overrides (if any) laid over it.
@@ -93,6 +98,7 @@ impl Config {
             call_completions: self.call_completions,
             call_timeout: (self.call_timeout_secs > 0.0)
                 .then(|| std::time::Duration::from_secs_f64(self.call_timeout_secs)),
+            event_capacity: self.event_capacity,
             ..RoomConfig::default()
         };
         RoomTemplate {
@@ -139,6 +145,27 @@ impl Config {
             return Err(ServerError::BadCallTable(format!(
                 "`call_timeout_secs` {} must be finite and >= 0 (0 = off)",
                 self.call_timeout_secs
+            )));
+        }
+        Ok(())
+    }
+
+    /// Refuse, before anything binds, event knobs nothing can run with
+    /// (`docs/EVENTS.md` §12, §20 E3): a zero `event_capacity` (a room
+    /// that refuses every event), a zero `max_event_bytes`, or one a PUSH
+    /// frame could not carry within the transports' frame bound.
+    pub(crate) fn check_events(&self) -> Result<(), ServerError> {
+        if self.event_capacity == 0 {
+            return Err(ServerError::BadEvents(
+                "`event_capacity` must be >= 1 (0 would refuse every event)".into(),
+            ));
+        }
+        let ceiling = gsb_net::tcp::DEFAULT_MAX_FRAME_BYTES - PUSH_HEADER_ROOM;
+        if self.max_event_bytes == 0 || self.max_event_bytes > ceiling {
+            return Err(ServerError::BadEvents(format!(
+                "`max_event_bytes` {} must be 1..={ceiling} (a PUSH frame carries the body \
+                 plus a small header within the transports' frame bound)",
+                self.max_event_bytes
             )));
         }
         Ok(())
