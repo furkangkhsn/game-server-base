@@ -63,6 +63,7 @@ impl super::ConnectionActor {
             m_actions_unprocessed: 0,
             m_control_frames_unprocessed: 0,
             m_input_limited: 0,
+            m_pushes: Default::default(),
             m_input_limited_warned: false,
             input: Default::default(),
             v_score: 0,
@@ -202,6 +203,13 @@ impl super::ConnectionActor {
                 ConnIn::LeftRoom { room } => self.on_left_room(room),
                 ConnIn::Path(state) => self.on_path(state),
                 ConnIn::PeerChanged { peer } => self.on_peer_changed(peer).await,
+                ConnIn::Push {
+                    publisher,
+                    stream,
+                    seq,
+                    op,
+                    body,
+                } => self.on_push(publisher, stream, seq, op, body),
                 ConnIn::Shutdown => {
                     // The server is stopping: a best-effort ERROR 14
                     // that never waits on the client, then the end.

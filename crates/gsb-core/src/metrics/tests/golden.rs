@@ -151,6 +151,7 @@ pub(super) fn golden_report() -> MetricReport {
     let mut acc = MetricAccumulator::default().with_services(golden_services());
     let t0 = Instant::now();
     acc.apply(MetricsEvent::Registry(RegistrySample {
+        events: Default::default(),
         rooms: 2,
         conns: 3,
         rooms_created: 2,
@@ -281,6 +282,7 @@ pub(super) fn golden_report() -> MetricReport {
     b.calls.records_written = 3;
     acc.apply(MetricsEvent::Room(b));
     acc.apply(MetricsEvent::Conn(ConnSample {
+        pushes: Default::default(),
         conn: ConnectionId(1),
         bytes_in: 400,
         bytes_out: 60,
@@ -306,6 +308,7 @@ pub(super) fn golden_report() -> MetricReport {
         tickets: Default::default(),
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
+        pushes: Default::default(),
         conn: ConnectionId(2),
         bytes_in: 10,
         bytes_out: 0,

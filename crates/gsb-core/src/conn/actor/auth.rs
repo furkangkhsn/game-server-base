@@ -148,7 +148,11 @@ impl super::ConnectionActor {
                     // like every other fire-and-forget notice.
                     let _ = self
                         .registry
-                        .send(RegistryMsg::Authed { conn: self.conn })
+                        .send(RegistryMsg::Authed {
+                            conn: self.conn,
+                            identity: self.identity.clone(),
+                            features: auth.features,
+                        })
                         .await;
                     debug!(%self.conn, player = %v.player, room = %v.room, "ticket authenticated");
                     let _ = self
@@ -200,15 +204,20 @@ impl super::ConnectionActor {
             return;
         }
         self.authenticated();
+        // Local-auth path: the name IS the resume key (demo and
+        // testing only — RECONNECT §4: on this path nothing
+        // authoritative stands behind the name) — and the key events
+        // are routed by.
+        self.identity = auth.name.clone();
         // §4: same unauthenticated-pool notice as the ticket path.
         let _ = self
             .registry
-            .send(RegistryMsg::Authed { conn: self.conn })
+            .send(RegistryMsg::Authed {
+                conn: self.conn,
+                identity: self.identity.clone(),
+                features: auth.features,
+            })
             .await;
-        // Local-auth path: the name IS the resume key (demo and
-        // testing only — RECONNECT §4: on this path nothing
-        // authoritative stands behind the name).
-        self.identity = auth.name.clone();
         debug!(%self.conn, name = %auth.name, "authenticated");
         let _ = self
             .send_frame(

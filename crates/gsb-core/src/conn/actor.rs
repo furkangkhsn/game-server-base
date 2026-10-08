@@ -26,6 +26,7 @@ mod input;
 mod lifecycle;
 mod path;
 mod peer;
+mod push;
 mod room;
 mod unprocessed;
 mod violation;
@@ -107,6 +108,9 @@ pub struct ConnectionActor {
     /// volume"). Its own counter, NOT a violation (see
     /// `ConnSample::input_rate_limited`).
     m_input_limited: u64,
+    /// This session's `PUSH` frames (events' CLIENT legs), delta since
+    /// the last flush (`docs/EVENTS.md` §9).
+    m_pushes: crate::metrics::PushCounts,
     /// Warned once about rate-limited input (the count is in the samples).
     m_input_limited_warned: bool,
     /// The input rate limit of the room joined last, over this

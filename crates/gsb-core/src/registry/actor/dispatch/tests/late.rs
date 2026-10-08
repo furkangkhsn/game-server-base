@@ -60,7 +60,7 @@ async fn a_slow_shard_s_acceptance_is_the_join_not_a_fresh_one() {
     // A fresh join from here on would be refused, not wait forever.
     home.close();
     let outcome = task.await.expect("the dispatcher's resume");
-    let OpOutcome::Joined(entity, actions) = outcome else {
+    let OpOutcome::Joined(entity, actions, _) = outcome else {
         panic!("the slow shard's acceptance is the join");
     };
     assert_eq!(entity, 7, "the parked entity, rebound");
@@ -100,7 +100,7 @@ async fn a_slow_miss_falls_back_after_the_last_answer() {
     }
     let outcome = task.await.expect("the dispatcher's resume");
     assert!(
-        matches!(outcome, OpOutcome::Joined(9, _)),
+        matches!(outcome, OpOutcome::Joined(9, _, _)),
         "the fresh join on the home shard"
     );
 }

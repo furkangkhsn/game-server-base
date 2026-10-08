@@ -8,6 +8,7 @@ use crate::conn::ServerClose;
 
 fn final_sample(conn: u64, server_close: Option<ServerClose>) -> ConnSample {
     ConnSample {
+        pushes: Default::default(),
         conn: ConnectionId(conn),
         bytes_in: 0,
         bytes_out: 0,

@@ -524,6 +524,46 @@ pub trait GameLogic<W>: Send {
         self.update(world, ctx);
     }
 
+    /// Boot: register the events this logic takes through the actor's
+    /// event table (`events.accept::<E>()` — `docs/EVENTS.md` §4.3).
+    /// Called once, when the actor is built, right after
+    /// [`Self::boot_calls`]: requests and events share one op space, so
+    /// an event claiming a request's op (or another event's) is a
+    /// [`BootError`](crate::calls::BootError), which refuses the room
+    /// like a call table that did not boot.
+    ///
+    /// Default: nothing taken — a WORLD leg routed here is counted
+    /// `events_no_handler`.
+    fn boot_events(
+        &mut self,
+        _events: &mut crate::events::Events,
+    ) -> Result<(), crate::calls::BootError> {
+        Ok(())
+    }
+
+    /// Phase 3 — [`Self::update_with_calls`] with the actor's event table
+    /// too ([`crate::events::Events`]): take this tick's events
+    /// (`events.take::<E>()`, `take_all()`), filled by the EVENTS phase
+    /// (between RESPONSES and READ, so a system that takes events before
+    /// requests sees this tick's input against the freshest world —
+    /// `docs/EVENTS.md` §3.1). What nobody took is dropped at the end of
+    /// the tick and counted (`events_untaken`). The room actor calls
+    /// THIS (a sharded logic overrides
+    /// [`ShardLogic::update_seam_with_events`](crate::shard::ShardLogic::update_seam_with_events)
+    /// instead).
+    ///
+    /// Default: [`Self::update_with_calls`] — a logic that takes no
+    /// events is unchanged.
+    fn update_with_events(
+        &mut self,
+        world: &mut W,
+        ctx: &TickCtx,
+        calls: &mut crate::calls::Calls,
+        _events: &mut crate::events::Events,
+    ) {
+        self.update_with_calls(world, ctx, calls);
+    }
+
     /// The owner a session's table requests are bound to
     /// ([`Incoming::owner`](crate::calls::Incoming::owner)): asked at
     /// READ for every request of a claimed op whose session the game did

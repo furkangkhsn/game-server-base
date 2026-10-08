@@ -378,7 +378,7 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
         .await
         .expect("timed out")
     {
-        Some(RegistryMsg::Authed { conn }) => assert_eq!(conn, ConnectionId(3)),
+        Some(RegistryMsg::Authed { conn, .. }) => assert_eq!(conn, ConnectionId(3)),
         other => panic!("expected RegistryMsg::Authed, got {other:?}"),
     }
     // …and auth success restarts the throttle's clock exactly once: the
@@ -736,9 +736,13 @@ async fn open_conn(tx: &mpsc::Sender<RegistryMsg>, conn: ConnectionId) -> mpsc::
 }
 
 async fn mark_authed(tx: &mpsc::Sender<RegistryMsg>, conn: ConnectionId) {
-    tx.send(RegistryMsg::Authed { conn })
-        .await
-        .expect("registry gone");
+    tx.send(RegistryMsg::Authed {
+        conn,
+        identity: String::new(),
+        features: 0,
+    })
+    .await
+    .expect("registry gone");
 }
 
 async fn spawn_as(

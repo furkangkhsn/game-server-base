@@ -114,6 +114,26 @@ pub enum BootError {
         /// The type that claimed it.
         ty: &'static str,
     },
+    /// An event type claims an op another event type, or a request type
+    /// of the call table, already claims (one op space for requests and
+    /// events, `docs/EVENTS.md` §4.1; `Events::accept`).
+    EventOpCollision {
+        /// The opcode.
+        op: u16,
+        /// The type that claimed it first.
+        first: &'static str,
+        /// The event type that claimed it second.
+        second: &'static str,
+    },
+    /// An event type claims an op in the engine's band (`op < 1000`): the
+    /// build refuses it for a `.proto` event; this catches a hand-written
+    /// `impl Event`.
+    EventEngineOp {
+        /// The opcode.
+        op: u16,
+        /// The event type that claimed it.
+        ty: &'static str,
+    },
 }
 
 impl std::fmt::Display for BootError {
@@ -128,6 +148,15 @@ impl std::fmt::Display for BootError {
             BootError::EngineOp { op, ty } => write!(
                 f,
                 "request op {op} of {ty} is in the engine band (< {})",
+                gsb_protocol::op::GAME_BAND_START
+            ),
+            BootError::EventOpCollision { op, first, second } => write!(
+                f,
+                "event op {op:#06x} of {second} is already claimed by {first}"
+            ),
+            BootError::EventEngineOp { op, ty } => write!(
+                f,
+                "event op {op} of {ty} is in the engine band (< {})",
                 gsb_protocol::op::GAME_BAND_START
             ),
         }

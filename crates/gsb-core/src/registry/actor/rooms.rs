@@ -81,6 +81,7 @@ where
                 if let Some(e) = actor.boot_error() {
                     return Err(e.clone());
                 }
+                let events = vec![actor.event_mailbox()];
                 // The input log (feature `record`, B170): this
                 // incarnation's own file.
                 #[cfg(feature = "record")]
@@ -103,6 +104,7 @@ where
                     RoomEntry {
                         control: Some(control_tx),
                         shards: None,
+                        events,
                         config,
                         generation,
                     },
@@ -203,6 +205,8 @@ where
                 if let Some(e) = actors.iter().find_map(|a| a.boot_error()) {
                     return Err(e.clone());
                 }
+                // Each shard's own event mailbox, by shard index.
+                let events = actors.iter().map(|a| a.event_mailbox()).collect();
                 for (i, actor) in actors.into_iter().enumerate() {
                     let handle = tokio::spawn(actor.run());
                     Self::spawn_room_watcher(
@@ -227,6 +231,7 @@ where
                             pending: 0,
                             teams: TeamHub::default(),
                         }),
+                        events,
                         config,
                         generation,
                     },

@@ -37,6 +37,7 @@ fn accumulator_applies_events_and_computes_rates() {
     let t0 = Instant::now();
 
     let room0 = RoomSample {
+        events: Default::default(),
         room: RoomId(1),
         emit_at: t0,
         steps: 30,
@@ -116,6 +117,7 @@ fn accumulator_applies_events_and_computes_rates() {
     };
     acc.apply(MetricsEvent::Room(room0));
     acc.apply(MetricsEvent::Registry(RegistrySample {
+        events: Default::default(),
         rooms: 1,
         conns: 3,
         rooms_created: 1,
@@ -135,6 +137,7 @@ fn accumulator_applies_events_and_computes_rates() {
         unauth_source_moves_kept: 0,
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
+        pushes: Default::default(),
         conn: ConnectionId(1),
         bytes_in: 100,
         bytes_out: 20,
@@ -180,6 +183,7 @@ fn accumulator_applies_events_and_computes_rates() {
         ..room0
     }));
     acc.apply(MetricsEvent::Conn(ConnSample {
+        pushes: Default::default(),
         conn: ConnectionId(1),
         bytes_in: 50,
         bytes_out: 10,
@@ -278,6 +282,7 @@ fn accumulator_applies_events_and_computes_rates() {
 /// zero except `steps`).
 pub(in crate::metrics) fn room_sample(room: RoomId, emit_at: Instant, steps: u64) -> RoomSample {
     RoomSample {
+        events: Default::default(),
         room,
         emit_at,
         steps,

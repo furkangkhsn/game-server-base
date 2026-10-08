@@ -52,6 +52,7 @@ fn a_room_ended_uncounted_is_counted_and_its_row_goes() {
     let mut acc = MetricAccumulator::default();
     let t = Instant::now();
     acc.apply(MetricsEvent::Registry(RegistrySample {
+        events: Default::default(),
         rooms: 0,
         conns: 0,
         rooms_created: 1,

@@ -68,6 +68,19 @@ where
 
         self.phase_idle_sweep(t.at);
 
+        // -- Phase 0e — EVENTS (`docs/EVENTS.md` §3): the room's OWN event
+        //    mailbox into the table, after every CONTROL-side change of
+        //    membership (joins, leaves, the hold and idle sweeps) and
+        //    before READ — so a system that takes events before requests
+        //    checks this tick's input against them. Quiet: one empty
+        //    `try_recv`.
+        {
+            let logic = &self.logic;
+            let world = &self.world;
+            self.events
+                .drain(&self.conns, &self.calls, &|p| logic.call_owner(world, p));
+        }
+
         let mut actions = self.phase_read(t.at);
 
         // -- The tick context is built HERE, after every phase that
@@ -139,8 +152,12 @@ where
         //    RESPONSES).
         #[cfg(feature = "record")]
         self.calls.note(|| crate::determinism::Input::Systems);
-        self.logic
-            .update_with_calls(&mut self.world, &ctx, &mut self.calls);
+        self.logic.update_with_events(
+            &mut self.world,
+            &ctx,
+            &mut self.calls,
+            &mut self.events.table,
+        );
         self.calls.flush();
 
         // -- Phase 3b — KICK (E8): the kicks this tick's input and
@@ -172,6 +189,7 @@ where
         #[cfg(feature = "record")]
         self.calls.note(|| crate::determinism::Input::EndTick);
         parts!(self).end_tick();
+        self.events.end_tick();
         self.broadcast_phase(&ctx);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
         // hand the clock back to the actor, then apply what the

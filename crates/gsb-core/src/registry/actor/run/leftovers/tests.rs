@@ -46,6 +46,7 @@ fn registry(
     reg.rooms.insert(
         RoomId(5),
         RoomEntry {
+            events: Default::default(),
             control: None,
             shards: Some(ShardGroup {
                 mailboxes,
@@ -139,6 +140,7 @@ async fn what_waits_behind_the_shutdown_is_counted_by_kind() {
     queue(
         &tx,
         RegistryMsg::SpawnDone {
+            shard: Default::default(),
             conn: c1,
             room: RoomId(5),
             entity: 1,

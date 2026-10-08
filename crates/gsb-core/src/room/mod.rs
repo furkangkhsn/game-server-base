@@ -98,7 +98,7 @@ pub use idle::IdleView;
 pub(crate) use kick::kick_close;
 pub use kick::{KICK_REASON_MAX_BYTES, Kick, KickQueue, Kicks, kick_message};
 pub use logic::{GameLogic, RoomLogic};
-pub(crate) use requests::{Parts, parts, table as call_table};
+pub(crate) use requests::{Parts, event_inbound, parts, table as call_table};
 pub(crate) use stop::{Held, send_final, send_verdicts_lost};
 pub(crate) use takeover::live_session;
 pub(crate) use unread::{Unread, drop_unread};

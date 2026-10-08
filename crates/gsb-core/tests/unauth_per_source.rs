@@ -145,6 +145,8 @@ async fn a_place_comes_back_on_auth_and_on_close_not_on_a_failed_auth() {
     // AUTH success: a1 leaves the count.
     tx.send(RegistryMsg::Authed {
         conn: ConnectionId(1),
+        identity: String::new(),
+        features: 0,
     })
     .await
     .expect("registry alive");

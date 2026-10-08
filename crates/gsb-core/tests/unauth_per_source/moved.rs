@@ -92,6 +92,8 @@ async fn a_move_into_a_full_source_keeps_its_count_where_it_was() {
     // Once the new source has room, the next move takes the count along.
     tx.send(RegistryMsg::Authed {
         conn: ConnectionId(2),
+        identity: String::new(),
+        features: 0,
     })
     .await
     .expect("registry alive");
@@ -113,6 +115,8 @@ async fn an_authenticated_session_moves_freely() {
     assert_eq!(verdict(&tx, &mut b).await, None);
     tx.send(RegistryMsg::Authed {
         conn: ConnectionId(1),
+        identity: String::new(),
+        features: 0,
     })
     .await
     .expect("registry alive");

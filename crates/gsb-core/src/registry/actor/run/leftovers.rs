@@ -19,6 +19,8 @@
 //! - a join (`SpawnPlayer`, resume attempts included): never handled; its
 //!   reply drops and the connection answers its client `ERROR` "registry
 //!   unavailable" — counted, `joins_unread`;
+//! - a push (`Push`): its publisher saw it taken, nothing routed it —
+//!   counted, `events_unread` (the router's counters);
 //! - a connection opened behind the stop (`ConnOpened`; the server's own
 //!   stop closes its doors first, F41, so only a library caller can get
 //!   one here): told to stop like every registered connection — nothing
@@ -95,6 +97,9 @@ where
                 RegistryMsg::CloseConn(req) => lost.close(req.cause),
                 RegistryMsg::LeaveConn(_) => lost.leaves += 1,
                 RegistryMsg::DetachDespawned { .. } => lost.detach_despawns += 1,
+                // A push the publisher saw taken, never routed: every leg
+                // of it lost at once (`docs/EVENTS.md` §9).
+                RegistryMsg::Push(_) => self.routes.count_unread(),
                 // No match-all arm: a new message kind must be decided
                 // here.
                 RegistryMsg::CreateRoom { .. }

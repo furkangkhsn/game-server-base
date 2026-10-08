@@ -104,6 +104,7 @@ mod accumulator;
 mod calls;
 mod closes;
 mod collector;
+mod events;
 mod export;
 mod logic;
 mod render;
@@ -122,6 +123,10 @@ pub use accumulator::MetricAccumulator;
 pub use calls::{CALL_COUNT, CallCounts};
 pub use closes::ServerCloses;
 pub use collector::{CUT_GRACE, FINAL_REPORT_GRACE, MetricSink, MetricsCollector};
+pub use events::{
+    EVENT_COUNT, EventCounts, PUBLISHER_COUNT, PUSH_COUNT, PublisherCounts, PublisherReport,
+    PushCounts, ROUTER_COUNT, RouterCounts,
+};
 pub use export::Exporter;
 #[cfg(feature = "otlp")]
 pub use export::otlp;

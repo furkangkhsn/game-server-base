@@ -77,6 +77,8 @@ where
             .seed
             .unwrap_or_else(|| crate::determinism::fresh_seed(config.id.0));
         let (calls, boot_error) = call_table(&config, config.id.0, seed, &mut *logic);
+        let (events, events_boot) = crate::room::event_inbound(&config, &calls, &mut *logic);
+        let boot_error = boot_error.or(events_boot);
         Self {
             config,
             world,
@@ -109,6 +111,7 @@ where
             m: RoomCounters::default(),
             metrics,
             calls,
+            events,
             boot_error,
             queued: HashMap::new(),
             replies_buf: Vec::new(),
@@ -137,6 +140,13 @@ where
     pub fn with_registry(mut self, registry: Mailbox<crate::registry::RegistryMsg>) -> Self {
         self.registry = Some(registry);
         self
+    }
+
+    /// The room's own event mailbox (`docs/EVENTS.md` §6.3): where the
+    /// router sends the WORLD legs addressed to its members or to the
+    /// room. Closes when the room ends.
+    pub(crate) fn event_mailbox(&self) -> Mailbox<crate::events::EventIn> {
+        self.events.mailbox()
     }
 
     /// Run until the ticker channel closes or a control `Shutdown` is

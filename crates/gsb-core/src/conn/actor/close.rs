@@ -145,6 +145,8 @@ impl super::ConnectionActor {
                 // A frame looked through is never processed: counted
                 // (B60), like the ones `abandon_inbox` finds after it.
                 ConnIn::Frame(frame) => self.count_unprocessed(frame.op),
+                // A CLIENT leg looked through is never written (B32).
+                ConnIn::Push { .. } => self.m_pushes.pushes_dropped_unread += 1,
                 ConnIn::RoomGone(_)
                 | ConnIn::LeftRoom { .. }
                 | ConnIn::Path(_)

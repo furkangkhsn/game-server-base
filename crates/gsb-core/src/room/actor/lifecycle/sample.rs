@@ -98,6 +98,7 @@ where
             metrics_dropped: self.m.metrics_dropped,
             stop: self.m.stop,
             calls: *self.calls.counts(),
+            events: self.events.counts(),
             logic: self.logic_counters(),
         }
     }

@@ -13,6 +13,7 @@ use super::*;
 /// A connection's final flush with `frames_in` frames counted.
 fn conn_final(conn: u64, frames_in: u64) -> ConnSample {
     ConnSample {
+        pushes: Default::default(),
         conn: ConnectionId(conn),
         bytes_in: 0,
         bytes_out: 0,

@@ -86,25 +86,27 @@ where
                     inbox,
                     source,
                 } => self.on_conn_opened(conn, inbox, source).await,
-                RegistryMsg::Authed { conn } => {
+                RegistryMsg::Authed {
+                    conn,
+                    identity,
+                    features,
+                } => {
                     // The connection finished AUTH: it leaves the
                     // unauthenticated pool (§4), freeing cap space for a
-                    // new open. An absent entry means the connection was
-                    // rejected at a cap or closed before authenticating —
-                    // nothing to mark.
-                    match self.conns.get_mut(&conn) {
-                        Some(info) => {
-                            info.authed = true;
-                            debug!(
-                                %conn,
-                                "connection authenticated; leaves the unauthenticated pool"
-                            );
-                        }
-                        None => {
-                            debug!(%conn, "auth notice for an unregistered connection");
-                        }
+                    // new open — and its identity becomes routable for
+                    // events (`docs/EVENTS.md` §6.1). An absent entry
+                    // means the connection was rejected at a cap or
+                    // closed before authenticating — nothing to mark.
+                    if self.on_authed(conn, identity, features) {
+                        debug!(
+                            %conn,
+                            "connection authenticated; leaves the unauthenticated pool"
+                        );
+                    } else {
+                        debug!(%conn, "auth notice for an unregistered connection");
                     }
                 }
+                RegistryMsg::Push(push) => self.on_push(push),
                 RegistryMsg::ConnPeerChanged { conn, source } => {
                     self.on_conn_peer_changed(conn, source)
                 }
@@ -115,8 +117,12 @@ where
                     conn,
                     room,
                     entity,
+                    shard,
                     generation,
-                } => self.on_spawn_done(conn, room, entity, generation).await,
+                } => {
+                    self.on_spawn_done(conn, room, entity, shard, generation)
+                        .await
+                }
                 RegistryMsg::SpawnFailed {
                     conn,
                     room,
@@ -182,7 +188,7 @@ where
                         .get(&conn)
                         .is_some_and(|i| i.detached && i.room == Some(room));
                     if released {
-                        self.conns.remove(&conn);
+                        self.release_row(conn);
                         // The detached row was carrying this member (a
                         // detach deliberately does NOT decrement, §4), so
                         // the release hands the count back — the same

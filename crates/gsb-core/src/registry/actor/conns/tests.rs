@@ -105,8 +105,9 @@ async fn a_gone_dispatcher_s_close_detaches_from_the_table() {
             conn: c,
             room: r,
             entity: e,
+            shard,
             generation,
-        })) => reg.on_spawn_done(c, r, e, generation).await,
+        })) => reg.on_spawn_done(c, r, e, shard, generation).await,
         other => panic!("expected the join's settlement, got {other:?}"),
     }
 

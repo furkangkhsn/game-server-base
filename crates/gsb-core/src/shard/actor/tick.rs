@@ -129,6 +129,16 @@ where
         self.phase_detach_sweep();
 
         self.phase_idle_sweep(t.at);
+        // -- Phase 0e — EVENTS (`docs/EVENTS.md` §3; the room actor's
+        //    phase, the same shared code — `crate::events::Inbound`).
+        //    Until round e3's fence, a leg routed here for a member that
+        //    has since migrated away is `events_world_not_here`.
+        {
+            let logic = &self.logic;
+            let world = &self.world;
+            self.events
+                .drain(&self.conns, &self.calls, &|p| logic.call_owner(world, p));
+        }
         // -- Phase 1 — READ (the room's bounded pull: per-connection
         //    fairness budget + shard-level pull budget).
         let per_conn = self.config.max_actions_per_conn_per_tick;
@@ -266,11 +276,12 @@ where
         crate::room::parts!(self).handle(&requests, &mut *self.logic, &mut self.world, &ctx);
         // -- Phase 3 — SYSTEMS (same view), with the call table; then
         //    FLUSH: this tick's calls leave in issue order.
-        self.logic.update_seam_with_calls(
+        self.logic.update_seam_with_events(
             &mut self.world,
             &ctx,
             &mut self.effects.seam(&self.border, &self.lenders),
             &mut self.calls,
+            &mut self.events.table,
         );
         self.calls.flush();
         // -- Phase 3b — EFFECTS OUT: what the hooks emitted (and what
@@ -312,6 +323,7 @@ where
         //    First the call table closes what nobody took or answered
         //    this tick (the engine's answers ride this broadcast).
         crate::room::parts!(self).end_tick();
+        self.events.end_tick();
         self.broadcast_phase(&ctx, &borrowed);
         // The lend is over (NLL ends `ctx`'s borrow at its last use);
         // hand the clock back to the actor, then apply what the TEAMS

@@ -50,6 +50,11 @@ impl super::ConnectionActor {
                 self.count_unprocessed(frame.op);
                 continue;
             }
+            // An event's CLIENT leg the session ended before writing.
+            if let ConnIn::Push { .. } = &msg {
+                self.m_pushes.pushes_dropped_unread += 1;
+                continue;
+            }
             let Some(verdict) = msg.verdict() else {
                 continue;
             };

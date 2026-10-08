@@ -192,6 +192,17 @@ pub struct RoomConfig {
     ///
     /// Default 60 s ([`crate::calls::DEFAULT_CALL_TIMEOUT`]).
     pub call_timeout: Option<Duration>,
+    /// The room's own bounded event mailbox (`docs/EVENTS.md` §6.3, §12):
+    /// the WORLD legs routed here wait in it until the next EVENTS phase
+    /// drains it (at most one mailbox's worth per tick). A sharded room
+    /// gives every shard one of this size. A leg a full mailbox refuses
+    /// is lost, counted at the router (`events_world_refused_room_full`):
+    /// keep it at least twice the peak events per tick. It is the
+    /// room's, not a session's — a client flooding its own input cannot
+    /// crowd its events out.
+    ///
+    /// Default 1024 ([`crate::events::DEFAULT_EVENT_CAPACITY`]).
+    pub event_capacity: usize,
     /// The room's seed (`docs/SERVICES.md` §10.1): the generator its
     /// logic draws from ([`TickCtx::rng`](crate::room::TickCtx::rng)) and
     /// its call-key origin (`mix(seed ^ mix(room))`) both derive from it,
@@ -351,6 +362,7 @@ impl Default for RoomConfig {
             call_share: 64,
             call_completions: 1024,
             call_timeout: Some(crate::calls::DEFAULT_CALL_TIMEOUT),
+            event_capacity: crate::events::DEFAULT_EVENT_CAPACITY,
             seed: None,
             restart_on_panic: false,
             persistent: false,

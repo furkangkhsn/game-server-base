@@ -55,7 +55,16 @@ where
         // not exist yet (ConnOpened races nothing: the accept
         // loop sends ConnOpened before any client frame), so
         // create-on-demand like the cap check does.
-        self.conns.entry(conn).or_default().identity = identity.clone();
+        // The identity index (event routing) follows the row's key.
+        let info = self.conns.entry(conn).or_default();
+        let old = std::mem::replace(&mut info.identity, identity.clone());
+        crate::registry::actor::events::reindex(
+            &mut self.ids,
+            &mut self.routes,
+            conn,
+            &old,
+            &identity,
+        );
         let sharded_room = entry.shards.is_some();
         // The room's input rate limit rides the join to its Seat (one
         // stamp for both room shapes and both join paths).

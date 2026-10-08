@@ -70,7 +70,7 @@ where
                     .is_ok()
             }
         };
-        Self::settle(sent, joined_rx).await
+        Self::settle(sent, joined_rx, shard).await
     }
 
     /// Fold one join round trip's send and reply: a refused send never
@@ -79,12 +79,13 @@ where
     async fn settle(
         sent: bool,
         reply: oneshot::Receiver<Result<(EntityId, Mailbox<Action>), CoreError>>,
+        shard: Option<usize>,
     ) -> OpOutcome {
         if !sent {
             return OpOutcome::Refused;
         }
         match reply.await {
-            Ok(Ok((entity, actions))) => OpOutcome::Joined(entity, actions),
+            Ok(Ok((entity, actions))) => OpOutcome::Joined(entity, actions, shard),
             Ok(Err(e)) => OpOutcome::Rejected(e),
             Err(_) => OpOutcome::Gone,
         }
@@ -124,7 +125,7 @@ where
                     })
                     .await
                     .is_ok();
-                Self::settle(sent, joined_rx).await
+                Self::settle(sent, joined_rx, None).await
             }
             RoomHandle::Sharded(mailboxes) => {
                 // One oneshot per shard; each shard answers exactly once
@@ -134,7 +135,7 @@ where
                 // a dead shard's inbox goes with its task, and a closed
                 // inbox refused the send here. Gone shards cost nothing.
                 let mut answers = Vec::with_capacity(mailboxes.len());
-                for tx in mailboxes {
+                for (i, tx) in mailboxes.iter().enumerate() {
                     let (reply_tx, reply_rx) = oneshot::channel::<ResumeReply>();
                     if tx
                         .send(ShardMsg::Resume {
@@ -147,7 +148,7 @@ where
                         .await
                         .is_ok()
                     {
-                        answers.push(reply_rx);
+                        answers.push((i, reply_rx));
                     }
                 }
                 // Every live shard's answer, however slow (B82) — the
@@ -158,18 +159,18 @@ where
                 // the connection bound on two shards, the second binding
                 // a member the registry does not track. The shards answer
                 // in parallel, so the wait is the slowest shard's, once.
-                let mut accepted: Option<(EntityId, Mailbox<Action>)> = None;
+                let mut accepted: Option<(EntityId, Mailbox<Action>, usize)> = None;
                 let mut stale: Option<CoreError> = None;
-                for answer in answers {
+                for (i, answer) in answers {
                     match answer.await {
-                        Ok(Ok(Some(pair))) => accepted = Some(pair),
+                        Ok(Ok(Some((entity, actions)))) => accepted = Some((entity, actions, i)),
                         Ok(Err(e)) => stale = Some(e),
                         // "Not here", or a shard gone with the reply.
                         Ok(Ok(None)) | Err(_) => {}
                     }
                 }
-                if let Some((entity, actions)) = accepted {
-                    return OpOutcome::Joined(entity, actions);
+                if let Some((entity, actions, i)) = accepted {
+                    return OpOutcome::Joined(entity, actions, Some(i));
                 }
                 // A stale epoch — or `RoomGone` from a stopping shard that
                 // holds the park: it counted the resume as unprocessed

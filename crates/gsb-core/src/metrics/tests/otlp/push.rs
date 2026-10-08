@@ -56,6 +56,7 @@ fn report(t: Instant) -> MetricReport {
     s.members = 2;
     acc.apply(MetricsEvent::Room(s));
     acc.apply(MetricsEvent::Registry(RegistrySample {
+        events: Default::default(),
         rooms: 1,
         conns: 2,
         rooms_created: 1,

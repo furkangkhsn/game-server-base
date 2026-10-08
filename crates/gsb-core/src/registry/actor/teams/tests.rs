@@ -51,6 +51,7 @@ fn registry(
     reg.rooms.insert(
         RoomId(5),
         RoomEntry {
+            events: Default::default(),
             control: None,
             shards: Some(ShardGroup {
                 mailboxes,

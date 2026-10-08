@@ -80,6 +80,8 @@ where
             .seed
             .unwrap_or_else(|| crate::determinism::fresh_seed(actor));
         let (calls, boot_error) = crate::room::call_table(&config, actor, seed, &mut *logic);
+        let (events, events_boot) = crate::room::event_inbound(&config, &calls, &mut *logic);
+        let boot_error = boot_error.or(events_boot);
         let effects = EffectBook::new(index, logic.shard_count());
         Self {
             config,
@@ -123,6 +125,7 @@ where
             border_every,
             metrics,
             calls,
+            events,
             boot_error,
             queued: HashMap::new(),
             replies_buf: Vec::new(),
@@ -155,6 +158,13 @@ where
     pub fn with_registry(mut self, registry: Mailbox<crate::registry::RegistryMsg>) -> Self {
         self.registry = Some(registry);
         self
+    }
+
+    /// This shard's own event mailbox (`docs/EVENTS.md` §6.3): where the
+    /// router sends the WORLD legs addressed to its members and the
+    /// room-wide ones. Closes when the shard ends.
+    pub(crate) fn event_mailbox(&self) -> Mailbox<crate::events::EventIn> {
+        self.events.mailbox()
     }
 
     /// Stamp this shard's remote effects with the room incarnation

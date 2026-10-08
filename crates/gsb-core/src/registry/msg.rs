@@ -121,7 +121,24 @@ pub enum RegistryMsg {
     /// is ignored: informational only. Detached/resumed sessions never
     /// re-enter the pool — an affiliation requires authentication, so a
     /// parked entry keeps its authenticated mark for its whole lifetime.
-    Authed { conn: ConnectionId },
+    Authed {
+        conn: ConnectionId,
+        /// The identity the session authenticated as (the ticket's
+        /// `player`, or `Auth.name` on the local-auth path; empty =
+        /// anonymous): the key events are routed by (`docs/EVENTS.md`
+        /// §6.1) — known here, before any join, so a CLIENT leg reaches a
+        /// player in no room.
+        identity: String,
+        /// `Auth.features` (`docs/EVENTS.md` §14): what this client
+        /// reads — a CLIENT leg goes only to a session with
+        /// [`FEATURE_PUSH`](gsb_protocol::FEATURE_PUSH).
+        features: u64,
+    },
+    /// A push from a [`Publisher`](crate::events::Publisher): the
+    /// registry is the event router (`docs/EVENTS.md` §6) — it numbers
+    /// and delivers every leg of every recipient, or counts what stopped
+    /// it. Never awaited; every delivery is a `try_send`.
+    Push(crate::events::Push),
     /// Shut everything down: notify connections, destroy all rooms.
     Shutdown,
 
@@ -137,6 +154,10 @@ pub enum RegistryMsg {
         conn: ConnectionId,
         room: RoomId,
         entity: EntityId,
+        /// The shard that took the join (sharded rooms): the home shard,
+        /// or the one whose park ledger resumed the identity — where the
+        /// member's events' WORLD legs go (`docs/EVENTS.md` §6.3).
+        shard: Option<usize>,
         generation: u64,
     },
     /// A dispatched join was rejected by the room (e.g. the shard's

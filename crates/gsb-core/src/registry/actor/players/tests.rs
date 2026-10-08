@@ -137,10 +137,12 @@ async fn settle(reg: &mut Reg, want: EntityId) {
             conn,
             room,
             entity,
+            shard,
             generation,
         })) => {
             assert_eq!((conn, room, entity), (CONN, ROOM, want));
-            reg.on_spawn_done(conn, room, entity, generation).await;
+            reg.on_spawn_done(conn, room, entity, shard, generation)
+                .await;
         }
         other => panic!("expected the join's settlement, got {other:?}"),
     }

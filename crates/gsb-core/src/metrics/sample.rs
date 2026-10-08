@@ -260,6 +260,9 @@ pub struct RoomSample {
     /// The call table's counters (`docs/SERVICES.md` §9, [`CallCounts`]),
     /// cumulative.
     pub calls: CallCounts,
+    /// The event table's counters and its EVENTS phase's
+    /// (`docs/EVENTS.md` §9, [`crate::metrics::EventCounts`]), cumulative.
+    pub events: crate::metrics::EventCounts,
     /// The logic's own named counters (F9, see [`LogicCounters`]),
     /// cumulative as the logic keeps them, read from
     /// `GameLogic::logic_counters` when the sample is built. Empty for a
@@ -330,6 +333,9 @@ pub struct RegistrySample {
     /// `max_unauth_conns_per_source`: the row's per-source count stayed
     /// at the old source. The move itself happened. Cumulative.
     pub unauth_source_moves_kept: u64,
+    /// The event router's counters (`docs/EVENTS.md` §9,
+    /// [`crate::metrics::RouterCounts`]), cumulative.
+    pub events: crate::metrics::RouterCounts,
 }
 
 /// One connection actor's wire-byte sample. The fields are *deltas since
@@ -458,6 +464,10 @@ pub struct ConnSample {
     /// [`crate::metrics::TicketCounts`]). Always empty on the local-auth
     /// path.
     pub tickets: TicketCounts,
+    /// The events' CLIENT legs this actor wrote as `PUSH` frames, or
+    /// lost by cause, delta since the last flush (`docs/EVENTS.md` §9;
+    /// see [`crate::metrics::PushCounts`]).
+    pub pushes: crate::metrics::PushCounts,
     /// True on the actor's final flush (connection closing).
     pub last: bool,
 }

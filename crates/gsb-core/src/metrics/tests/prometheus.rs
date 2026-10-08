@@ -12,6 +12,7 @@ fn prometheus_render_exposes_families_and_values() {
     let mut acc = MetricAccumulator::default();
     let t = Instant::now();
     acc.apply(MetricsEvent::Registry(RegistrySample {
+        events: Default::default(),
         rooms: 2,
         conns: 5,
         rooms_created: 2,
@@ -109,6 +110,7 @@ fn prometheus_counter_families_all_end_in_total() {
     let mut acc = MetricAccumulator::default();
     let t = Instant::now();
     acc.apply(MetricsEvent::Registry(RegistrySample {
+        events: Default::default(),
         rooms: 1,
         conns: 0,
         rooms_created: 1,
@@ -220,6 +222,7 @@ fn input_drops_are_exported_only_at_the_net_scope() {
     // Two connections drop their own input on full action channels.
     for (conn, dropped) in [(7u64, 5u64), (9, 2)] {
         acc.apply(MetricsEvent::Conn(ConnSample {
+            pushes: Default::default(),
             conn: ConnectionId(conn),
             bytes_in: 0,
             bytes_out: 0,

@@ -17,6 +17,7 @@ use crate::ticker::Ticker;
 mod close;
 mod conns;
 mod dispatch;
+pub(in crate::registry) mod events;
 mod leave;
 mod players;
 mod room_ops;
@@ -86,6 +87,16 @@ pub struct Registry<W, G, St, Sp> {
     /// Unauthenticated rows moved to a source at its per-source cap,
     /// their count kept at the old source (B113, `conns::source`).
     reg_unauth_source_moves_kept: u64,
+    /// The event router's table (`docs/EVENTS.md` §6, round e2): its
+    /// sequence numbers and counters; it reads the tables above.
+    routes: crate::events::route::EventRoutes,
+    /// identity → its rows in `conns` (authenticated sessions, live or
+    /// parked, and park rows): what an event addressed to an identity
+    /// finds. Kept by the one removal path (`release_row`) and the
+    /// identity setters (`events.rs`).
+    ids: HashMap<String, Vec<ConnectionId>>,
+    /// When a push last refreshed the metrics sample (`events.rs`).
+    push_sampled_at: Option<std::time::Instant>,
     /// Global monotonic join-epoch counter, minted here at dispatch (see
     /// the `RoomOp::Join::epoch` doc: per-connection counters made every
     /// resume after an identity's first trip the staleness guard once).
@@ -206,6 +217,9 @@ where
             reg_team_exports_unread: 0,
             reg_unauth_source_moves_kept: 0,
             next_join_epoch: 0,
+            routes: Default::default(),
+            ids: HashMap::new(),
+            push_sampled_at: None,
             metrics,
             max_connections,
             max_unauth_conns,
@@ -262,6 +276,7 @@ where
             joins_unread: self.reg_joins_unread,
             team_exports_unread: self.reg_team_exports_unread,
             unauth_source_moves_kept: self.reg_unauth_source_moves_kept,
+            events: self.routes.counts(),
         }
     }
 

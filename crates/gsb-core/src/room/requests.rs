@@ -76,6 +76,32 @@ where
     (calls, boot)
 }
 
+/// The event table of an actor whose call table is `calls` (booted
+/// first: requests and events share one op space), with the logic's
+/// registrations (`GameLogic::boot_events`), behind its own bounded
+/// mailbox (`RoomConfig::event_capacity`). A registration error is
+/// logged and handed back like the call table's (B153: the registry
+/// refuses the room).
+pub(crate) fn event_inbound<W, G, Sp>(
+    config: &RoomConfig,
+    calls: &Calls,
+    logic: &mut dyn GameLogic<W, GroupKey = G, Strip = Sp>,
+) -> (crate::events::Inbound, Option<crate::calls::BootError>)
+where
+    G: Eq + std::hash::Hash + Clone + std::fmt::Debug,
+    Sp: std::fmt::Debug + Clone + PartialEq + Send + 'static,
+{
+    let mut events = crate::events::Events::sharing_ops(calls);
+    let boot = logic.boot_events(&mut events).err();
+    if let Some(e) = &boot {
+        tracing::error!(room = %config.id, error = %e, "event table boot registration failed");
+    }
+    (
+        crate::events::Inbound::new(config.event_capacity, events),
+        boot,
+    )
+}
+
 /// The actor state the request phases touch, borrowed field by field (so
 /// the logic and the world stay free for the caller).
 pub(crate) struct Parts<'a, G> {

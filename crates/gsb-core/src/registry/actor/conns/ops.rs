@@ -99,7 +99,7 @@ where
                             .await
                         };
                         match outcome {
-                            OpOutcome::Joined(entity, actions) => {
+                            OpOutcome::Joined(entity, actions, shard) => {
                                 in_room = Some((room, entity, handle, epoch, identity));
                                 let _ = reply.send(Ok(Seat {
                                     entity,
@@ -111,6 +111,7 @@ where
                                         conn,
                                         room,
                                         entity,
+                                        shard,
                                         generation,
                                     })
                                     .await;

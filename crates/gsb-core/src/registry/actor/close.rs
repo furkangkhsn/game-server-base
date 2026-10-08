@@ -187,11 +187,17 @@ where
             detached: true,
             // A park row has no transport: nothing to name at the stop.
             verdict_in_flight: None,
+            features: info.features,
+            // The membership's shard moves with it (its WORLD legs).
+            shard: info.shard.take(),
         };
-        if info.detached {
-            self.conns.remove(&conn);
+        let transport_gone = info.detached;
+        // The park row first: the identity keeps a row (and its event
+        // numbers) throughout the move.
+        self.insert_row(key, parked);
+        if transport_gone {
+            self.release_row(conn);
         }
-        self.conns.insert(key, parked);
         self.emit_metrics();
     }
 
@@ -207,7 +213,7 @@ where
             info.room = None;
             info.entity = None;
             if transport_gone {
-                self.conns.remove(&conn);
+                self.release_row(conn);
             }
         }
         if let Some(e) = self.rooms.get_mut(&room).and_then(|e| e.shards.as_mut()) {

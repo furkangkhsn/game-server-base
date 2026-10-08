@@ -98,7 +98,10 @@ pub(crate) enum RoomOp<St, Sp> {
 /// The folded outcome of one dispatched join/resume round trip (see
 /// [`Self::dispatch_plain_join`] / [`Self::dispatch_resume`]).
 pub(crate) enum OpOutcome {
-    Joined(EntityId, Mailbox<Action>),
+    /// The room side took the join: the entity, its action channel and
+    /// the shard that holds it (sharded rooms — the home shard, or the
+    /// one whose ledger resumed the identity; where its WORLD legs go).
+    Joined(EntityId, Mailbox<Action>, Option<usize>),
     /// A structural rejection from the room side (full room, stale-resume
     /// epoch guard): propagated to the connection actor as-is.
     Rejected(CoreError),
@@ -152,6 +155,10 @@ pub(crate) struct RoomEntry<St, Sp> {
     /// comparison: a resent create must match it EXACTLY to be a no-op —
     /// see `RegistryMsg::CreateRoom`).
     pub(crate) config: RoomConfig,
+    /// The room's event mailboxes (`docs/EVENTS.md` §6.3): one for a
+    /// single room, one per shard (by shard index) for a sharded room —
+    /// where the router sends WORLD legs.
+    pub(crate) events: Vec<Mailbox<crate::events::EventIn>>,
     /// Which incarnation of this room id this entry is (0 = first create,
     /// +1 per rebuild — see [`Registry::room_gen`]). Copied into each
     /// death watcher so a late death report can be attributed to its own
@@ -180,6 +187,15 @@ pub(crate) struct ConnInfo {
     /// parked/resumed session never consumes unauthenticated capacity —
     /// the flag just stays as the session carried it.
     pub(crate) authed: bool,
+    /// `Auth.features` the client announced ([`RegistryMsg::Authed`]):
+    /// an event's CLIENT leg goes only to a session with
+    /// [`FEATURE_PUSH`](gsb_protocol::FEATURE_PUSH) (`docs/EVENTS.md` §14).
+    pub(crate) features: u64,
+    /// The shard holding this membership (sharded rooms; the join's home
+    /// shard, or the shard whose ledger resumed it — `SpawnDone`): where
+    /// the member's WORLD legs go. Not followed across a migration until
+    /// round e3 (`Relocated`).
+    pub(crate) shard: Option<usize>,
     /// The connection's source ([`RegistryMsg::ConnOpened`]'s), which
     /// the per-source unauthenticated cap counts by while `authed` is
     /// false (BACKLOG D12). `None`: no peer address, or a row the open

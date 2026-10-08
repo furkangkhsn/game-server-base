@@ -107,6 +107,8 @@ where
     /// `RegistryMsg::RoomDied`) on purpose: members must not be able to
     /// tell how the room ended.
     pub(in crate::registry) fn notify_room_gone(&mut self, room: RoomId) {
+        // Its room-wide event numbers end with it.
+        self.forget_room_events(room);
         let mut doomed = Vec::new();
         let mut dead_detached: Vec<ConnectionId> = Vec::new();
         for (conn, info) in self.conns.iter_mut() {
@@ -126,7 +128,7 @@ where
             }
         }
         for conn in dead_detached {
-            self.conns.remove(&conn);
+            self.release_row(conn);
         }
         for (conn, inbox) in doomed {
             // Fire-and-forget notification (no reply needed).

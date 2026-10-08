@@ -293,6 +293,25 @@ pub enum ConnIn {
     /// (its per-source unauthenticated count, D12). Nothing goes on the
     /// wire; no verdict.
     PeerChanged { peer: std::net::SocketAddr },
+    /// An event's CLIENT leg (`docs/EVENTS.md` §6.2), routed by the
+    /// registry to this session only when its client announced
+    /// [`FEATURE_PUSH`](gsb_protocol::FEATURE_PUSH): the actor writes it
+    /// as a `PUSH` frame on its own outbound — the channel the room's
+    /// fan-out and the actor's control answers share — never waiting
+    /// (`pushes_written`, or `pushes_dropped_outbound_{full,gone}`). No
+    /// room is on the way. Never a verdict.
+    Push {
+        /// The publisher (`PublisherId`).
+        publisher: crate::events::PublisherId,
+        /// The identity row's incarnation (`Push.stream`, from 1).
+        stream: u64,
+        /// This leg's number from `publisher` within `stream`, from 1.
+        seq: u64,
+        /// The event's op.
+        op: u16,
+        /// The body, encoded once by the publisher.
+        body: bytes::Bytes,
+    },
 }
 
 impl ConnIn {
@@ -313,7 +332,8 @@ impl ConnIn {
             | Self::Path(_)
             | Self::Shutdown
             | Self::ShutdownOvertaking(_)
-            | Self::PeerChanged { .. } => None,
+            | Self::PeerChanged { .. }
+            | Self::Push { .. } => None,
         }
     }
 }

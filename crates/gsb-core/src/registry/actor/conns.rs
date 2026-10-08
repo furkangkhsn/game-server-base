@@ -170,7 +170,7 @@ where
             // Nothing to park: the entry has no future reader
             // (no resume can target it), so it goes, exactly
             // like the old code's unconditional removal.
-            self.conns.remove(&conn);
+            self.release_row(conn);
         }
         self.reg_closes += 1;
         self.emit_metrics();

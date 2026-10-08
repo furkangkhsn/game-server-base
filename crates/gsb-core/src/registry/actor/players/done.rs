@@ -24,6 +24,7 @@ where
         conn: ConnectionId,
         room: RoomId,
         entity: EntityId,
+        shard: Option<usize>,
         generation: u64,
     ) {
         // Ordering note (supervision): a settled join races the
@@ -74,6 +75,8 @@ where
                 let lost = info.room.filter(|&r| r != room);
                 info.room = Some(room);
                 info.entity = Some(entity);
+                // Where the member's WORLD legs go (`docs/EVENTS.md` §6.3).
+                info.shard = shard;
                 (fresh, lost)
             }
             None => (false, None),
@@ -118,7 +121,7 @@ where
                     .map(|(c, _)| *c)
                     .collect();
                 for old in stale_keys {
-                    self.conns.remove(&old);
+                    self.release_row(old);
                     released += 1;
                     debug!(
                         %old,

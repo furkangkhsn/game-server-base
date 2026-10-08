@@ -56,6 +56,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
     // Two live-flush deltas accumulate under c1 and show in top.
     for delta in [3u64, 2] {
         acc.apply(MetricsEvent::Conn(ConnSample {
+            pushes: Default::default(),
             conn: c1,
             bytes_in: 0,
             bytes_out: 0,
@@ -88,6 +89,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
     // The final flush may itself carry a last delta; everything folds
     // into the cumulative total and the entry retires.
     acc.apply(MetricsEvent::Conn(ConnSample {
+        pushes: Default::default(),
         conn: c1,
         bytes_in: 0,
         bytes_out: 0,
@@ -114,6 +116,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
     }));
     // A different connection keeps dropping afterwards.
     acc.apply(MetricsEvent::Conn(ConnSample {
+        pushes: Default::default(),
         conn: c2,
         bytes_in: 0,
         bytes_out: 0,
@@ -152,6 +155,7 @@ fn closing_connection_retires_its_actions_dropped_entry() {
     // Idempotent close (no double-retire): a stray second `last`
     // sample changes nothing.
     acc.apply(MetricsEvent::Conn(ConnSample {
+        pushes: Default::default(),
         conn: c1,
         bytes_in: 0,
         bytes_out: 0,
