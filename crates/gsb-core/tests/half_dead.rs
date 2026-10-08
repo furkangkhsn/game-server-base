@@ -80,6 +80,7 @@ async fn authenticate(in_tx: &mpsc::Sender<ConnIn>, out: &mut mpsc::Receiver<Fra
         name: "halfdead".into(),
         ticket: vec![],
         protocol_version: 0,
+        features: 0,
     }
     .encode_to_vec();
     in_tx

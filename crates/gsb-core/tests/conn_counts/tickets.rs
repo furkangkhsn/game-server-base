@@ -42,6 +42,7 @@ async fn present(c: &mut Conn, ticket: &[u8]) -> u16 {
         name: String::new(),
         ticket: ticket.to_vec(),
         protocol_version: 0,
+        features: 0,
     };
     c.send(op::base::AUTH_REQ, auth.encode_to_vec()).await;
     let frames = c.frames_until(op::base::ERROR).await;
@@ -67,6 +68,7 @@ async fn every_ticket_decision_is_counted_under_its_reason() {
         name: String::new(),
         ticket: b"ok".to_vec(),
         protocol_version: 0,
+        features: 0,
     };
     c.send(op::base::AUTH_REQ, auth.encode_to_vec()).await;
     c.until(op::base::AUTH_RESULT).await;

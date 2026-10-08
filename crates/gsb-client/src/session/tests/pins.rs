@@ -91,6 +91,7 @@ fn auth_frame_bytes_are_pinned() {
         name: "bot-1".into(),
         ticket: vec![],
         protocol_version: gsb_protocol::PROTOCOL_VERSION,
+        features: 0,
     };
     assert_eq!(wire, loadgen_frame(1, &prost::Message::encode_to_vec(&old)));
 }
@@ -137,6 +138,7 @@ async fn hello_is_the_coalesced_auth_and_join() {
         name: "bot-7".into(),
         ticket: vec![],
         protocol_version: gsb_protocol::PROTOCOL_VERSION,
+        features: 0,
     };
     let mut want = loadgen_frame(1, &prost::Message::encode_to_vec(&auth));
     let join = gsb_protocol::base::JoinRoom { room_id: 3 };

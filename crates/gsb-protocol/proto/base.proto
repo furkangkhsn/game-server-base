@@ -55,6 +55,25 @@ message Auth {
   // alternatives, and the trigger for revisiting it (a second protocol
   // version actually shipping).
   uint32 protocol_version = 3;
+  // What this client can READ, as a bit set of `Feature` values (round
+  // e1, docs/EVENTS.md §14, §20 E14). Additive — no PROTOCOL_VERSION
+  // bump: a client built before the field sends nothing (0), and the
+  // server sends it nothing new. A bit set rather than a version because
+  // each capability is independent and an older client misparses
+  // nothing; PROTOCOL_VERSION moves only for a misparse (DESIGN §5.5).
+  // Bits this server does not know are ignored.
+  uint64 features = 4;
+}
+
+// The bits of `Auth.features`. Each value is a MASK (1, 2, 4 …), not an
+// index, so a client ORs the values it supports into the field. proto3
+// needs the zero value; it names "no capability".
+enum Feature {
+  FEATURE_NONE = 0;
+  // The client reads PUSH frames (opcode PUSH = 17, message `Push`).
+  // Without it the server never sends one: the event's CLIENT leg is
+  // counted as unsupported for that connection (docs/EVENTS.md §14).
+  FEATURE_PUSH = 1;
 }
 
 message AuthResult {
@@ -273,4 +292,46 @@ message RpcResponse {
   // the logic's own `Reject` …) whose text is in `reason`. An old client
   // never reads the field and sees what it always saw: `ok = false`.
   bool game_error = 6;
+}
+
+// Server → client, opcode PUSH = 17, on the reliable band (round e1,
+// docs/EVENTS.md §14). One event's CLIENT leg, pushed by server code (a
+// service, a room, an admin task) to this connection's identity — nobody
+// asked for it, so unlike `RpcResponse` it rides a frame of its OWN: no
+// room is on its path (a chat line reaches a player in no room).
+//
+// Sent only when the client's `Auth.features` has FEATURE_PUSH. A client
+// never sends it: a PUSH frame from a client is an unknown inbound
+// base-band opcode, answered and charged to the violation budget like
+// any other.
+//
+// Delivery is AT MOST ONCE and every loss is counted server-side; the
+// numbering lets the client SEE a loss. `seq` counts the CLIENT legs one
+// publisher sent to this identity: 1, 2, 3 … in routing order. A number
+// is spent when the leg is routed, so a leg lost below the router (a
+// full outbound queue, a parked session) shows up as a gap at the next
+// push: within one `stream`, a `seq` greater than the publisher's last
+// one plus one means that many pushes were lost. The numbers live as
+// long as the server's row for this identity (its first authenticated
+// session until it goes offline — a resume keeps them); a new row
+// numbers from 1 again under a new `stream`, so a client that sees
+// `stream` change resets every publisher's counter instead of reading
+// the restart as a gap or a stale push.
+message Push {
+  // Who pushed it (`PublisherId`): 0 is the engine itself, every other
+  // number a publisher handle the server's composition root made.
+  uint32 publisher = 1;
+  // This CLIENT leg's number from `publisher` to this identity within
+  // `stream`, from 1.
+  uint64 seq = 2;
+  // The event's op (game band; one op space with the requests' inner
+  // ops). `uint32` on the wire (proto3 has no 16-bit integers); the op
+  // space is `u16` by protocol contract, as for `RpcRequest.op`.
+  uint32 op = 3;
+  // The event's encoded body (the message its op names), encoded once
+  // by the publisher and shared by every receiver.
+  bytes body = 4;
+  // The incarnation of the server's row for this identity that `seq`
+  // belongs to (docs/EVENTS.md §20 E5). Never 0 on a sent push.
+  uint64 stream = 5;
 }

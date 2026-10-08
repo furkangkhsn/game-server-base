@@ -11,9 +11,11 @@ fn main() {
             includes.push(inc);
         }
     }
-    // `gsb/options.proto` (round q3) defines options only — no Rust is
-    // generated for it; compiling it here is the check that it parses
-    // with the protoc every game build uses.
+    // `gsb/options.proto` (rounds q3, e1) defines options only — nothing
+    // on the wire; the Rust prost writes for its option types
+    // (`gsb.rs`: `EventOptions`, `Destination`) is not included anywhere.
+    // Compiling it here is the check that it parses with the protoc every
+    // game build uses.
     cfg.compile_protos(
         &[
             format!("{proto_dir}/base.proto"),

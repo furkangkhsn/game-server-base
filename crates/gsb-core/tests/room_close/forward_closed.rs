@@ -50,6 +50,7 @@ impl Seated {
             name: String::new(),
             ticket: Vec::new(),
             protocol_version: 0,
+            features: 0,
         };
         for f in [
             FrameBody::new(op::base::AUTH_REQ, auth.encode_to_vec()),

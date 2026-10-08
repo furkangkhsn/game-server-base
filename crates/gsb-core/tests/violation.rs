@@ -222,6 +222,7 @@ async fn server_side_conditions_are_never_counted() {
         name: "neo".into(),
         ticket: vec![],
         protocol_version: 0,
+        features: 0,
     }
     .encode_to_vec();
     in_tx
@@ -270,6 +271,7 @@ async fn double_auth_is_a_hard_violation() {
         name: "neo".into(),
         ticket: vec![],
         protocol_version: 0,
+        features: 0,
     }
     .encode_to_vec();
     in_tx

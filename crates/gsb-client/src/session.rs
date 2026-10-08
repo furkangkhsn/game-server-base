@@ -56,6 +56,10 @@ pub fn auth_req(c: &Credentials) -> FrameBody {
         name: c.name.clone(),
         ticket: c.ticket.clone(),
         protocol_version: gsb_protocol::PROTOCOL_VERSION,
+        // No `FEATURE_PUSH` yet: this client does not read PUSH frames
+        // (the typed event surface, `docs/EVENTS.md` §21 e6), so the
+        // server must not send it any.
+        features: 0,
     };
     FrameBody::new(op::AUTH_REQ, auth.encode_to_vec())
 }

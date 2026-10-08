@@ -156,6 +156,7 @@ async fn login(
         name: name.into(),
         ticket: ticket.to_vec(),
         protocol_version: 0,
+        features: 0,
     };
     let j = base::JoinRoom { room_id: 1 };
     for (code, body) in [

@@ -93,6 +93,7 @@ async fn failed_auth(c: &mut Conn) {
         name: "old".into(),
         ticket: Vec::new(),
         protocol_version: gsb_protocol::PROTOCOL_VERSION + 1,
+        features: 0,
     };
     c.send(op::base::AUTH_REQ, &req.encode_to_vec())
         .await

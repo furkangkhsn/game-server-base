@@ -52,6 +52,7 @@ async fn send_auth(tx: &mpsc::Sender<ConnIn>, version: u32) {
         name: "v".into(),
         ticket: vec![],
         protocol_version: version,
+        features: 0,
     }
     .encode_to_vec();
     tx.send(ConnIn::Frame(gsb_protocol::FrameBody::new(
@@ -182,6 +183,7 @@ fn the_new_field_costs_nothing_on_the_wire_when_unset() {
         name: "neo".into(),
         ticket: vec![],
         protocol_version: 0,
+        features: 0,
     };
     assert_eq!(
         legacy.encode_to_vec(),
@@ -197,6 +199,7 @@ fn the_new_field_costs_nothing_on_the_wire_when_unset() {
         name: "neo".into(),
         ticket: vec![],
         protocol_version: 1,
+        features: 0,
     };
     assert_eq!(
         versioned.encode_to_vec(),

@@ -85,6 +85,7 @@ impl Client {
             name: name.to_string(),
             ticket: Vec::new(),
             protocol_version: 0,
+            features: 0,
         };
         c.send(FrameBody::new(op::base::AUTH_REQ, auth.encode_to_vec()))
             .await;

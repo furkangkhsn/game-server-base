@@ -104,6 +104,7 @@ async fn a_stall_verdict_into_a_full_mailbox_is_booked_as_write_stall() {
         name: "stalled".into(),
         ticket: vec![],
         protocol_version: 0,
+        features: 0,
     };
     let auth = table.frame(op::base::AUTH_REQ, &auth).expect("AUTH_REQ");
     in_tx.send(ConnIn::Frame(auth)).await.expect("inbox open");

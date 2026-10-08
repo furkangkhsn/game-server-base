@@ -69,6 +69,7 @@ fn auth_frame(name: &str, ticket: &[u8]) -> gsb_protocol::FrameBody {
         name: name.into(),
         ticket: ticket.to_vec(),
         protocol_version: 0,
+        features: 0,
     };
     frame(op::base::AUTH_REQ, &a.encode_to_vec())
 }
@@ -352,6 +353,7 @@ async fn preauth_heartbeat_flood_is_counted_not_answered() {
         name: "ana".into(),
         ticket: vec![],
         protocol_version: 0,
+        features: 0,
     }
     .encode_to_vec();
     in_tx

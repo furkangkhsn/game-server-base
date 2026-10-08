@@ -1,5 +1,6 @@
 // gsb's custom protobuf options: how a game's `.proto` declares its
-// client-wire REQUESTS (docs/SERVICES.md §4.2, §11, §16; round q3).
+// client-wire REQUESTS (docs/SERVICES.md §4.2, §11, §16; round q3) and
+// its EVENTS (docs/EVENTS.md §4.1; round e1).
 //
 //   import "gsb/options.proto";
 //
@@ -16,13 +17,31 @@
 // (`OP`, `Response`, `Error`), refusing at build time: a duplicate op, an
 // op below the game band (the engine's range, < 1000), an op listed as
 // reserved, an rpc without `(gsb.error)`, a streaming rpc, one request
-// message behind two rpcs. This file defines OPTIONS ONLY — no message,
-// nothing on the wire; it ships with gsb-protocol beside `base.proto`
+// message behind two rpcs. This file defines OPTIONS ONLY — nothing on
+// the wire (`EventOptions` and `Destination` are the option's own
+// types, read by the build, never sent); it ships with gsb-protocol beside `base.proto`
 // (the same `DEP_GSB_BASE_PROTO_DIR` include, via the crate's `links`
 // key), so a game's build script finds it wherever gsb-protocol comes
 // from.
 //
-// Numbers 50001..50003 are in protobuf's "in-house use" extension range
+// EVENTS (docs/EVENTS.md §4.1; round e1) are declared on the message
+// itself — an event is a message, it has no `rpc` around it:
+//
+//   option (gsb.reserved_ops) = 2099;   // a retired op, file level
+//
+//   message GoldReceived {
+//     option (gsb.event) = { op: 2001, to: WORLD };
+//     uint64 amount = 1;
+//   }
+//
+// and `gsb-build` writes `impl Event` (`OP`, `TO`) plus the destination
+// markers (`WorldEvent` for WORLD/BOTH, `ClientEvent` for CLIENT/BOTH).
+// Requests and events share ONE op space (the game band): the build is
+// refused for an op both take, an event op below the game band or past
+// 16 bits, a reserved one, an event without `op` or without `to`, and a
+// message that is both an rpc's request and an event.
+//
+// Numbers 50001..50005 are in protobuf's "in-house use" extension range
 // (50000-99999). Like field numbers they are frozen once shipped.
 syntax = "proto3";
 
@@ -40,8 +59,44 @@ extend google.protobuf.MethodOptions {
 }
 
 extend google.protobuf.ServiceOptions {
-  // An op this game used and retired: `gsb-build` refuses any rpc that
-  // takes it again (the `reserved` keyword of the op space). Repeat the
-  // option once per op. Checked across every service of the build.
+  // An op this game used and retired: `gsb-build` refuses any rpc or
+  // event that takes it again (the `reserved` keyword of the op space).
+  // Repeat the option once per op. Checked across the whole build.
   repeated uint32 reserved_op = 50003;
+}
+
+// Where an event goes (`(gsb.event).to`). The values are in package
+// `gsb`'s scope (`to: WORLD`), so they never clash with a game's enums.
+enum Destination {
+  // Refused by `gsb-build`: an event must say where it goes.
+  DESTINATION_UNSPECIFIED = 0;
+  // The receiver's room logic takes it (`WorldEvent`).
+  WORLD = 1;
+  // Straight to the receiver's client; no room sees it (`ClientEvent`).
+  CLIENT = 2;
+  // Both legs, each numbered and counted on its own.
+  BOTH = 3;
+}
+
+// `(gsb.event)`: one option carrying both halves, so an event cannot be
+// declared half (an op without a destination, or the reverse) by
+// forgetting a second option.
+message EventOptions {
+  // The event's op (game band: 1000..=65535), shared with the requests'
+  // op space.
+  uint32 op = 1;
+  Destination to = 2;
+}
+
+extend google.protobuf.MessageOptions {
+  EventOptions event = 50004;
+}
+
+extend google.protobuf.FileOptions {
+  // An op this game used and retired, for a file that declares no
+  // service (`(gsb.reserved_op)` is a service option): `gsb-build`
+  // refuses any rpc or event that takes it again. Repeat the option once
+  // per op. Like `(gsb.reserved_op)`, it covers both spaces across the
+  // whole build.
+  repeated uint32 reserved_ops = 50005;
 }

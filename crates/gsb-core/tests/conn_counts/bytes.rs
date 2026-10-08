@@ -44,6 +44,7 @@ async fn auth(c: &Conn) {
         name: String::new(),
         ticket: Vec::new(),
         protocol_version: 0,
+        features: 0,
     };
     c.send(op::base::AUTH_REQ, auth.encode_to_vec()).await;
 }

@@ -41,6 +41,14 @@
 /// the reason this constant exists; they are inside "unversioned".
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// [`base::Auth::features`] bit: this client reads `PUSH` frames
+/// ([`op::base::PUSH`], [`base::Push`]). A client without it (every
+/// client built before the field existed sends `0`) is never sent one;
+/// its CLIENT event legs are counted as unsupported instead
+/// (`docs/EVENTS.md` §14). The value is `base::Feature::Push`, the
+/// `.proto` declaration every client language generates.
+pub const FEATURE_PUSH: u64 = base::Feature::Push as u64;
+
 pub mod op {
     /// Base control band.
     pub mod base {
@@ -102,6 +110,15 @@ pub mod op {
         /// = the session's current address, else the `UDP_PATH` address
         /// encoding) followed by the plaintext inner datagram.
         pub const UDP_SEND: u16 = 16;
+        /// Server → client: one event pushed to this connection's
+        /// identity (`base::Push`; `docs/EVENTS.md` §14). The first free
+        /// number of the base band (15/16 are server-internal markers).
+        /// Reliable band: a lost push is not healed by the next snapshot.
+        /// Sent only to a client whose `Auth.features` has
+        /// [`FEATURE_PUSH`](crate::FEATURE_PUSH); a client never sends
+        /// it — a `PUSH` frame from a client is an unknown inbound base
+        /// opcode, a hard violation like any other.
+        pub const PUSH: u16 = 17;
     }
 
     /// First opcode reserved for game crates.
@@ -132,6 +149,7 @@ impl base::Error {
 
 #[cfg(test)]
 mod error_code;
+pub mod event;
 pub mod request;
 
 use std::any::Any;
@@ -309,6 +327,7 @@ pub fn base_table() -> MessageTable {
     t.reg::<base::HeartbeatAck>(op::base::HEARTBEAT_ACK);
     t.reg::<base::Error>(op::base::ERROR);
     t.reg::<base::RpcRequest>(op::base::RPC_REQ);
+    t.reg::<base::Push>(op::base::PUSH);
     t
 }
 
@@ -341,12 +360,14 @@ mod tests {
             name: "neo".into(),
             ticket: vec![],
             protocol_version: PROTOCOL_VERSION,
+            features: FEATURE_PUSH,
         };
         let fb = table.frame(op::base::AUTH_REQ, &msg).expect("encode");
         let decoded = table.decode(fb.op, &fb.payload).expect("decode");
         let auth = decoded.downcast_ref::<base::Auth>().expect("type");
         assert_eq!(auth.name, "neo");
         assert_eq!(auth.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(auth.features, FEATURE_PUSH);
     }
 
     #[test]
