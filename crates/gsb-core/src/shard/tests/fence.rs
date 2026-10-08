@@ -402,26 +402,33 @@ impl Rig {
     /// The router reads its mailbox: each `Relocated`, applied as the
     /// registry applies it (`Registry::on_relocated`).
     fn pump(&mut self) {
-        while let Ok(m) = self.reg.try_recv() {
-            let RegistryMsg::Relocated {
-                identity,
-                shard,
-                mig,
-                generation,
-                ..
-            } = m
-            else {
-                continue;
-            };
-            if self.deaf || generation != GENERATION || mig <= self.at.mig {
-                self.routes.relocation_stale();
-                continue;
-            }
-            let old = self.at.place.replace(shard);
-            self.at.mig = mig;
-            let door = old.filter(|&o| o != shard).map(|o| &self.at.doors[o]);
-            self.routes.relocated(door, &identity, mig);
+        while self.pump_one() {}
+    }
+
+    /// The router reads ONE message of its mailbox (false: it was empty).
+    fn pump_one(&mut self) -> bool {
+        let Ok(m) = self.reg.try_recv() else {
+            return false;
+        };
+        let RegistryMsg::Relocated {
+            identity,
+            shard,
+            mig,
+            generation,
+            ..
+        } = m
+        else {
+            return true;
+        };
+        if self.deaf || generation != GENERATION || mig <= self.at.mig {
+            self.routes.relocation_stale();
+            return true;
         }
+        let old = self.at.place.replace(shard);
+        self.at.mig = mig;
+        let door = old.filter(|&o| o != shard).map(|o| &self.at.doors[o]);
+        self.routes.relocated(door, &identity, mig);
+        true
     }
 
     /// What the shards took so far: the seqs of `op` per shard, and the
@@ -548,8 +555,8 @@ async fn a_migration_leaves_the_client_leg_alone() {
 }
 
 /// A → B → C before A's fence reached B, every round in the worst order
-/// (C, then B, then A): C takes 1..5. B keeps its OWN direct legs (3, 4)
-/// pending behind A's fence and relays A's forwarded ones at once (the
+/// (C, then B, then A): C takes 1..6. B keeps its OWN direct legs (3, 4
+/// held before it left, 5 arriving after) pending behind A's fence and relays A's forwarded ones at once (the
 /// chain rule); the first draft — B hands its held legs on as it leaves
 /// — makes C take 3, 4 before 1, 2.
 #[tokio::test]
@@ -564,17 +571,18 @@ async fn a_chained_migration_keeps_fifo_in_the_worst_order() {
     rig.push::<Gold>(2); // 3, 4 → B direct
     rig.moves(1, 2);
     rig.tick(1).await; // B holds 3, 4 — and moves bob on to C (mig 2)
+    rig.push::<Gold>(1); // 5 → B, which bob just left: pending there too
     for _ in 0..4 {
         rig.tick(2).await; // C: installed (mig 2) at its first tick past B's
     }
     rig.pump(); // place C; seal B
     assert_eq!(rig.at.place, Some(2));
-    rig.push::<Gold>(1); // 5 → C direct
+    rig.push::<Gold>(1); // 6 → C direct
     for _ in 0..4 {
         rig.round([2, 1, 0]).await;
     }
     let seqs: Vec<(usize, u64)> = rig.took(Gold::OP);
-    assert_eq!(seqs, [(2, 1), (2, 2), (2, 3), (2, 4), (2, 5)]);
+    assert_eq!(seqs, [(2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6)]);
     for i in 0..SHARDS {
         let c = rig.counts(i);
         assert_eq!(
@@ -717,4 +725,38 @@ async fn a_forwarded_leg_is_never_held() {
     rig.tick(1).await;
     assert_eq!(rig.took(Gold::OP), [(1, 4), (1, 5)]);
     assert_eq!(rig.counts(1).events_fence_timeouts, 0);
+}
+
+/// A → B → A (a ping-pong): legs the router still sent to A before it
+/// learnt the first move are older than what B got directly while bob
+/// was there, which are older than A's direct legs after the second
+/// move. A's UNSEALED tombstone takes A's early legs even though bob is
+/// back (they go round through B), so A takes 1..5 in order.
+#[tokio::test]
+async fn a_ping_pong_keeps_fifo_through_the_unsealed_tombstone() {
+    let mut rig = rig().await;
+    rig.moves(0, 1);
+    rig.tick(0).await; // A → B (mig 1)
+    rig.tick(1).await;
+    rig.tick(1).await; // B: installed (Relocated 1 waits in the router)
+    rig.moves(1, 0);
+    rig.tick(1).await; // B → A (mig 2)
+    for _ in 0..3 {
+        rig.tick(0).await; // A: installed again (Relocated 2)
+    }
+    rig.push::<Gold>(2); // 1, 2 → A: the router knows nothing yet
+    assert!(rig.pump_one()); // Relocated 1: place B, seal A
+    rig.push::<Gold>(1); // 3 → B directly
+    assert!(rig.pump_one()); // Relocated 2: place A, seal B
+    assert_eq!(rig.at.place, Some(0));
+    rig.push::<Gold>(2); // 4, 5 → A directly
+    for _ in 0..3 {
+        rig.round([0, 1, 2]).await;
+    }
+    assert_eq!(
+        rig.took(Gold::OP),
+        [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]
+    );
+    let c = rig.total();
+    assert_eq!((c.events_fence_timeouts, c.events_fence_lost), (0, 0));
 }
