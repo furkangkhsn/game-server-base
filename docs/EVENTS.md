@@ -29,6 +29,17 @@
 > `RegistryParts::publisher`, sayaçlar → metrikler. Shard göçünün çiti
 > e3. Ayrıntı ve sapmalar §21 "e2 — uygulanan biçim".
 >
+> **e4 uygulandı (2026-10-08):** motor olayları — `gsb_core::events`
+> (`EngineEvent`, `EngineNotice { seq, event }`, `Interest`,
+> `EngineSubscribers`; `Presence` sorgusu, §20 E12), registry'de kimlik
+> başına varlığın kendi tablosundan türetilmesi (`registry/actor/
+> presence.rs`), `#[gsb(engine_events)]` (`gsb-macros`, denetimleriyle),
+> `Setup::engine_events`, `RegisterError::NoEngineEvents`,
+> `RegistryParts::{engine_events, presence}`, abone adıyla sayaçlar →
+> metrikler; demoda arkadaş servisi (`gsb_demo::friends`,
+> `FriendOnline` 1008 / `FriendOffline` 1009, `to: CLIENT`). Ayrıntı ve
+> sapmalar §21 "e4 — uygulanan biçim".
+>
 > Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
 **Tek paragraf özet.** Olay, sunucu kodunun (bir servis, bir admin görevi,
@@ -1399,6 +1410,94 @@ testler (q5'in `calls_actors.rs` deseni).
 `gsb-macros`: `#[gsb(engine_events)]` kolu + denetimler;
 `Setup::engine_events`, `RegistryParts::engine_events`; demoda bir
 arkadaş servisi.
+
+**e4 — uygulanan biçim (2026-10-08).** Plandaki her madde girdi;
+tasarımdan farklar ve netleştirmeler:
+
+- **Olaylar registry'nin tablosundan TÜRETİLİR, olgu noktalarından
+  yayılmaz.** Kimliğin görünümü (`View`): satırı yoksa çevrimdışı;
+  varsa canlı mı (satırlarından biri doğrulanmış, ayrılmamış, gelen
+  kutusu olan bir oturum) ve odası (WORLD bacağının gittiği yer: canlı
+  üyelik, yoksa parktaki — yönlendirmenin `Locate`'iyle aynı seçim).
+  Satırları değiştirebilen her registry mesajının (Authed, SpawnPlayer,
+  ConnClosed, SpawnDone, LeaveDone, DetachDone, DetachDespawned,
+  DespawnPlayer, CloseConn, LeaveConn; odanın sonu için RoomDied ve
+  DestroyRoom) dokunduğu kimliklerin görünümü mesajdan önce ve sonra
+  alınır, fark olay olur (`changes`; sıra: `Online`, `Left`, `Joined`,
+  `Parked`/`Resumed`; `Offline`'dan önce `Left`). Mesaj listesi
+  match-all'sız: yeni bir mesaj türü orada karara bağlanmalı (e3'ün
+  yenileri dahil). Gerekçe: yönlendirmeyle aynı tablo, ikinci kopya ve
+  olgu noktası listesi yok; abone yoksa görünüm hiç alınmaz (mesaj
+  başına bir dal). Sonuçları:
+  - `Online` kimliğin ilk satırında (AUTH), `Offline` sonuncusu gidince;
+    ikinci oturum haber değil (tasarımdaki gibi).
+  - `Parked` taşıma ölümünde, oda park mı despawn mı demeden (registry
+    satırı spekülatif olarak `detached` işaretler; odanın "parkladım"
+    diye ayrı bir mesajı yok — `DetachDone` yalnız "detach teslim
+    edildi" der). Parklamayan oda için ardından `Left` + `Offline`.
+  - `Resumed` parktaki kimliğin yeni oturumu **doğrulandığında** (AUTH),
+    yeniden katılımında değil: varlık açısından döndü; oda o an parkın
+    odası. Ardından aynı odaya katılım haber değildir.
+  - Oturumu lobide süren ama varlığı parka alınmış kimlik (`LeaveConn`'un
+    park satırı) o odada sayılır: park bitene kadar `Left` yok.
+  - Sunucu dururken (`Shutdown`) olay üretilmez; abonelerin kanalı
+    kapanır.
+- **`EngineNotice { seq, event }`.** Abone başına 1'den numara, teslim
+  edilsin edilmesin harcanır (kayıp boşluk olarak görünür; tasarım
+  numarayı sayaç olarak anıyordu, artık bildirimde). Düz alıcı
+  `EngineNotice` alır; `#[gsb(engine_events)]` metodu `e: EngineEvent`
+  (tasarımın biçimi) **ya da** `n: EngineNotice` alabilir
+  (`From<EngineNotice> for EngineEvent`).
+- **Barındırılan servis: posta kutusu kolu yerine kendi görevi.**
+  Makro `friends::Msg::Engine` kolu eklemiyor; `ServiceDef::engine_events`
+  metodu sarmalıyor (`EngineHandler`) ve host, `Setup::engine_events`
+  istendiğinde servise ikinci bir görev açıyor: kendi sınırlı kanalı
+  (servisin `mailbox` boyu) ve bildirimleri **birer birer**, registry'nin
+  sırasıyla koşan bir döngü (metot beklenir, sonra sıradaki okunur —
+  §5.4 (b)'deki düz alıcı döngüsünün aynısı). Gerekçe: çağrılar kendi
+  görevlerinde paralel koşar; olayı da öyle koşmak sırayı bozardı (bir
+  `Offline` kendi `Online`'ını geçebilirdi), servisin çağrı döngüsünde
+  beklemek de çağrıları durdururdu. Olay çağrıların kutusundan kapasite
+  yemez. Panikleyen metot görevi bitirir; sonraki her bildirim
+  `engine_events_refused_gone`. Görev registry göndericisini bırakınca
+  biter (registry servislerden önce durur); F5 durdurması onu beklemez.
+  Abone adı trait'in adıdır.
+- **Makro denetimleri** (`gsb-macros`; `calls/macro_checks.rs`'de
+  derlenmeyen örnekler): trait başına en çok bir işaretli metot; `async`,
+  `&self` + tek, sahipli, adı `EngineEvent` ya da `EngineNotice` olan
+  parametre; `cx` yok; dönüş yok (ya da `()`); varsayılan gövde, generic
+  yok; bilinmeyen `#[gsb(..)]` anahtarı ret. Yalnız motor metodu olan
+  trait geçerli (çağrısız servis). `Setup::engine_events` motor metodu
+  olmayan trait'te `RegisterError::NoEngineEvents`; düz `calls::spawn`
+  aboneliği yok sayar (aboneliği registry'ye yalnız `Services::service`
+  verir: `take_engine_subscriptions`).
+- **`Interest`:** tasarımdaki bitler + `NONE`, `|` (`BitOr`), `has`,
+  `bits`; `PRESENCE` = online | offline | parked | resumed.
+- **E12: `Presence` tutamacı** (`RegistryParts::presence()`,
+  `RegistryMsg::Presence`): `page(after, limit)` — çevrimiçi (canlı ya da
+  parkta) kimlikler, kimlik sırasıyla, imleçli (`next`), `limit`
+  `1..=4096`; `of(&[ids])` — her biri (`Offline` dahil) tek tur.
+  Registry yerinde cevaplar (beklemez); tutamaç tek `try_send` (dolu kutu
+  `PresenceRefused::Busy`, yok `Gone`) + cevap beklemesi. Sayfa seçimi
+  O(kimlik), sıralama O(limit · log limit).
+- **Sayaçlar:** `EngineCounts { engine_events_sent,
+  engine_events_refused_full, engine_events_refused_gone }`, abone
+  ADIYLA (aynı ad iki abone = tek sayaç kümesi), atomikler (yayıncıların
+  deseni): `scope=engine_events name=<ad>` satırı yayıncılardan sonra,
+  `gsb_engine_events_*_total{subscriber}` (Prometheus, OTLP; altınlar ve
+  `otlp::cross` güncel), loadgen teli yayıncılardan sonra (yerleşim
+  değişti; sihir birleşmede bir sonraki boşa geçer) ve `RESULT`'ta
+  `sub_<ad>_<sayaç>=`.
+- **Demo:** `gsb_demo::friends` (`Friends` trait'i: `online` çağrısı +
+  `on_engine`; `FriendGraph` sabit simetrik graf). Servis kendi varlık
+  durumunu TUTMAZ: kimin çevrimiçi olduğunu `Presence::of` ile
+  registry'den okur (yeniden başlamada kayıp yok); sorgu reddedilirse
+  her arkadaşa iter (çevrimdışılar yönlendiricide `events_offline`).
+  `Parked` çevrimdışı okunur (parktan sonra `Offline` ikinci kez
+  `FriendOffline` iter — aynı olgu, istemciye zararsız). Demo modülü
+  servisi barındırmıyor (graf oyunun verisi); uçtan uca koşu
+  `gsb-demo/tests/friends.rs`'de.
+- **Kalanlar** (BACKLOG `e4:`).
 
 **e5 — determinizm ve bağlayıcılar.** `Input::Events` (etiket 18), tekrar,
 TEST modunda `sim.publisher(..)`; `gsb-bevy-ecs::events` (`GsbEvents`,

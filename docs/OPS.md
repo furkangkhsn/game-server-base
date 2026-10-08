@@ -121,6 +121,31 @@ pushes_dropped_*` (+ yolda); `Σ events_pushed = events_routed +
 events_unread` (+ yolda). Registry örneği bir itme patlamasının sonunda
 (kutusu boşalınca) ya da sürekli akışta en çok 250 ms'de bir yenilenir.
 
+**Motor olayları (e4, docs/EVENTS.md §5.4).** Registry kendi bağlantı
+tablosundan kimlik başına varlık türetir (çevrimiçi / çevrimdışı, odaya
+girdi / çıktı, park / devam) ve abonelere sunar; config anahtarı yok.
+Abonelik kompozisyon kökündedir: `RegistryParts::engine_events(ad,
+ilgi, kapasite)` düz alıcı, ya da `#[gsb(engine_events)]` metodu olan bir
+`#[gsb_core::service]` için `parts.service(.., |s|
+s.engine_events(Interest::PRESENCE))` (abone adı trait'in adı, kapasite
+servisin `mailbox`'ı). Registry hiç beklemez (`try_send`): dolu ya da
+gitmiş abone olayı kaybeder ve **abone adıyla** sayılır; her bildirimin
+abone başına numarası kayıpta da harcanır (abone boşluğu görür ve
+`RegistryParts::presence()` ile o anki durumu yeniden okur — §20 E12,
+sayfalı, registry kendi tablosundan cevaplar). Abonesi olmayan sunucuda
+türetme yapılmaz.
+
+| Yüzey | Ne |
+|---|---|
+| `gsb-metric` satırı | abone adı başına `scope=engine_events name=<ad> engine_events_sent=… engine_events_refused_full=… engine_events_refused_gone=…` (yayıncı satırlarından sonra; abone yoksa hiç yok) |
+| Prometheus / OTLP | `gsb_engine_events_{sent,refused_full,refused_gone}_total{subscriber}` (yayıncı ailelerinden sonra; abone yoksa hiç yok) |
+| loadgen | metrik telinde aboneler yayıncılardan sonra (raporun son bölümü; tel yerleşimi değişti, sihir birleşmede bir sonraki boş sayıya geçer); `RESULT`'ta `pub_…` anahtarlarından sonra `sub_<ad>_<sayaç>=` (üç `EngineCounts` alanı) |
+
+Bir kimliğin bir registry mesajındaki olayları şu sırayla gelir:
+`Online`, `Left`, `Joined`, `Parked`/`Resumed`; `Offline`'dan önce
+`Left`. Taşıması ölen oyuncu, oda park mı despawn mı demeden `Parked`
+görünür; parklamayan oda için ardından `Left` + `Offline` gelir.
+
 **Girdi kaydı: `[record]` (q6, B170).** `record` cargo feature'ıyla
 derlenmiş sunucuda seçilen odalar mantığa giren her girdiyi
 (docs/SERVICES.md §10.1) tick başına bir dosyaya yazar; dosya aynı oyuna
@@ -1908,6 +1933,14 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   önceki her anahtar yerinde. Metrik telinde iki küme aynı yerlerinde
   uzadı (tel yerleşimi değişti; sihir sayısını ana dal atar — bir
   sonraki boş `GSNX`).
+
+- **e4: loadgen `RESULT`'ın motor olayı anahtarları (docs/EVENTS.md
+  §5.4).** Olay segmentinin sonunda, `pub_<ad>_<sayaç>=` anahtarlarından
+  sonra, son raporun her abone adı için `sub_<ad>_<sayaç>=` (üç
+  `EngineCounts` alanı: `engine_events_sent`, `engine_events_refused_full`,
+  `engine_events_refused_gone`; abonesi olmayan oyunda hiç yok). Metrik
+  teli: aboneler yayıncılardan sonra, raporun son bölümü (tel yerleşimi
+  değişti; sihir sayısını ana dal atar — bir sonraki boş `GSNY`).
 
 - **q6: loadgen `RESULT`'ın çağrı, servis ve RPC anahtarları (B157,
   B164, B161).** `game=`'den hemen önce (diğer isteğe bağlı segmentlerden

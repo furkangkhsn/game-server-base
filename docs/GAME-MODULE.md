@@ -442,6 +442,41 @@ sarmalayıcıları (`gsb-kit`) olay kancalarını henüz iletmiyor (BACKLOG
 `FEATURE_PUSH` bildiren istemcinin bağlantısına `PUSH` karesi olarak
 gider.
 
+**Motor olaylarına abone olmak (tur e4, `docs/EVENTS.md` §5.4, §8.3).**
+Registry bir kimliğin çevrimiçi / çevrimdışı olduğunu, odaya girip
+çıktığını, park edip devam ettiğini kendi tablosundan türetir ve
+servislere sunar (istemcilere ve odalara değil). Modül iki biçimle abone
+eder; ikisi de `spawn_registry`'de, `parts.spawn(..)`'dan önce:
+
+```rust
+#[gsb_core::service]
+pub trait Friends {
+    async fn online(&self, cx: &CallCx) -> Result<Vec<String>, String>; // istek (çağrı)
+    #[gsb(engine_events)]                                                // trait başına en çok bir
+    async fn on_engine(&self, e: EngineEvent);                           // ya da `n: EngineNotice` (numarasıyla); cx yok, dönüş yok
+}
+let friends = FriendGraph::new(pairs, parts.presence(), parts.publisher("friends"));
+parts.service(Friends::serve(friends), |s| s.engine_events(Interest::PRESENCE))?;
+
+// düz alıcı, herhangi bir async görev için:
+let mut rx = parts.engine_events("presence-audit", Interest::ONLINE | Interest::OFFLINE, 1024);
+tokio::spawn(async move { while let Some(n) = rx.recv().await { audit(n).await } });
+```
+
+Barındırılan servisin motor metodu kendi görevinde, bildirimler
+registry'nin sırasıyla ve **birer birer** koşar (tower yığınından
+geçmez); kanalı servisin `mailbox` boyundadır. Registry beklemez: dolu
+ya da gitmiş abone olayı kaybeder ve abone adıyla sayılır
+(`gsb_engine_events_*_total{subscriber}`); bildirimin abone başına
+numarası (`EngineNotice::seq`) boşluğu gösterir. Motor varlık geçmişi
+tutmaz: yeniden başlayan ya da boşluk gören servis o anki durumu
+`parts.presence()` tutamacıyla registry'den sayfalı okur
+(`page(after, limit)`, `of(&[ids])`). `engine_events` kurulumu motor
+metodu olmayan bir trait'te `RegisterError::NoEngineEvents`'tir. Örnek:
+gsb-demo'nun arkadaş servisi (`gsb_demo::friends`, `FriendOnline` 1008 /
+`FriendOffline` 1009, ikisi `to: CLIENT`); demo modülü onu
+barındırmıyor (arkadaş grafiği oyunun verisidir).
+
 ### 4.7 Deterministik mantık (tur q4)
 
 Bir odanın mantığı tekrar oynatılabilir olsun diye (`docs/SERVICES.md`
