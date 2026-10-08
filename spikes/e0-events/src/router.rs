@@ -345,10 +345,10 @@ impl Router {
     fn push(&mut self, p: Push) {
         self.counts.pushes += 1;
         match &p.to {
-            Target::One(id) => self.to_identity(&p, id),
+            Target::One(id) => self.route_identity(&p, id),
             Target::Many(ids) => {
                 for id in ids.iter() {
-                    self.to_identity(&p, id);
+                    self.route_identity(&p, id);
                 }
             }
             Target::Room(room) => {
@@ -380,7 +380,7 @@ impl Router {
         }
     }
 
-    fn to_identity(&mut self, p: &Push, id: &Identity) {
+    fn route_identity(&mut self, p: &Push, id: &Identity) {
         if !self.rows.contains_key(id) {
             // Counted once per recipient, whatever its legs.
             self.counts.offline += 1;
