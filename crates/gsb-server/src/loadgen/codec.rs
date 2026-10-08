@@ -309,10 +309,9 @@ mod services;
 /// GSNU = the GSNT layout with four more call-table counters per room
 /// (round q4: `replay_diverged`, `replay_undecodable`, `records_written`,
 /// `records_dropped`, at the end of `CallCounts`).
-/// (Round q6 appended the hosted services' counters after the transport
-/// counters — B164 — under the same magic; the next free one, `GSNV`,
-/// is the parent's to assign when it merges.)
-pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E55;
+/// GSNV = the GSNU layout plus the hosted services' counters after the
+/// transport counters (round q6, B164: `codec/services.rs`).
+pub(crate) const METRICS_MAGIC: u32 = 0x4753_4E56;
 
 /// Little-endian writer (the encode side of the format above).
 pub(crate) struct W(Vec<u8>);
