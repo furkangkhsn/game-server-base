@@ -317,10 +317,7 @@ async fn a_client_without_the_bit_is_sent_no_push() {
         .expect("heartbeat sent");
     let deadline = Instant::now() + WAIT;
     let mut frames = Vec::new();
-    while !frames
-        .iter()
-        .any(|op| *op == gsb_protocol::op::base::HEARTBEAT_ACK)
-    {
+    while !frames.contains(&gsb_protocol::op::base::HEARTBEAT_ACK) {
         assert!(Instant::now() < deadline, "no heartbeat answer");
         c.poll(Duration::from_millis(100)).await;
         frames.extend(c.take_frames().map(|f| f.op));
