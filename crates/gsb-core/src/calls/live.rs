@@ -316,10 +316,7 @@ where
 type Launched<M> = (Route<M>, Service, Option<EngineSubscription>);
 
 /// [`spawn`] with its engine task when the setup asks for one.
-fn launch<K, S, L, F>(
-    served: Served<K, S>,
-    setup: F,
-) -> Result<Launched<K::Msg>, RegisterError>
+fn launch<K, S, L, F>(served: Served<K, S>, setup: F) -> Result<Launched<K::Msg>, RegisterError>
 where
     K: ServiceDef<S>,
     S: Send + Sync + 'static,

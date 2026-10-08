@@ -60,3 +60,12 @@ fn every_router_and_publisher_counter_has_its_own_family_in_order() {
         assert_eq!((f.get)(&c), value);
     }
 }
+
+#[test]
+fn every_engine_subscriber_counter_has_its_own_family_in_order() {
+    let c = crate::metrics::EngineCounts::from_values(numbered());
+    for (f, (field, value)) in ENGINE.iter().zip(c.fields()) {
+        assert_eq!(f.name, format!("gsb_{field}_total"));
+        assert_eq!((f.get)(&c), value);
+    }
+}

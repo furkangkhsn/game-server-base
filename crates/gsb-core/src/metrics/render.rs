@@ -279,6 +279,14 @@ impl MetricReport {
             }
             lines.push(line);
         }
+        // The engine-event subscribers: one line each (none without any).
+        for e in &self.engine_subscribers {
+            let mut line = format!("gsb-metric scope=engine_events name={}", e.subscriber);
+            for (k, v) in e.counts.fields() {
+                let _ = write!(line, " {k}={v}");
+            }
+            lines.push(line);
+        }
         // The hosted services (B164): one line per service, then one per
         // method (none without services).
         for svc in &self.services {

@@ -440,6 +440,15 @@ gsb_publisher_events_refused_router_gone sum t=2 mono=true unit="" n=2 | Pushes 
 gsb_publisher_events_refused_too_large sum t=2 mono=true unit="" n=2 | Pushes refused at the handle: the encoded event exceeded max_event_bytes, cumulative.
   [publisher=bank] 1000..2000 int 1
   [publisher=chat] 1000..2000 int 0
+gsb_engine_events_sent sum t=2 mono=true unit="" n=2 | Engine events this subscriber's channel took, cumulative.
+  [subscriber=Friends] 1000..2000 int 5
+  [subscriber=audit] 1000..2000 int 0
+gsb_engine_events_refused_full sum t=2 mono=true unit="" n=2 | Engine events refused: this subscriber's channel was full, lost, cumulative.
+  [subscriber=Friends] 1000..2000 int 2
+  [subscriber=audit] 1000..2000 int 0
+gsb_engine_events_refused_gone sum t=2 mono=true unit="" n=2 | Engine events refused: this subscriber was gone, lost, cumulative.
+  [subscriber=Friends] 1000..2000 int 1
+  [subscriber=audit] 1000..2000 int 0
 gsb_room_hz gauge unit="" n=2 | Measured room step rate (Δsteps/s over the last sample interval).
   [room=r1] 0..2000 double 30
   [room=r7] 0..2000 double 0

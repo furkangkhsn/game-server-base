@@ -369,6 +369,11 @@ pub struct MetricReport {
     /// [`crate::metrics::PublisherReport`]), in minting order; empty when
     /// the collector was handed none.
     pub publishers: Vec<crate::metrics::PublisherReport>,
+    /// The engine-event subscribers' counters (`docs/EVENTS.md` §5.4,
+    /// see [`crate::metrics::EngineSubscriberReport`]), one per
+    /// subscriber name, in subscription order; empty when the collector
+    /// was handed none.
+    pub engine_subscribers: Vec<crate::metrics::EngineSubscriberReport>,
 }
 
 impl MetricReport {
@@ -422,6 +427,7 @@ impl MetricReport {
             transport: TransportCounters::default(),
             services: Vec::new(),
             publishers: Vec::new(),
+            engine_subscribers: Vec::new(),
         }
     }
 }

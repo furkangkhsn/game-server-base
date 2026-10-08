@@ -149,7 +149,10 @@
 //! `gsb_events_*_total` families after the registry's, the
 //! `gsb_net_pushes_*_total` ones after the net scope's, and the
 //! `gsb_publisher_events_*_total` ones (label `publisher`) after the
-//! services'.
+//! services'. Round e4's engine-event subscribers (`docs/EVENTS.md`
+//! §5.4): a `scope=engine_events` line per subscriber name after the
+//! publishers' lines, and the `gsb_engine_events_*_total` families
+//! (label `subscriber`) after the publishers' families.
 
 use super::*;
 use crate::conn::ServerClose;
@@ -160,7 +163,8 @@ use crate::conn::ServerClose;
 pub(super) fn golden_report() -> MetricReport {
     let mut acc = MetricAccumulator::default()
         .with_services(golden_services())
-        .with_publishers(golden_publishers());
+        .with_publishers(golden_publishers())
+        .with_engine_subscribers(golden_engine_subscribers());
     let t0 = Instant::now();
     acc.apply(MetricsEvent::Registry(RegistrySample {
         events: crate::metrics::RouterCounts {
@@ -449,6 +453,21 @@ fn golden_publishers() -> Vec<crate::events::PublisherSource> {
             crate::events::PublisherId(2),
             std::sync::Arc::default(),
         ),
+    ]
+}
+
+/// Round e4's engine-event subscribers: one with every counter distinct,
+/// one that heard nothing — the `scope=engine_events` lines and the
+/// `gsb_engine_events_*` families.
+fn golden_engine_subscribers() -> Vec<crate::events::EngineSubscriberSource> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let friends = crate::events::EngineSubscriberStats::default();
+    friends.sent.store(5, Relaxed);
+    friends.refused_full.store(2, Relaxed);
+    friends.refused_gone.store(1, Relaxed);
+    vec![
+        ("Friends".into(), std::sync::Arc::new(friends)),
+        ("audit".into(), std::sync::Arc::default()),
     ]
 }
 

@@ -213,9 +213,9 @@ pub type EngineReceiver = Inbox<EngineNotice>;
 /// pattern — one writer, so `Relaxed` is all it needs).
 #[derive(Debug, Default)]
 pub struct EngineSubscriberStats {
-    sent: AtomicU64,
-    refused_full: AtomicU64,
-    refused_gone: AtomicU64,
+    pub(crate) sent: AtomicU64,
+    pub(crate) refused_full: AtomicU64,
+    pub(crate) refused_gone: AtomicU64,
 }
 
 impl EngineSubscriberStats {

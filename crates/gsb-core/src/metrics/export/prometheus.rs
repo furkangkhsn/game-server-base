@@ -62,6 +62,7 @@ impl MetricReport {
         }
         services(&mut out, &self.services);
         publishers(&mut out, &self.publishers);
+        engine_subscribers(&mut out, &self.engine_subscribers);
 
         let rooms = &self.rooms;
         if rooms.is_empty() {
@@ -123,6 +124,26 @@ fn publishers(out: &mut String, publishers: &[crate::metrics::PublisherReport]) 
                 f.name,
                 p.publisher,
                 (f.get)(&p.counts)
+            );
+        }
+    }
+}
+
+/// The engine-event subscriber families (`docs/EVENTS.md` §5.4), only
+/// when subscribers report: a sample per subscriber name.
+fn engine_subscribers(out: &mut String, subs: &[crate::metrics::EngineSubscriberReport]) {
+    if subs.is_empty() {
+        return;
+    }
+    for f in &families::ENGINE {
+        header(out, f.name, "counter", f.help);
+        for e in subs {
+            let _ = writeln!(
+                out,
+                "{}{{subscriber=\"{}\"}} {}",
+                f.name,
+                e.subscriber,
+                (f.get)(&e.counts)
             );
         }
     }

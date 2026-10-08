@@ -44,6 +44,9 @@ pub struct MetricAccumulator {
     /// The publishing handles whose counters each report reads (see
     /// [`Self::with_publishers`]), in minting order.
     publishers: Vec<crate::events::PublisherSource>,
+    /// The engine-event subscribers whose counters each report reads
+    /// (see [`Self::with_engine_subscribers`]), in subscription order.
+    engine_subscribers: Vec<crate::events::EngineSubscriberSource>,
     /// Live rooms plus destroyed rooms still inside their short
     /// report-window linger (see `ROOM_GONE_GRACE_REPORTS`): a destroyed
     /// room's entry is dropped when its windows run down, so this map is
@@ -154,6 +157,18 @@ impl MetricAccumulator {
     /// sent.
     pub fn with_publishers(mut self, publishers: Vec<crate::events::PublisherSource>) -> Self {
         self.publishers = publishers;
+        self
+    }
+
+    /// Read these engine-event subscribers' counters into every report
+    /// (the `engine_subscribers` slice, the `gsb_engine_events_*`
+    /// families; `docs/EVENTS.md` §5.4). Atomic loads at report time;
+    /// nothing is sent.
+    pub fn with_engine_subscribers(
+        mut self,
+        subscribers: Vec<crate::events::EngineSubscriberSource>,
+    ) -> Self {
+        self.engine_subscribers = subscribers;
         self
     }
 

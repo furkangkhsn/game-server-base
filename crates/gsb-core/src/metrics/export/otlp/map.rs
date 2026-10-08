@@ -91,6 +91,7 @@ pub fn request(
     }
     services(&mut m, &report.services, at);
     publishers(&mut m, &report.publishers, at);
+    engine_subscribers(&mut m, &report.engine_subscribers, at);
 
     let rooms = &report.rooms;
     if !rooms.is_empty() {
@@ -167,6 +168,30 @@ fn publishers(
             int_point(
                 vec![attr("publisher", &p.publisher)],
                 (f.get)(&p.counts),
+                at,
+                true,
+            )
+        });
+        m.push(sum(f.name, f.help, points.collect()));
+    }
+}
+
+/// The engine-event subscriber families (`docs/EVENTS.md` §5.4), as the
+/// exposition has them: only when subscribers report; the subscriber's
+/// name as the attribute.
+fn engine_subscribers(
+    m: &mut Vec<proto::Metric>,
+    subs: &[crate::metrics::EngineSubscriberReport],
+    at: Stamp,
+) {
+    if subs.is_empty() {
+        return;
+    }
+    for f in &families::ENGINE {
+        let points = subs.iter().map(|e| {
+            int_point(
+                vec![attr("subscriber", &e.subscriber)],
+                (f.get)(&e.counts),
                 at,
                 true,
             )

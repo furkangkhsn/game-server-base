@@ -151,6 +151,17 @@ impl MetricsCollector {
         self
     }
 
+    /// Read these engine-event subscribers' counters into every report
+    /// (see [`MetricAccumulator::with_engine_subscribers`]): the server
+    /// hands it the subscribers its game registered.
+    pub fn with_engine_subscribers(
+        mut self,
+        subscribers: Vec<crate::events::EngineSubscriberSource>,
+    ) -> Self {
+        self.acc = std::mem::take(&mut self.acc).with_engine_subscribers(subscribers);
+        self
+    }
+
     /// Hand every report to `exporters` as well (in this order, before
     /// the sink). The collector stays the one place export happens; an
     /// exporter only ever sees the folded report (see [`Exporter`]).

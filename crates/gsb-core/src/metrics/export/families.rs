@@ -26,7 +26,7 @@ mod session;
 mod stop;
 mod transport;
 
-pub(super) use events::{PUBLISHER, PUSHES, ROUTER};
+pub(super) use events::{ENGINE, PUBLISHER, PUSHES, ROUTER};
 pub(super) use registry::REGISTRY;
 pub(super) use server::NET;
 pub(super) use services::{METHOD, SERVICE};

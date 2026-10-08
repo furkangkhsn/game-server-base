@@ -9,12 +9,14 @@
 //! - the connections' PUSH frames (`gsb_net_pushes_*_total`,
 //!   [`PushCounts`](crate::metrics::PushCounts));
 //! - per publishing handle (`gsb_publisher_events_*_total`, the
-//!   publisher's name as its label, [`PublisherCounts`](crate::metrics::PublisherCounts)).
+//!   publisher's name as its label, [`PublisherCounts`](crate::metrics::PublisherCounts));
+//! - per engine-event subscriber (`gsb_engine_events_*_total`, the
+//!   subscriber's name as its label, [`EngineCounts`](crate::metrics::EngineCounts)).
 
 use super::{Kind, RoomFamily, Scalar, counter};
 use crate::metrics::{
-    EVENT_COUNT, NetReport, PUBLISHER_COUNT, PUSH_COUNT, PublisherCounts, ROUTER_COUNT,
-    RegistryReport,
+    ENGINE_COUNT, EVENT_COUNT, EngineCounts, NetReport, PUBLISHER_COUNT, PUSH_COUNT,
+    PublisherCounts, ROUTER_COUNT, RegistryReport,
 };
 
 /// One publisher-scoped counter: a sample per publishing handle, its name
@@ -23,6 +25,14 @@ pub(in crate::metrics::export) struct PublisherFamily {
     pub(in crate::metrics::export) name: &'static str,
     pub(in crate::metrics::export) help: &'static str,
     pub(in crate::metrics::export) get: fn(&PublisherCounts) -> u64,
+}
+
+/// One engine-event subscriber counter: a sample per subscriber name,
+/// as the label/attribute (`subscriber="<name>"`).
+pub(in crate::metrics::export) struct EngineFamily {
+    pub(in crate::metrics::export) name: &'static str,
+    pub(in crate::metrics::export) help: &'static str,
+    pub(in crate::metrics::export) get: fn(&EngineCounts) -> u64,
 }
 
 /// The room's event table, in the counters' order.
@@ -264,6 +274,25 @@ pub(in crate::metrics::export) const PUBLISHER: [PublisherFamily; PUBLISHER_COUN
         name: "gsb_publisher_events_refused_too_large_total",
         help: "Pushes refused at the handle: the encoded event exceeded max_event_bytes, cumulative.",
         get: |c| c.events_refused_too_large,
+    },
+];
+
+/// The engine-event subscribers' counters, in their order.
+pub(in crate::metrics::export) const ENGINE: [EngineFamily; ENGINE_COUNT] = [
+    EngineFamily {
+        name: "gsb_engine_events_sent_total",
+        help: "Engine events this subscriber's channel took, cumulative.",
+        get: |c| c.engine_events_sent,
+    },
+    EngineFamily {
+        name: "gsb_engine_events_refused_full_total",
+        help: "Engine events refused: this subscriber's channel was full, lost, cumulative.",
+        get: |c| c.engine_events_refused_full,
+    },
+    EngineFamily {
+        name: "gsb_engine_events_refused_gone_total",
+        help: "Engine events refused: this subscriber was gone, lost, cumulative.",
+        get: |c| c.engine_events_refused_gone,
     },
 ];
 

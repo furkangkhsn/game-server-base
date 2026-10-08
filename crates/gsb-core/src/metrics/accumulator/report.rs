@@ -236,6 +236,14 @@ impl MetricAccumulator {
                     counts: stats.counts(),
                 })
                 .collect(),
+            engine_subscribers: self
+                .engine_subscribers
+                .iter()
+                .map(|(name, stats)| crate::metrics::EngineSubscriberReport {
+                    subscriber: name.to_string(),
+                    counts: stats.counts(),
+                })
+                .collect(),
             rooms,
         }
     }

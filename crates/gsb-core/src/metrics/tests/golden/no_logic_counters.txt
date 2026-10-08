@@ -8,6 +8,8 @@ gsb-metric scope=transport udp_requests_dropped_full=11 udp_actions_dropped_full
 gsb-metric scope=events events_routed=6 events_unread=0 events_offline=1 events_client_sent=4 events_client_parked=1 events_client_unsupported=1 events_client_refused_conn_full=0 events_client_refused_conn_gone=0 events_world_sent=3 events_world_no_room=1 events_world_refused_room_full=0 events_world_refused_room_gone=0 events_relocations=0 events_relocations_stale=0 events_seals_sent=0 events_seals_refused=0 pushes_written=3 pushes_dropped_outbound_full=1 pushes_dropped_outbound_gone=0 pushes_dropped_unread=1
 gsb-metric scope=publisher name=bank id=1 events_pushed=6 events_refused_router_full=2 events_refused_router_gone=0 events_refused_too_large=1
 gsb-metric scope=publisher name=chat id=2 events_pushed=0 events_refused_router_full=0 events_refused_router_gone=0 events_refused_too_large=0
+gsb-metric scope=engine_events name=Friends engine_events_sent=5 engine_events_refused_full=2 engine_events_refused_gone=1
+gsb-metric scope=engine_events name=audit engine_events_sent=0 engine_events_refused_full=0 engine_events_refused_gone=0
 gsb-metric scope=service name=Economy calls_received=20 calls_timed_out=19 calls_shed=18 calls_failed=17 calls_abandoned=16 replies_undeliverable_full=15 replies_undeliverable_gone=14
 gsb-metric scope=service_method service=Economy method=buy calls=14 latency_us_total=7000 latency_us_mean=500.0 latency_us_max=1200
 gsb-metric scope=service_method service=Economy method=refund calls=0 latency_us_total=0 latency_us_mean=0.0 latency_us_max=0
@@ -646,6 +648,18 @@ gsb_publisher_events_refused_router_gone_total{publisher="chat"} 0
 # TYPE gsb_publisher_events_refused_too_large_total counter
 gsb_publisher_events_refused_too_large_total{publisher="bank"} 1
 gsb_publisher_events_refused_too_large_total{publisher="chat"} 0
+# HELP gsb_engine_events_sent_total Engine events this subscriber's channel took, cumulative.
+# TYPE gsb_engine_events_sent_total counter
+gsb_engine_events_sent_total{subscriber="Friends"} 5
+gsb_engine_events_sent_total{subscriber="audit"} 0
+# HELP gsb_engine_events_refused_full_total Engine events refused: this subscriber's channel was full, lost, cumulative.
+# TYPE gsb_engine_events_refused_full_total counter
+gsb_engine_events_refused_full_total{subscriber="Friends"} 2
+gsb_engine_events_refused_full_total{subscriber="audit"} 0
+# HELP gsb_engine_events_refused_gone_total Engine events refused: this subscriber was gone, lost, cumulative.
+# TYPE gsb_engine_events_refused_gone_total counter
+gsb_engine_events_refused_gone_total{subscriber="Friends"} 1
+gsb_engine_events_refused_gone_total{subscriber="audit"} 0
 # HELP gsb_room_hz Measured room step rate (Δsteps/s over the last sample interval).
 # TYPE gsb_room_hz gauge
 gsb_room_hz{room="r1"} 30
