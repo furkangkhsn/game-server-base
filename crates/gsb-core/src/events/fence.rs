@@ -353,10 +353,4 @@ impl Fences {
     pub(crate) fn take_relays(&mut self) -> Vec<(usize, Relay)> {
         std::mem::take(&mut self.out)
     }
-
-    /// Nothing held, pending or waiting (a test probe).
-    #[cfg(test)]
-    pub(crate) fn is_idle(&self) -> bool {
-        self.tombs.is_empty() && self.holds.is_empty() && self.ready.is_empty() && self.out.is_empty()
-    }
 }

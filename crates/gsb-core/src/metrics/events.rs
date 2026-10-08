@@ -22,11 +22,11 @@
 //!   refused_room_full, refused_room_gone}`;
 //! - `client_sent = pushes_written + pushes_dropped_outbound_full +
 //!   pushes_dropped_outbound_gone + pushes_dropped_unread + (in flight)`;
-//! - `world_sent + forwarded = admitted + no_handler + undecodable +
-//!   unbound + world_not_here + forward_refused + fence_overflow + (held,
-//!   in flight)`, the event counts summed over a room's actors (a
-//!   forwarded leg is ended once more, by the shard it was handed to);
-//!   `admitted = taken + untaken`.
+//! - `world_sent = admitted + no_handler + undecodable + unbound +
+//!   world_not_here + forward_refused + fence_overflow + (held, in
+//!   flight)`, the event counts summed over a room's actors — a
+//!   forwarded leg is a transfer (`forwarded`), ended once, by the shard
+//!   it was handed to; `admitted = taken + untaken`.
 
 /// Declares a counter set and its whole-set operations (the
 /// [`CallCounts`](crate::metrics::CallCounts) pattern: a field added to

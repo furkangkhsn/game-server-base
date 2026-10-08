@@ -43,6 +43,7 @@ mod border;
 mod cause;
 mod dropped;
 mod effects;
+mod fence;
 mod hold;
 mod identity;
 mod idle;
