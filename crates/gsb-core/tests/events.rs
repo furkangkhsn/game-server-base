@@ -615,3 +615,41 @@ async fn a_push_frame_from_a_client_is_a_hard_violation() {
         "the budget closed it: {errors:?}"
     );
 }
+
+/// The numbers live with the identity's row: a session that ends with
+/// nothing parked takes them along; the identity's next session is a new
+/// stream, numbered from 1 again (E5).
+#[tokio::test]
+async fn a_new_life_is_a_new_stream_from_one() {
+    let mut server = Server::start(false).await;
+    let chat = server.publisher("chat");
+    let line = ChatLine { text: "x".into() };
+    let mut first = Client::login(&server, 1, "bob", FEATURE_PUSH, None).await;
+    chat.push(&id("bob"), &line).expect("taken");
+    chat.push(&id("bob"), &line).expect("taken");
+    let got = first.pushes(2).await;
+    assert_eq!((got[0].seq, got[1].seq), (1, 2));
+    let stream = got[0].stream;
+    first.close().await;
+    // Offline once the registry dropped the row.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let before = server.counts_until(|_, _| true).await.0;
+        chat.push(&id("bob"), &line).expect("taken");
+        let (r, _) = server
+            .counts_until(|r, _| r.events_routed > before.events_routed)
+            .await;
+        if r.events_offline > before.events_offline {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "bob offline in time"
+        );
+    }
+    let mut second = Client::login(&server, 2, "bob", FEATURE_PUSH, None).await;
+    chat.push(&id("bob"), &line).expect("taken");
+    let got = second.pushes(1).await;
+    assert_eq!(got[0].seq, 1);
+    assert_ne!(got[0].stream, stream, "a new stream");
+}
