@@ -31,6 +31,15 @@
 //! client-visible contract of the pattern ("the answer comes later, and
 //! looks like the same kind of frame").
 //!
+//! **The grant (round e5, `docs/EVENTS.md` §8).** A price list built
+//! [`with_publisher`](PriceList::with_publisher) pushes an `ItemGranted`
+//! (`to: BOTH`) to the buyer after every purchase it confirms: the
+//! client hears a toast (the CLIENT leg, a PUSH frame), the buyer's room
+//! counts the item (the WORLD leg — the demo's `Granted` component). The
+//! buyer is the call's verified player (`cx.player()`): the room buys on
+//! the player's behalf ([`EconomyService::buy_for`]); a purchase made for
+//! nobody (an anonymous session) grants nothing to push to.
+//!
 //! **Stop (BACKLOG F5).** A game module hosts it with
 //! `parts.service(Economy::serve(PriceList::new(latency)), |s| s.mailbox(64))`
 //! (`gsb-server`'s demo module); the server asks it to stop only after
@@ -41,10 +50,15 @@
 //! [`EconomyService::spawn`] keeps the pre-F5 life: no stop request, the
 //! task ends when its last client drops.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use gsb_core::calls::{CallCx, CallError, Refusal, ServiceClient};
+use gsb_core::calls::{CallCx, CallError, Identity, Refusal, ServiceClient};
+use gsb_core::events::Publisher;
 use gsb_core::service::Service;
+
+use crate::demo::game::ItemGranted;
 
 /// The demo price table (a wallet does not exist in the base; the price
 /// is the observable effect the client sees in `BuyResult.price`).
@@ -58,29 +72,61 @@ pub trait Economy {
     async fn buy(&self, cx: &CallCx, kind: String) -> Result<u32, String>;
 }
 
-/// The demo's economy: [`PRICES`], answered after a simulated I/O time.
-#[derive(Debug, Clone, Copy)]
+/// The demo's economy: [`PRICES`], answered after a simulated I/O time;
+/// with a publisher, every confirmed purchase is granted (module docs).
+#[derive(Debug, Clone)]
 pub struct PriceList {
     latency: Duration,
+    grants: Option<Grants>,
+}
+
+/// The granting half: the handle, and the grant version (one per
+/// confirmed purchase, from 1 — what a client or a room keeps the
+/// highest of).
+#[derive(Debug, Clone)]
+struct Grants {
+    publisher: Publisher,
+    version: Arc<AtomicU64>,
 }
 
 impl PriceList {
     /// A price list answering after `latency` (`0`: on the call task's
-    /// first poll).
+    /// first poll), granting nothing.
     pub fn new(latency: Duration) -> Self {
-        Self { latency }
+        Self {
+            latency,
+            grants: None,
+        }
+    }
+
+    /// Grant every confirmed purchase: push an `ItemGranted` to the
+    /// buyer through `publisher` (a refusal at the handle is counted
+    /// there; the purchase stands).
+    #[must_use]
+    pub fn with_publisher(mut self, publisher: Publisher) -> Self {
+        self.grants = Some(Grants {
+            publisher,
+            version: Arc::new(AtomicU64::new(0)),
+        });
+        self
     }
 }
 
 impl Economy for PriceList {
-    async fn buy(&self, _cx: &CallCx, kind: String) -> Result<u32, String> {
+    async fn buy(&self, cx: &CallCx, kind: String) -> Result<u32, String> {
         // The simulated I/O: the call's own task sleeps (no room state is
         // held — the host owns this task).
         tokio::time::sleep(self.latency).await;
-        match PRICES.iter().find(|(k, _)| *k == kind) {
-            Some((_, p)) => Ok(*p),
-            None => Err(format!("unknown item `{kind}`")),
+        let price = match PRICES.iter().find(|(k, _)| *k == kind) {
+            Some((_, p)) => *p,
+            None => return Err(format!("unknown item `{kind}`")),
+        };
+        if let (Some(g), Some(buyer)) = (&self.grants, cx.player()) {
+            let version = g.version.fetch_add(1, Ordering::Relaxed) + 1;
+            // One try_send; a refusal is counted at the handle.
+            let _ = g.publisher.push(buyer, &ItemGranted { kind, version });
         }
+        Ok(price)
     }
 }
 
@@ -138,11 +184,26 @@ impl EconomyService {
         MAILBOX
     }
 
-    /// Submit a purchase; the answer arrives on the returned future
-    /// (`Err` carries the client-visible reason: the service's own, or
-    /// a server-side condition the room answers as a normal rejection).
+    /// Submit a purchase for nobody in particular ([`Self::buy_for`]
+    /// with no buyer: nothing is granted).
     pub fn buy(&self, kind: String) -> impl std::future::Future<Output = Result<u32, String>> {
-        let handle = self.handle.clone();
+        self.buy_for(None, kind)
+    }
+
+    /// Submit a purchase on `buyer`'s behalf (the service sees it as the
+    /// call's verified player and grants the item to it); the answer
+    /// arrives on the returned future (`Err` carries the client-visible
+    /// reason: the service's own, or a server-side condition the room
+    /// answers as a normal rejection).
+    pub fn buy_for(
+        &self,
+        buyer: Option<&Identity>,
+        kind: String,
+    ) -> impl std::future::Future<Output = Result<u32, String>> + use<> {
+        let handle = match buyer {
+            Some(who) => self.handle.on_behalf_of(who),
+            None => self.handle.clone(),
+        };
         async move {
             handle.buy(kind).await.map_err(|e| match e {
                 CallError::Service(reason) => reason,

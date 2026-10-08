@@ -41,3 +41,19 @@ pub struct Speed(pub f32);
 
 /// Units per second used when an entity has no explicit [`Speed`].
 pub const DEFAULT_SPEED: f32 = 10.0;
+
+/// The player's verified identity (the join's ticket player, or the
+/// local-auth name), stamped at spawn when the session has one: the
+/// identity a purchase is made on behalf of, and the one a granted item
+/// (`ItemGranted`, round e5) is addressed to. Migrates with the entity.
+#[derive(Debug, Clone, PartialEq, Eq, Component)]
+pub struct Account(pub gsb_core::calls::Identity);
+
+/// What the player was granted (the WORLD leg of `ItemGranted`, round
+/// e5): the count, and the highest grant version seen (a grant older
+/// than it is a duplicate). Migrates with the entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Component)]
+pub struct Granted {
+    pub items: u32,
+    pub version: u64,
+}

@@ -264,9 +264,10 @@ impl Sim {
         router.mint.publisher(name)
     }
 
-    /// Every push taken so far (the router's mailbox drained into it
-    /// first), in push order.
-    pub(crate) fn pushes(&mut self) -> &[Push] {
+    /// Every push this sim's publishers made so far, in push order (the
+    /// router's mailbox drained into it first) — both legs' source: a
+    /// test reads what was published here (`Push::target`, `op`, `body`).
+    pub fn pushes(&mut self) -> &[Push] {
         let Some(r) = &mut self.router else {
             return &[];
         };

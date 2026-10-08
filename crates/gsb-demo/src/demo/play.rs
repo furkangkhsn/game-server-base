@@ -6,13 +6,17 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::{Entity, World};
+use gsb_core::calls::{BootError, Calls, Identity};
+use gsb_core::events::{Addressee, Arrived, Events};
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::room::{Action, TickCtx};
 use gsb_core::rpc::{RequestDecision, RpcRequest};
 use gsb_ecs::{SystemCtx, SystemRunner};
 
 use crate::demo::codec::DemoCodec;
+use crate::demo::components::{Account, Granted};
 use crate::demo::economy::EconomyService;
+use crate::demo::game::ItemGranted;
 use crate::demo::{bot, input, op, rpc, spawn, systems};
 use gsb_kit::game::{Game, InputSeq, TeamGame};
 use gsb_kit::team::Team;
@@ -82,6 +86,14 @@ impl Game for DemoGame {
             .id()
     }
 
+    /// [`Self::spawn_player`], the entity stamped with the player's
+    /// identity ([`Account`]) when the session has one.
+    fn spawn_player_as(&mut self, world: &mut World, conn: ConnectionId, identity: &str) -> Entity {
+        let entity = self.spawn_player(world, conn);
+        stamp_account(world, entity, identity);
+        entity
+    }
+
     fn bot_actions(
         &mut self,
         world: &World,
@@ -113,6 +125,28 @@ impl Game for DemoGame {
         self.runner.run_all(world, &sys_ctx);
     }
 
+    /// The WORLD leg of `ItemGranted` (round e5): the room counts the
+    /// buyer's items.
+    fn boot_events(&mut self, events: &mut Events) -> Result<(), BootError> {
+        events.accept::<ItemGranted>()
+    }
+
+    /// The tick's grants first (the buyer's [`Granted`]), then the
+    /// systems.
+    fn systems_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut Calls,
+        events: &mut Events,
+    ) {
+        let grants = events.take::<ItemGranted>();
+        if !grants.is_empty() {
+            grant(world, grants);
+        }
+        self.systems_with_calls(world, ctx, calls);
+    }
+
     fn handle_request(
         &mut self,
         world: &mut World,
@@ -128,5 +162,53 @@ impl Game for DemoGame {
 impl TeamGame for DemoGame {
     fn team_of(&mut self, _world: &World, conn: ConnectionId, _entity: Entity) -> Team {
         spawn::team_of(conn)
+    }
+
+    /// The team spawn, stamped with the player's identity ([`Account`]).
+    fn spawn_team_player_as(
+        &mut self,
+        world: &mut World,
+        conn: ConnectionId,
+        identity: &str,
+    ) -> (Entity, Team) {
+        let (entity, team) = self.spawn_team_player(world, conn);
+        stamp_account(world, entity, identity);
+        (entity, team)
+    }
+}
+
+/// Stamp `identity` on a player's entity (an anonymous session has none).
+fn stamp_account(world: &mut World, entity: Entity, identity: &str) {
+    if !identity.is_empty() {
+        world
+            .entity_mut(entity)
+            .insert(Account(Identity::new(identity)));
+    }
+}
+
+/// Count each grant on the entity whose [`Account`] it is addressed to;
+/// a grant no newer than the entity's last is a duplicate. A grant for
+/// an identity this world holds no entity of (it left this tick) or a
+/// room-wide one (the demo pushes none) has no buyer here.
+fn grant(world: &mut World, grants: Vec<Arrived<ItemGranted>>) {
+    let mut accounts = world.query::<(Entity, &Account)>();
+    let owners: Vec<(Entity, Identity)> = accounts
+        .iter(world)
+        .map(|(e, a)| (e, a.0.clone()))
+        .collect();
+    for g in grants {
+        let Addressee::Player(who) = &g.to else {
+            continue;
+        };
+        let Some((entity, _)) = owners.iter().find(|(_, id)| id == who) else {
+            continue;
+        };
+        let mut e = world.entity_mut(*entity);
+        let mut granted = e.get::<Granted>().copied().unwrap_or_default();
+        if g.body.version > granted.version {
+            granted.items += 1;
+            granted.version = g.body.version;
+            e.insert(granted);
+        }
     }
 }

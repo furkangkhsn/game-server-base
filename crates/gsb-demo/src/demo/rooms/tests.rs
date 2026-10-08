@@ -25,6 +25,7 @@ use gsb_kit::identity::WireId;
 
 mod aoi;
 mod economy;
+mod grant;
 mod open;
 mod pvs;
 mod sharded;

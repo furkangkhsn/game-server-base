@@ -9,7 +9,7 @@ use gsb_core::id::PlayerId;
 use gsb_core::rpc::RequestDecision;
 use prost::Message;
 
-use crate::demo::components::{MoveTarget, Position};
+use crate::demo::components::{Account, MoveTarget, Position};
 use crate::demo::economy::EconomyService;
 use crate::demo::op;
 
@@ -92,12 +92,18 @@ pub(crate) fn handle_request(
                     "economy service not configured".into(),
                 ));
             };
+            // The buyer: the requester's verified identity (round e5 —
+            // the economy grants the item to it).
+            let buyer = player_entity
+                .get(&req.player)
+                .and_then(|e| world.get::<Account>(*e))
+                .map(|a| a.0.clone());
             // The room captures a CLONE of the service handle (a
             // cheap sender clone) — the future owns everything it
             // needs and borrows nothing from the room (see the
             // `RequestDecision::External` contract).
             let fut = async move {
-                match economy.buy(buy.kind).await {
+                match economy.buy_for(buyer.as_ref(), buy.kind).await {
                     Ok(price) => {
                         let res = crate::demo::game::BuyResult {
                             ok: true,

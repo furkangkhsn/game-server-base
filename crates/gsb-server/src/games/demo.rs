@@ -131,9 +131,14 @@ impl GameModule for DemoModule {
         // A `#[gsb_core::service]` trait hosted on tower (SERVICES.md
         // §4.1); the rooms reach it through its awaitable client.
         use gsb_demo::economy::{Economy, EconomyService, PriceList};
+        // Every confirmed purchase is granted: an `ItemGranted` to the
+        // buyer (its client and its room — EVENTS round e5).
+        let grants = parts.publisher("economy");
         parts
             .service(
-                Economy::serve(PriceList::new(EconomyService::default_latency())),
+                Economy::serve(
+                    PriceList::new(EconomyService::default_latency()).with_publisher(grants),
+                ),
                 |s| s.mailbox(EconomyService::mailbox()),
             )
             .expect("the demo hosts its economy once");
