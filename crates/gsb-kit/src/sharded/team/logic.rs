@@ -202,7 +202,20 @@ where
     ) {
         self.step += 1;
         self.tick = ctx.tick;
-        self.inner.step(world, ctx, None, Some(calls));
+        self.inner.step(world, ctx, None, Some(crate::common::Io::calls(calls)));
+        crate::common::close_change_window(world);
+    }
+
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.step += 1;
+        self.tick = ctx.tick;
+        self.inner.step(world, ctx, None, Some(crate::common::Io::events(calls, events)));
         crate::common::close_change_window(world);
     }
 
@@ -220,6 +233,13 @@ where
         calls: &mut gsb_core::calls::Calls,
     ) -> Result<(), gsb_core::calls::BootError> {
         GameLogic::boot_calls(&mut self.inner, calls)
+    }
+
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        GameLogic::boot_events(&mut self.inner, events)
     }
 
     fn call_owner(

@@ -116,7 +116,19 @@ where
         seam: &mut CrossSeam<'_, Wire<G>>,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.inner.step(world, ctx, Some(seam), Some(calls));
+        self.inner.step(world, ctx, Some(seam), Some(crate::common::Io::calls(calls)));
+        self.spatial_step(world, ctx);
+    }
+
+    fn update_seam_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.inner.step(world, ctx, Some(seam), Some(crate::common::Io::events(calls, events)));
         self.spatial_step(world, ctx);
     }
 

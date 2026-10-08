@@ -283,7 +283,17 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
         ctx: &TickCtx,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.tick_update(world, ctx, Some(calls));
+        self.tick_update(world, ctx, Some(crate::common::Io::calls(calls)));
+    }
+
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.tick_update(world, ctx, Some(crate::common::Io::events(calls, events)));
     }
 
     /// The game's request handlers ([`Game::handle_request`] — the demo:
@@ -305,6 +315,13 @@ impl<G: Game> GameLogic<World> for OpenRoom<G> {
         calls: &mut gsb_core::calls::Calls,
     ) -> Result<(), gsb_core::calls::BootError> {
         self.game.boot_calls(calls)
+    }
+
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_events(events)
     }
 
     fn call_owner(
@@ -355,7 +372,7 @@ impl<G: Game> OpenRoom<G> {
         &mut self,
         world: &mut World,
         ctx: &TickCtx,
-        calls: Option<&mut gsb_core::calls::Calls>,
+        calls: Option<crate::common::Io<'_>>,
     ) {
         crate::common::systems(&mut self.game, world, ctx, &self.player_entity, calls);
         // The tick's ONE change-window close (§4.4: the kit owns it; a

@@ -256,7 +256,17 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         ctx: &TickCtx,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.tick_update(world, ctx, Some(calls));
+        self.tick_update(world, ctx, Some(crate::common::Io::calls(calls)));
+    }
+
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.tick_update(world, ctx, Some(crate::common::Io::events(calls, events)));
     }
 
     fn encoded_records(&mut self) -> u64 {
@@ -293,6 +303,13 @@ impl<G: TeamGame, V: Vision> GameLogic<World> for TeamRoom<G, V> {
         self.game.boot_calls(calls)
     }
 
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_events(events)
+    }
+
     fn call_owner(
         &self,
         world: &World,
@@ -316,7 +333,7 @@ impl<G: TeamGame, V: Vision> TeamRoom<G, V> {
         &mut self,
         world: &mut World,
         ctx: &TickCtx,
-        calls: Option<&mut gsb_core::calls::Calls>,
+        calls: Option<crate::common::Io<'_>>,
     ) {
         // One step: the delta ledgers' "previous step" and the tick the
         // `private` seam stamps into one-shot fulls.

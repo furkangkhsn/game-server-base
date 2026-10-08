@@ -195,6 +195,17 @@ impl<G: LitGame, S: CellSpace<Wire<G>>> GameLogic<World> for LitAoiRoom<G, S> {
         self.light_pass(world);
     }
 
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.room.update_with_events(world, ctx, calls, events);
+        self.light_pass(world);
+    }
+
     fn handle_request(
         &mut self,
         world: &mut World,
@@ -209,6 +220,13 @@ impl<G: LitGame, S: CellSpace<Wire<G>>> GameLogic<World> for LitAoiRoom<G, S> {
         calls: &mut gsb_core::calls::Calls,
     ) -> Result<(), gsb_core::calls::BootError> {
         GameLogic::boot_calls(&mut self.room, calls)
+    }
+
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        GameLogic::boot_events(&mut self.room, events)
     }
 
     fn call_owner(

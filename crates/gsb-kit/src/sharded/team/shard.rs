@@ -142,6 +142,19 @@ where
         self.inner.update_seam_with_calls(world, ctx, seam, calls);
     }
 
+    fn update_seam_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.step += 1;
+        self.tick = ctx.tick;
+        self.inner.update_seam_with_events(world, ctx, seam, calls, events);
+    }
+
     fn apply_remote_effect(
         &mut self,
         world: &mut World,

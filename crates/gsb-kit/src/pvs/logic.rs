@@ -227,7 +227,17 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         ctx: &TickCtx,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.tick_update(world, ctx, Some(calls));
+        self.tick_update(world, ctx, Some(crate::common::Io::calls(calls)));
+    }
+
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.tick_update(world, ctx, Some(crate::common::Io::events(calls, events)));
     }
 
     fn encoded_records(&mut self) -> u64 {
@@ -281,6 +291,13 @@ impl<G: Game, M: SectorMap> GameLogic<World> for SectorRoom<G, M> {
         self.game.boot_calls(calls)
     }
 
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_events(events)
+    }
+
     fn call_owner(
         &self,
         world: &World,
@@ -304,7 +321,7 @@ impl<G: Game, M: SectorMap> SectorRoom<G, M> {
         &mut self,
         world: &mut World,
         ctx: &TickCtx,
-        calls: Option<&mut gsb_core::calls::Calls>,
+        calls: Option<crate::common::Io<'_>>,
     ) {
         crate::common::systems(&mut self.game, world, ctx, &self.player_entity, calls);
 

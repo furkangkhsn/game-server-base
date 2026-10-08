@@ -273,7 +273,18 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
         ctx: &TickCtx,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.step(world, ctx, None, Some(calls));
+        self.step(world, ctx, None, Some(crate::common::Io::calls(calls)));
+        crate::common::close_change_window(world);
+    }
+
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.step(world, ctx, None, Some(crate::common::Io::events(calls, events)));
         crate::common::close_change_window(world);
     }
 
@@ -308,6 +319,13 @@ impl<G: ShardGame, P: Partition<Wire<G>>> GameLogic<World> for ShardedRoom<G, P>
         calls: &mut gsb_core::calls::Calls,
     ) -> Result<(), gsb_core::calls::BootError> {
         self.game.boot_calls(calls)
+    }
+
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_events(events)
     }
 
     fn call_owner(

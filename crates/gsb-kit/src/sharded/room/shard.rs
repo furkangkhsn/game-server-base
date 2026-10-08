@@ -256,7 +256,19 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardLogic<World> for ShardedRoom<G, P
         seam: &mut CrossSeam<'_, Wire<G>>,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.step(world, ctx, Some(seam), Some(calls));
+        self.step(world, ctx, Some(seam), Some(crate::common::Io::calls(calls)));
+        crate::common::close_change_window(world);
+    }
+
+    fn update_seam_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        seam: &mut CrossSeam<'_, Wire<G>>,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.step(world, ctx, Some(seam), Some(crate::common::Io::events(calls, events)));
         crate::common::close_change_window(world);
     }
 

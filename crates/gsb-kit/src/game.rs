@@ -25,6 +25,7 @@ use std::fmt::Debug;
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::auth::Joiner;
 use gsb_core::calls::{BootError, Calls, Owner};
+use gsb_core::events::Events;
 use gsb_core::id::{ConnectionId, PlayerId};
 use gsb_core::metrics::LogicCounters;
 use gsb_core::room::{Action, TickCtx};
@@ -257,6 +258,30 @@ pub trait Game: Send + 'static {
         self.systems(world, ctx);
     }
 
+    /// Boot: register the events this game takes through the room's
+    /// event table (`events.accept::<E>()` — `docs/EVENTS.md` §4.3; the
+    /// core's `GameLogic::boot_events`, forwarded by every kit room).
+    /// Default: nothing taken.
+    fn boot_events(&mut self, _events: &mut Events) -> Result<(), BootError> {
+        Ok(())
+    }
+
+    /// [`Self::systems_with_calls`] with the room's event table too
+    /// (`events.take::<E>()` — the core's `GameLogic::update_with_events`,
+    /// forwarded by every kit room; the sharded rooms call
+    /// [`ShardGame::systems_seam_with_events`] on the seam path). An
+    /// event's owner is [`Self::call_owner`]'s. Default:
+    /// [`Self::systems_with_calls`].
+    fn systems_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut Calls,
+        _events: &mut Events,
+    ) {
+        self.systems_with_calls(world, ctx, calls);
+    }
+
     /// The owner a session's table requests are bound to (the core's
     /// `GameLogic::call_owner`, forwarded by every kit room): `entity`
     /// is the player's entity in this room, if it has one. Default: the
@@ -445,6 +470,20 @@ pub trait ShardGame: Game {
         _calls: &mut Calls,
     ) {
         self.systems_seam(world, ctx, seam);
+    }
+
+    /// [`Self::systems_seam_with_calls`] with the shard's event table too
+    /// (the core's `ShardLogic::update_seam_with_events`, forwarded by
+    /// every sharded kit room). The default is `systems_seam_with_calls`.
+    fn systems_seam_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        seam: &mut Seam<'_, '_, Wire<Self>>,
+        calls: &mut Calls,
+        _events: &mut Events,
+    ) {
+        self.systems_seam_with_calls(world, ctx, seam, calls);
     }
 
     /// Apply a remote effect a neighbour sent to `target`, this shard's

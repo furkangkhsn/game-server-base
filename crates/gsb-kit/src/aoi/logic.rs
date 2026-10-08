@@ -351,7 +351,17 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         ctx: &TickCtx,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.tick_update(world, ctx, Some(calls));
+        self.tick_update(world, ctx, Some(crate::common::Io::calls(calls)));
+    }
+
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.tick_update(world, ctx, Some(crate::common::Io::events(calls, events)));
     }
 
     /// The game's request handlers
@@ -374,6 +384,13 @@ impl<G: Game, S: CellSpace<Wire<G>>> GameLogic<World> for AoiRoom<G, S> {
         calls: &mut gsb_core::calls::Calls,
     ) -> Result<(), gsb_core::calls::BootError> {
         self.game.boot_calls(calls)
+    }
+
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        self.game.boot_events(events)
     }
 
     fn call_owner(
@@ -399,7 +416,7 @@ impl<G: Game, S: CellSpace<Wire<G>>> AoiRoom<G, S> {
         &mut self,
         world: &mut World,
         ctx: &TickCtx,
-        calls: Option<&mut gsb_core::calls::Calls>,
+        calls: Option<crate::common::Io<'_>>,
     ) {
         crate::common::systems(&mut self.game, world, ctx, &self.player_entity, calls);
         // Orphan stamping (idempotent, mirrors `OpenRoom`): entities with

@@ -1,7 +1,9 @@
 //! The call-table hooks reach the game through the kit rooms (BACKLOG
 //! B151): `boot_calls`, `update_with_calls` (→ `Game::systems_with_calls`),
 //! `call_owner` (with the player's entity) and `owner_alive`, forwarded
-//! by the open, AOI and sharded rooms the same way.
+//! by the open, AOI and sharded rooms the same way — and the event-table
+//! hooks (round e5): `boot_events`, `update_with_events`
+//! (→ `Game::systems_with_events`).
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -9,6 +11,7 @@ use std::time::Duration;
 use bevy_ecs::prelude::{Entity, World};
 use gsb_core::calls::{Ask, BootError, Call, CallSpec, Calls, Mail, Owner, Request, Route};
 use gsb_core::channel::Inbox;
+use gsb_core::events::{Event, Events};
 use gsb_core::id::{ConnectionId, PlayerId, RoomId};
 use gsb_core::room::{Action, GameLogic, TickCtx};
 
@@ -34,6 +37,18 @@ impl Request for Ping {
     const OP: u16 = 4242;
 }
 
+/// An event the game takes.
+#[derive(Clone, PartialEq, prost::Message)]
+struct Gift {
+    #[prost(uint32, tag = "1")]
+    n: u32,
+}
+impl gsb_core::events::Event for Gift {
+    const OP: u16 = 4243;
+    const TO: gsb_core::events::Dest = gsb_core::events::Dest::World;
+}
+impl gsb_core::events::WorldEvent for Gift {}
+
 /// A service call the game issues from its systems.
 #[derive(Clone, Debug)]
 struct Note;
@@ -48,6 +63,7 @@ struct Calling {
     note: Route<Ask<Note>>,
     systems: u32,
     with_calls: u32,
+    with_events: u32,
 }
 
 impl Calling {
@@ -59,6 +75,7 @@ impl Calling {
                 note,
                 systems: 0,
                 with_calls: 0,
+                with_events: 0,
             },
             inbox,
         )
@@ -95,6 +112,19 @@ impl Game for Calling {
     fn systems_with_calls(&mut self, _world: &mut World, _ctx: &TickCtx, calls: &mut Calls) {
         self.with_calls += 1;
         calls.call(CallSpec::new(&self.note, Note, |a| a));
+    }
+    fn boot_events(&mut self, events: &mut Events) -> Result<(), BootError> {
+        events.accept::<Gift>()
+    }
+    fn systems_with_events(
+        &mut self,
+        _world: &mut World,
+        _ctx: &TickCtx,
+        _calls: &mut Calls,
+        events: &mut Events,
+    ) {
+        self.with_events += 1;
+        assert!(events.handles(Gift::OP), "the room's own table");
     }
     fn call_owner(
         &self,
@@ -136,11 +166,14 @@ fn ctx() -> TickCtx<'static> {
 }
 
 /// Every hook, through one room; `game` reads the game's counters back.
-fn drive<R: GameLogic<World>>(mut room: R, game: impl Fn(&R) -> (u32, u32)) {
+fn drive<R: GameLogic<World>>(mut room: R, game: impl Fn(&R) -> (u32, u32, u32)) {
     let mut world = World::new();
     let mut calls = Calls::default();
     room.boot_calls(&mut calls).expect("boot");
     assert!(calls.handles(Ping::OP), "boot_calls reached the game");
+    let mut events = Events::default();
+    room.boot_events(&mut events).expect("boot");
+    assert!(events.handles(Gift::OP), "boot_events reached the game");
 
     let admission = room.on_join(&mut world, ConnectionId(1));
     let owner = room.call_owner(&world, admission.player).expect("an owner");
@@ -157,17 +190,19 @@ fn drive<R: GameLogic<World>>(mut room: R, game: impl Fn(&R) -> (u32, u32)) {
     assert_eq!(room.owner_alive(&world, owner), Some(true));
 
     room.update_with_calls(&mut world, &ctx(), &mut calls);
-    assert_eq!(game(&room), (0, 1), "systems_with_calls ran, not systems");
+    assert_eq!(game(&room), (0, 1, 0), "systems_with_calls ran, not systems");
     assert_eq!(calls.pending_len(), 1, "the game's call is in the table");
     room.update(&mut world, &ctx());
-    assert_eq!(game(&room), (1, 1), "a plain update runs systems");
+    assert_eq!(game(&room), (1, 1, 0), "a plain update runs systems");
+    room.update_with_events(&mut world, &ctx(), &mut calls, &mut events);
+    assert_eq!(game(&room), (1, 1, 1), "systems_with_events ran, alone");
 }
 
 #[test]
 fn the_open_room_forwards_the_call_hooks() {
     let (game, _inbox) = Calling::new();
     drive(OpenRoom::with_game(game), |r| {
-        (r.game().systems, r.game().with_calls)
+        (r.game().systems, r.game().with_calls, r.game().with_events)
     });
 }
 
@@ -175,7 +210,7 @@ fn the_open_room_forwards_the_call_hooks() {
 fn the_aoi_room_forwards_the_call_hooks() {
     let (game, _inbox) = Calling::new();
     drive(AoiRoom::with_game(game, Grid2::new(20.0)), |r| {
-        (r.game().systems, r.game().with_calls)
+        (r.game().systems, r.game().with_calls, r.game().with_events)
     });
 }
 
@@ -184,5 +219,5 @@ fn the_sharded_room_forwards_the_call_hooks() {
     let (game, _inbox) = Calling::new();
     let room: ShardedRoom<Calling, GridPartition2<Position>> =
         ShardedRoom::with_game(game, GridPartition2::new(1, 50.0), 0);
-    drive(room, |r| (r.game().systems, r.game().with_calls));
+    drive(room, |r| (r.game().systems, r.game().with_calls, r.game().with_events));
 }

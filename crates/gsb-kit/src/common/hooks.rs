@@ -131,9 +131,40 @@ pub(crate) fn ingest_seam<G: crate::game::ShardGame>(
     });
 }
 
+/// What the actor lent a kit room for the tick's systems: its call
+/// table, and its event table when it lent one too
+/// (`GameLogic::update_with_events` → [`Game::systems_with_events`];
+/// `update_with_calls` alone → [`Game::systems_with_calls`]).
+pub(crate) struct Io<'a> {
+    pub(crate) calls: &'a mut gsb_core::calls::Calls,
+    pub(crate) events: Option<&'a mut gsb_core::events::Events>,
+}
+
+impl<'a> Io<'a> {
+    /// The call table alone.
+    pub(crate) fn calls(calls: &'a mut gsb_core::calls::Calls) -> Self {
+        Self {
+            calls,
+            events: None,
+        }
+    }
+
+    /// Both tables.
+    pub(crate) fn events(
+        calls: &'a mut gsb_core::calls::Calls,
+        events: &'a mut gsb_core::events::Events,
+    ) -> Self {
+        Self {
+            calls,
+            events: Some(events),
+        }
+    }
+}
+
 /// Run the game's systems for this tick (single-threaded, ordered — the
 /// room actor is the only owner of the world) — with the room's call
-/// table when the actor lent one (`Game::systems_with_calls`) — then
+/// and event tables when the actor lent them
+/// (`Game::systems_with_calls`, `Game::systems_with_events`) — then
 /// forward the kicks the game asked for this tick
 /// ([`crate::game::kick`], E8), resolved against the room's
 /// player→entity table.
@@ -142,10 +173,19 @@ pub(crate) fn systems<G: Game>(
     world: &mut World,
     ctx: &TickCtx,
     players: &HashMap<PlayerId, Entity>,
-    calls: Option<&mut gsb_core::calls::Calls>,
+    io: Option<Io<'_>>,
 ) {
-    match calls {
-        Some(calls) => guard_change_window(world, |w| game.systems_with_calls(w, ctx, calls)),
+    match io {
+        Some(Io {
+            calls,
+            events: Some(events),
+        }) => guard_change_window(world, |w| {
+            game.systems_with_events(w, ctx, calls, events)
+        }),
+        Some(Io {
+            calls,
+            events: None,
+        }) => guard_change_window(world, |w| game.systems_with_calls(w, ctx, calls)),
         None => guard_change_window(world, |w| game.systems(w, ctx)),
     }
     crate::game::forward_kicks(world, ctx, |entity| {

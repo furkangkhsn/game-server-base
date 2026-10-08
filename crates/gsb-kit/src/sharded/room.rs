@@ -179,7 +179,7 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
         world: &mut World,
         ctx: &TickCtx,
         mut seam: Option<&mut CrossSeam<'_, Wire<G>>>,
-        calls: Option<&mut gsb_core::calls::Calls>,
+        io: Option<crate::common::Io<'_>>,
     ) {
         match seam.as_deref_mut() {
             Some(cross) => {
@@ -187,8 +187,17 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
                 self.departures.hide(world, own, cross);
                 let mut seam = Seam::new(cross, own, &self.departures, self.crystal.as_mut());
                 let game = &mut self.game;
-                match calls {
-                    Some(calls) => crate::common::guard_change_window(world, |w| {
+                match io {
+                    Some(crate::common::Io {
+                        calls,
+                        events: Some(events),
+                    }) => crate::common::guard_change_window(world, |w| {
+                        game.systems_seam_with_events(w, ctx, &mut seam, calls, events)
+                    }),
+                    Some(crate::common::Io {
+                        calls,
+                        events: None,
+                    }) => crate::common::guard_change_window(world, |w| {
                         game.systems_seam_with_calls(w, ctx, &mut seam, calls)
                     }),
                     None => crate::common::guard_change_window(world, |w| {
@@ -201,8 +210,17 @@ impl<G: ShardGame, P: Partition<Wire<G>>> ShardedRoom<G, P> {
             }
             None => {
                 let game = &mut self.game;
-                match calls {
-                    Some(calls) => crate::common::guard_change_window(world, |w| {
+                match io {
+                    Some(crate::common::Io {
+                        calls,
+                        events: Some(events),
+                    }) => crate::common::guard_change_window(world, |w| {
+                        game.systems_with_events(w, ctx, calls, events)
+                    }),
+                    Some(crate::common::Io {
+                        calls,
+                        events: None,
+                    }) => crate::common::guard_change_window(world, |w| {
                         game.systems_with_calls(w, ctx, calls)
                     }),
                     None => crate::common::guard_change_window(world, |w| game.systems(w, ctx)),

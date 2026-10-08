@@ -287,7 +287,18 @@ where
         ctx: &TickCtx,
         calls: &mut gsb_core::calls::Calls,
     ) {
-        self.inner.step(world, ctx, None, Some(calls));
+        self.inner.step(world, ctx, None, Some(crate::common::Io::calls(calls)));
+        self.spatial_step(world, ctx);
+    }
+
+    fn update_with_events(
+        &mut self,
+        world: &mut World,
+        ctx: &TickCtx,
+        calls: &mut gsb_core::calls::Calls,
+        events: &mut gsb_core::events::Events,
+    ) {
+        self.inner.step(world, ctx, None, Some(crate::common::Io::events(calls, events)));
         self.spatial_step(world, ctx);
     }
 
@@ -305,6 +316,13 @@ where
         calls: &mut gsb_core::calls::Calls,
     ) -> Result<(), gsb_core::calls::BootError> {
         GameLogic::boot_calls(&mut self.inner, calls)
+    }
+
+    fn boot_events(
+        &mut self,
+        events: &mut gsb_core::events::Events,
+    ) -> Result<(), gsb_core::calls::BootError> {
+        GameLogic::boot_events(&mut self.inner, events)
     }
 
     fn call_owner(
