@@ -9,9 +9,7 @@
 
 use super::*;
 use crate::calls::{BootError, Calls, Identity, Owner};
-use crate::events::{
-    Addressee, Dest, Event, EventIn, Events, PublisherId, WorldEvent, WorldPush,
-};
+use crate::events::{Addressee, Dest, Event, EventIn, Events, PublisherId, WorldEvent, WorldPush};
 use crate::room::actor::RoomActor;
 use crate::rpc::RPC_REQ_OP;
 use prost::Message;
@@ -545,12 +543,24 @@ fn an_event_reaches_its_owner_in_order() {
     assert_eq!(
         rig.seen(),
         vec![
-            Seen::Gold(Owner(2), 10, PublisherId(7), 1, Addressee::Player(bob.clone())),
+            Seen::Gold(
+                Owner(2),
+                10,
+                PublisherId(7),
+                1,
+                Addressee::Player(bob.clone())
+            ),
             Seen::Gold(Owner(1), 20, PublisherId(7), 1, Addressee::Player(alice)),
             Seen::Gold(Owner(2), 30, PublisherId(7), 2, Addressee::Player(bob)),
         ]
     );
-    assert_eq!(rig.wallet(2), Some(Wallet { gold: 30, version: 2 }));
+    assert_eq!(
+        rig.wallet(2),
+        Some(Wallet {
+            gold: 30,
+            version: 2
+        })
+    );
 }
 
 /// The owner is the call table's: an explicit `calls.bind` wins over
@@ -583,7 +593,11 @@ fn a_room_wide_event_is_owned_by_the_actor() {
     rig.step();
     assert_eq!(
         rig.seen(),
-        vec![Seen::Banner(Owner::ACTOR, "double xp".into(), Addressee::Room)]
+        vec![Seen::Banner(
+            Owner::ACTOR,
+            "double xp".into(),
+            Addressee::Room
+        )]
     );
 }
 
@@ -631,7 +645,10 @@ fn an_untaken_event_is_dropped_and_counted() {
     rig.step();
     assert!(rig.seen().is_empty(), "nothing carried over");
     let c = rig.counts();
-    assert_eq!((c.events_admitted, c.events_taken, c.events_untaken), (1, 0, 1));
+    assert_eq!(
+        (c.events_admitted, c.events_taken, c.events_untaken),
+        (1, 0, 1)
+    );
 }
 
 /// A parked member is a member: its WORLD legs are delivered (§20 E1) —
@@ -652,7 +669,13 @@ fn a_parked_member_still_gets_its_world_legs() {
     rig.push(Some("alice"), 1, &gold(77, 1));
     rig.step();
     assert!(matches!(rig.seen()[..], [Seen::Gold(Owner(1), 77, ..)]));
-    assert_eq!(rig.wallet(1), Some(Wallet { gold: 77, version: 1 }));
+    assert_eq!(
+        rig.wallet(1),
+        Some(Wallet {
+            gold: 77,
+            version: 1
+        })
+    );
 }
 
 /// Every WORLD leg the room cannot hand to its game is counted by name,
