@@ -152,7 +152,7 @@ impl Game {
                 match any.downcast::<GoldReceived>() {
                     Ok(e) => self.gold(e),
                     Err(any) => {
-                        let e = any.downcast::<Banner>().ok().expect("two types");
+                        let e = any.downcast::<Banner>().expect("two types");
                         let _ = self.seen.send(Seen::Banner(e.owner, e.body.text, e.to));
                     }
                 }

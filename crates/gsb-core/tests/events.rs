@@ -594,19 +594,17 @@ async fn a_push_frame_from_a_client_is_a_hard_violation() {
         bob.send(op::base::PUSH, forged.encode_to_vec()).await;
     }
     let mut errors = Vec::new();
-    loop {
-        match tokio::time::timeout(WAIT, bob.out.recv())
-            .await
-            .expect("in time")
-        {
-            Some(batch) => errors.extend(
-                batch
-                    .into_iter()
-                    .filter(|f| f.op == op::base::ERROR)
-                    .map(|f| base::Error::decode(f.payload.as_ref()).expect("Error").code),
-            ),
-            None => break,
-        }
+    // Until the actor ends (its outbound closes).
+    while let Some(batch) = tokio::time::timeout(WAIT, bob.out.recv())
+        .await
+        .expect("in time")
+    {
+        errors.extend(
+            batch
+                .into_iter()
+                .filter(|f| f.op == op::base::ERROR)
+                .map(|f| base::Error::decode(f.payload.as_ref()).expect("Error").code),
+        );
     }
     let unknown = base::ErrorCode::UnknownOpcode as i32;
     let closed = base::ErrorCode::ServerClosed as i32;
