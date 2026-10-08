@@ -677,3 +677,20 @@ async fn a_full_hold_and_a_stray_seal_are_counted() {
     rig.tick(2).await;
     assert_eq!(rig.counts(2).events_fence_lost, 1);
 }
+
+/// A source that forwards before the target installed the member: the
+/// `Forward`s sit behind a `Migrate` the install gate deferred, and wait
+/// with it — taken, in order, once the member is there.
+#[tokio::test]
+async fn a_forward_behind_a_deferred_migration_waits_with_it() {
+    let mut rig = rig().await;
+    rig.moves(0, 1);
+    rig.tick(0).await; // A → B at A's tick
+    rig.push::<Gold>(3); // → A
+    rig.tick(0).await; // A forwards 1..3 behind the Migrate
+    rig.tick(1).await; // B: the Migrate waits for its install tick — so do the forwards
+    rig.tick(1).await; // installed, then the forwards
+    rig.tick(1).await;
+    assert_eq!(rig.took(Gold::OP), [(1, 1), (1, 2), (1, 3)]);
+    assert_eq!(rig.counts(1).events_world_not_here, 0);
+}
