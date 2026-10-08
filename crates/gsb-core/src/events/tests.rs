@@ -159,6 +159,26 @@ fn the_handle_refuses_typed_and_counts_each_refusal() {
     );
 }
 
+/// A detached handle (replay) refuses an oversized body exactly as a
+/// routed one would, so a game branching on `TooLarge` behaves the same
+/// in the recorded run and its replay; a body that fits is swallowed.
+#[test]
+fn a_detached_handle_refuses_too_large_like_a_routed_one() {
+    let p = Publisher::detached(PublisherId(7), "replay");
+    let n = Arc::new(AtomicU64::new(0));
+    let alice = Identity::new("alice");
+    let over = DEFAULT_MAX_EVENT_BYTES + 1;
+    assert_eq!(
+        p.push(&alice, &Counted(n.clone(), over)),
+        Err(PushRefused::TooLarge {
+            size: over,
+            max: DEFAULT_MAX_EVENT_BYTES
+        })
+    );
+    assert_eq!(p.push(&alice, &Counted(n.clone(), 4)), Ok(()));
+    assert_eq!(p.stats().detached(), 1);
+}
+
 /// `push_many` to 1000 identities is ONE encode and ONE router message
 /// (the body shared by reference count downstream).
 #[test]
