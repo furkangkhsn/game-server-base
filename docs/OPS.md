@@ -95,6 +95,30 @@ Yalnız `RegistryParts::service` ile barındırılan (`#[service]`)
 servisler sayılır; `add_service` ile kaydedilen el yazımı servisin
 istatistiği registry'ye gelmez (BACKLOG `q6:`).
 
+**Olaylar (e2, docs/EVENTS.md).** İki düz anahtar (`[rooms.<id>]`'de
+yazılamaz): `event_capacity` (varsayılan 1024) her odanın ve her
+shard'ın KENDİ olay kutusu — dolu kutu WORLD bacağını kaybeder, tick
+başına tepe olay sayısının en az 2 katı seçin; `max_event_bytes`
+(varsayılan 65536) bir yayıncının itebileceği en büyük gövde — büyüğü
+tutamaçta `PushRefused::TooLarge`. Başlatma doğrulaması:
+`event_capacity >= 1`, `1 <= max_event_bytes <= 1 MiB − 64`; aksi
+`invalid event config: …`. Yayıncılar `RegistryParts::publisher(name)`
+ile basılır; toplayıcı adlarıyla okur (servislerin deseni). Her kayıp
+kendi sayacında:
+
+| Yüzey | Ne |
+|---|---|
+| `gsb-metric` satırı | oda satırının sonunda (çağrı sayaçlarından sonra) `events_admitted … events_world_not_here`; taşıma satırından sonra `scope=events events_routed=… events_unread=… events_offline=… events_client_{sent,parked,unsupported,refused_conn_full,refused_conn_gone}=… events_world_{sent,no_room,refused_room_full,refused_room_gone}=… pushes_written=… pushes_dropped_{outbound_full,outbound_gone,unread}=…` (her zaman; sıfırlar dahil); yayıncı başına `scope=publisher name=<ad> id=<n> events_pushed=… events_refused_{router_full,router_gone,too_large}=…` (servis satırlarından sonra) |
+| Prometheus / OTLP | oda başına `gsb_room_events_{admitted,no_handler,undecodable,unbound,taken,untaken,world_not_here}_total{room}`; registry diliminde `gsb_events_{routed,unread,offline,client_sent,client_parked,client_unsupported,client_refused_conn_full,client_refused_conn_gone,world_sent,world_no_room,world_refused_room_full,world_refused_room_gone}_total`; net kapsamında `gsb_net_pushes_{written,dropped_outbound_full,dropped_outbound_gone,dropped_unread}_total`; `gsb_publisher_events_{pushed,refused_router_full,refused_router_gone,refused_too_large}_total{publisher}` (servis ailelerinden sonra; yayıncı yoksa hiç yok) |
+| loadgen | metrik telinde odanın olay sayaçları çağrılarınkinden sonra, yönlendiricinin registry bölümünün sonunda, PUSH kareleri sunucu kapanışlarından sonra, yayıncılar servislerden sonra (GSNW); `RESULT`'ta olay anahtarları (oda, yönlendirici, PUSH; sıfırlar dahil) ve `pub_<ad>_<sayaç>=` |
+
+Defter: alıcı başına `events_offline` ya da her bacağın tam bir sonu;
+`events_world_sent = admitted + no_handler + undecodable + unbound +
+world_not_here` (+ yolda); `events_client_sent = pushes_written +
+pushes_dropped_*` (+ yolda); `Σ events_pushed = events_routed +
+events_unread` (+ yolda). Registry örneği bir itme patlamasının sonunda
+(kutusu boşalınca) ya da sürekli akışta en çok 250 ms'de bir yenilenir.
+
 **Girdi kaydı: `[record]` (q6, B170).** `record` cargo feature'ıyla
 derlenmiş sunucuda seçilen odalar mantığa giren her girdiyi
 (docs/SERVICES.md §10.1) tick başına bir dosyaya yazar; dosya aynı oyuna
@@ -1857,6 +1881,19 @@ gsb-server: unknown top-level config key `tik_hz` at server.toml:4 (did you mean
   açıklaması, değerleri; histogramın kümülatif kovaları, kenarları,
   `count`/`sum`'u; summary'nin p50/p99'u OTLP ince kovalarından yeniden
   türetilir).
+
+- **e2: loadgen `RESULT`'ın olay anahtarları (docs/EVENTS.md §9).**
+  `game=`'den hemen önce, servis anahtarlarından sonra: odanın katlanmış
+  `EventCounts`'u (`events_admitted= … events_world_not_here=`, oda
+  satırının anahtarları), son raporun yönlendirici sayaçları
+  (`events_routed= … events_world_refused_room_gone=`) ve PUSH kareleri
+  (`pushes_written= … pushes_dropped_unread=`) — her satırda, rapor
+  yoksa sıfır —, sonra basılan her yayıncı için
+  `pub_<ad>_<sayaç>=` (dört `PublisherCounts` alanı; yayıncısı olmayan
+  oyunda hiç yok). Metrik teli: oda başına olay sayaçları çağrılarınkinden
+  sonra, yönlendirici registry bölümünün sonunda, PUSH kareleri sunucu
+  kapanışlarından sonra, yayıncılar servislerden sonra (tel yerleşimi
+  değişti; sihir sayısını ana dal atar — bir sonraki boş `GSNW`).
 
 - **q6: loadgen `RESULT`'ın çağrı, servis ve RPC anahtarları (B157,
   B164, B161).** `game=`'den hemen önce (diğer isteğe bağlı segmentlerden

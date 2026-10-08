@@ -19,6 +19,16 @@
 > ve sapmalar §21 "e1 — uygulanan biçim". §20'deki öneriler kullanıcıca
 > kabul edildi.
 >
+> **e2 uygulandı (2026-10-08):** çekirdek yönlendirme — `gsb_core::events`
+> (`Events` tablosu, `Publisher`/`Publishers`, `Push`, `PushRefused` +
+> `TooLarge`), registry'de yönlendirme tablosu (`EventRoutes`) +
+> `RegistryMsg::Push`, `Authed { identity, features }`, odanın ve her
+> shard'ın kendi olay kutusu (`RoomConfig::event_capacity`) ve EVENTS
+> fazı, `ConnIn::Push` → `PUSH` karesi, `GameLogic::{boot_events,
+> update_with_events}`, `ShardLogic::update_seam_with_events`,
+> `RegistryParts::publisher`, sayaçlar → metrikler. Shard göçünün çiti
+> e3. Ayrıntı ve sapmalar §21 "e2 — uygulanan biçim".
+>
 > Kod ve yorumlar İngilizce'dir; bu doküman Türkçe'dir (repo sözleşmesi).
 
 **Tek paragraf özet.** Olay, sunucu kodunun (bir servis, bir admin görevi,
@@ -1246,6 +1256,79 @@ update_with_events}`, `ShardLogic::update_seam_with_events`;
 `ConnIn::Push` + PUSH yazımı; `RegistryParts::publisher`; sayaçlar →
 metrikler (satır, Prometheus, OTLP, loadgen teli, `RESULT`). Kapılar:
 hedefli testler ajanda, tam set ebeveynde.
+
+**e2 — uygulanan biçim (2026-10-08).** Plandaki her madde girdi;
+tasarımdan farklar ve netleştirmeler:
+
+- **Yönlendirme tablosu türetilmiş durum okur (E2'nin biçimi).** Ayrı bir
+  `Row { session, parked, place }` kopyası yok: `EventRoutes`
+  (`gsb_core::events::route`) yalnız yönlendirmenin kendi durumunu
+  tutar — (yayıncı, kimlik, bacak) numaraları, satırın `stream`'i, oda
+  çapındaki (yayıncı, oda) numaraları ve sayaçlar — ve oturumu, parkı,
+  konumu registry'nin kendi tablolarından dar bir `Locate` trait'i
+  üzerinden okur (`registry/actor/events.rs`: kimlik → satırlar indeksi
+  + `ConnInfo` + `RoomEntry.events`). Gerekçe: iki kopyanın tutarlılık
+  işi yok (park anahtarına taşıma, `LeaveConn`, devralma, `RoomDied`
+  hepsi zaten `ConnInfo`'yu güncelliyor). Ayrı bir `EventRouter`
+  aktörüne bölmek (§12) = `Locate`'i registry'nin ilettiği olgular
+  üzerinde uygulamak; yönlendirme kodu değişmez. Satırların tek silme
+  yolu `release_row`; kimliğin son satırı gidince numaraları biter
+  (çevrimdışı → yeni oturum yeni `stream`, 1'den).
+- **CLIENT bacağı** kimliğin en yeni canlı (doğrulanmış, ayrılmamış,
+  gelen kutusu olan) oturumuna gider; yoksa satır varsa
+  `events_client_parked`. **WORLD bacağı** üyeliği olan satıra (canlı
+  önce, sonra parktaki — E1: parktakine teslim); sharded odada
+  `ConnInfo.shard` (yeni: `SpawnDone.shard` — katılımı alan shard: ev
+  shard'ı ya da parkı devam ettiren) shard'ın kutusuna. Göç e3'e kadar
+  izlenmez: göçmüş üyenin bacağı eski shard'da `events_world_not_here`.
+- **`Authed` kimliği de taşır** (`Authed { conn, identity, features }`):
+  kimlik katılımdan ÖNCE bilinmeli ki odasız oyuncuya CLIENT bacağı
+  gitsin; `features` (`Auth.features`) satıra yazılır.
+- **EVENTS fazının yeri:** RESPONSES'tan sonra, CONTROL tarafının
+  ayrılma/park süpürmelerinden (0c/0d) sonra, READ'den hemen önce
+  ("faz 0e"): üyelik o tick için kesinleşmiş olur. Faz tek yerde yazılı
+  (`events::Inbound::drain`), oda ve shard aynı kodu çağırır; tick başına
+  en çok bir kutu dolusu boşaltır; kimlik → üye indeksi yalnız oyuncuya
+  adresli bacak varsa, tick başına bir kez, üye tablosundan kurulur
+  (ayrı bir indeksin bakımı yok, tabloyla çelişemez). Sahip: oturumun
+  açık bağı (`calls.bound`), yoksa `GameLogic::call_owner`; `None` →
+  yeni sayaç `events_unbound`. Oda çapı bacak `Owner::ACTOR`.
+- **Ek sayaçlar (§9'da yoktu):** `events_unbound` (oda; sahipsiz üye),
+  `events_unread` (registry durduğunda kutusunda kalan itme — her
+  bacağı birden kaybolur), `pushes_dropped_unread` (oturum biterken
+  bağlantı aktörünün gelen kutusunda kalan CLIENT bacağı). Defter:
+  `world_sent = admitted + no_handler + undecodable + unbound +
+  world_not_here` (+ yolda), `client_sent = pushes_written +
+  pushes_dropped_outbound_{full,gone} + pushes_dropped_unread` (+ yolda),
+  `Σ events_pushed = events_routed + events_unread` (+ yolda). Çit
+  sayaçları (`relocations*`, `seals*`, `events_forwarded` …) e3'te.
+- **`BootError`:** `EventOpCollision { op, first, second }` (başka bir
+  olay ya da çağrı tablosunun bir isteği aynı op'u alıyor — tablo
+  `Calls`'ın op'larını kopyalar, `boot_events` `boot_calls`'tan sonra
+  koşar) ve elle yazılmış `impl Event` için `EventEngineOp`. Kurulamayan
+  tablo odayı reddeder (B153 yolu).
+- **`Publishers`** (`gsb_core::events`): sunucu başına darphane;
+  `RegistryParts::publisher(name)` onu sarar. Kimlikler 1'den (0 motor);
+  aynı ad aynı tutamaç (bir kimlik, bir sayaç kümesi).
+  `max_event_bytes` (varsayılan 64 KiB, config) tutamaçta, kodlamadan
+  sonra denetlenir (`TooLarge { size, max }`).
+- **Bağlantı aktörü** `PUSH`'u `try_send` ile yazar (beklemez);
+  `FEATURE_PUSH` denetimi yönlendiricidedir (`events_client_unsupported`).
+  Bir istemcinin kendi gelen kutusunu doldurması kendi CLIENT
+  bacaklarını kaybettirir (`events_client_refused_conn_full`) — WORLD
+  bacağı odanın kutusunda olduğundan etkilenmez (§3.1 yalıtımı WORLD
+  içindir).
+- **Metrikler:** oda satırında olay tablosu anahtarları (çağrılarınkinden
+  sonra), yeni `scope=events` satırı (yönlendirici + PUSH kareleri) ve
+  yayıncı başına `scope=publisher`; aileler `gsb_room_events_*_total`,
+  `gsb_events_*_total`, `gsb_net_pushes_*_total`,
+  `gsb_publisher_events_*_total{publisher}`. Loadgen teli genişledi
+  (sihir GSNW'ye birleşmede geçer); `RESULT`'ta olay anahtarları ve
+  `pub_<ad>_<sayaç>=`.
+- **Kalanlar** (BACKLOG `e2:`): kit sarmalayıcıları `boot_events`/
+  `update_with_events`'i iletmiyor (e5); kayıt/tekrar olayları
+  taşımıyor (e5); `push_room` üyeleri bağlantı tablosunu tarayarak
+  bulur.
 
 **e3 — konum değişiklikleri.** Shard göçü: `PlayerMigration.mig`,
 `Relocated`, seal, `ShardMsg::{Forward, Fence}`, mezar taşları, bekletme,

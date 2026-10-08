@@ -406,9 +406,41 @@ message GoldReceived {
 
 İstekler ve olaylar **tek op uzayını** paylaşır: ikisinin aldığı aynı op,
 `op`'suz ya da `to`'suz olay, motor aralığında / 16 biti aşan / ayrılmış
-op, hem rpc isteği hem olay olan mesaj build'de reddedilir. Yönlendirme
-(`Publisher`, odanın `Events` tablosu, `PUSH` karesi) henüz yok (EVENTS
-§21 e2); örnek: gsb-demo'nun `ItemGranted`'ı (1007, BOTH).
+op, hem rpc isteği hem olay olan mesaj build'de reddedilir. Örnek:
+gsb-demo'nun `ItemGranted`'ı (1007, BOTH).
+
+**Olayları itmek ve almak (tur e2, `docs/EVENTS.md` §4.3, §5).**
+Yayınlama yetkisi bir `Publisher` tutamacıdır; modül onu
+`spawn_registry`'de basar ve servisin yapıcısına, oda fabrikasına, bir
+admin görevine verir:
+
+```rust
+let bank = parts.publisher("bank");            // metrik etiketi; aynı ad aynı tutamaç
+// … servisin içinde, tick'in içinde: tek try_send, asla beklemez
+let _ = bank.push(&to, &GoldReceived { amount }); // push_many / push_room / push_all
+```
+
+Ret anında ve tiplidir (`PushRefused::{TooLarge, RouterFull,
+RouterGone}`); sonrası (çevrimdışı, parkta, eski istemci, dolu oda …)
+yönlendiricide adıyla sayılır. Oda WORLD/BOTH olaylarını boot'ta kabul
+eder ve sistemlerinde tipli alır; tick sonunda alınmayan atılır ve
+sayılır (`events_untaken`):
+
+```rust
+fn boot_events(&mut self, events: &mut Events) -> Result<(), BootError> {
+    events.accept::<GoldReceived>()           // istek op'larıyla tek uzay: çakışma odayı reddeder
+}
+fn update_with_events(&mut self, w: &mut World, ctx: &TickCtx, calls: &mut Calls, events: &mut Events) {
+    for e in events.take::<GoldReceived>() { /* e.owner (çağrı bağıyla aynı), e.body, e.from, e.seq */ }
+    self.update_with_calls(w, ctx, calls);   // olaylar önce: bu tick'in girdisi onları görür
+}
+```
+
+Sharded mantık `ShardLogic::update_seam_with_events`'i uygular. Kit
+sarmalayıcıları (`gsb-kit`) olay kancalarını henüz iletmiyor (BACKLOG
+`e2:`); ECS biçimleri e5. CLIENT olaylarını odalar hiç görmez: doğrudan
+`FEATURE_PUSH` bildiren istemcinin bağlantısına `PUSH` karesi olarak
+gider.
 
 ### 4.7 Deterministik mantık (tur q4)
 
